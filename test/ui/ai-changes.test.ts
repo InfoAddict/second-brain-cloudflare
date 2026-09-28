@@ -1,7 +1,8 @@
 /**
- * T3/T4 lane S4 (16-t3-t4-trust-spec.md, ~line 1341): the home board's "AI
- * tools changed N memories" line - one stop inside board.js's decide panel,
- * fed by GET /brief's real `changes` block (Lane S, src/brief/changes.ts).
+ * T3/T4 lane S4 (16-t3-t4-trust-spec.md, ~line 1341): the home board's own
+ * small panel for "changed by AI tools", rendered directly above "Needs a
+ * decision" (UX review: AI edits are already live, not a decision), fed by
+ * GET /brief's real `changes` block (Lane S, src/brief/changes.ts).
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -108,6 +109,7 @@ const FILES = [
   "public/js/undo.js",
   "public/js/memory-crud.js",
   "public/js/ai-changes.js",
+  "public/js/board.js",
 ];
 
 /**
@@ -163,11 +165,40 @@ function groupFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("absent when count is 0", () => {
-  it("returns an empty string, and renderDecisionPanel adds no stop for it", () => {
+  it("appends no panel at all - no empty state, no badge", () => {
     const ctx = baseCtx();
     run(ctx);
-    expect(ctx.aiChangesStopHtml({ count: 0, held: 0, items: [] })).toBe("");
-    expect(ctx.aiChangesStopHtml(null)).toBe("");
+    const board = ctx.document.createElement("div");
+    ctx.renderAiChangesPanel(board, { changes: { count: 0, held: 0, items: [] } });
+    expect(board.kids).toHaveLength(0);
+    ctx.renderAiChangesPanel(board, { changes: null });
+    expect(board.kids).toHaveLength(0);
+    ctx.renderAiChangesPanel(board, null);
+    expect(board.kids).toHaveLength(0);
+  });
+
+  it("appends its own panel, above where Needs a decision would render, when there is something to show", () => {
+    const ctx = baseCtx();
+    run(ctx);
+    const board = ctx.document.createElement("div");
+    ctx.renderAiChangesPanel(board, { changes: { count: 3, held: 0, items: [] } });
+    expect(board.kids).toHaveLength(1);
+    const panel = board.kids[0];
+    expect(panel.dataset.panel).toBe("ai-changes");
+    expect(panel.className).toContain("span4");
+    expect(panel.body.innerHTML).toContain("AI tools changed 3 memories");
+  });
+
+  it("registers before renderDecisionPanel in BOARD_PANELS, so it renders above Needs a decision", () => {
+    // BOARD_PANELS is a top-level `const` in board.js, so it lives in that
+    // script's own lexical scope, not as a property this test can read from
+    // outside - the same reason pendingConfirmAction is unreachable. Reading
+    // the source directly is the established way around it.
+    const src = readFileSync(resolve(ROOT, "public/js/board.js"), "utf8");
+    const push = src.match(/BOARD_PANELS\.push\(([\s\S]*?)\)/);
+    expect(push).not.toBeNull();
+    const names = (push as RegExpMatchArray)[1].split(",").map((s) => s.trim()).filter(Boolean);
+    expect(names.indexOf("renderAiChangesPanel")).toBeLessThan(names.indexOf("renderDecisionPanel"));
   });
 });
 
@@ -180,14 +211,21 @@ describe("collapsed line with the held suffix", () => {
 
   it("shows the plain count with no suffix when nothing is held", () => {
     const ctx = load();
-    const html = ctx.aiChangesStopHtml({ count: 5, held: 0, items: [] });
+    const html = ctx.aiChangesPanelBodyHtml({ count: 5, held: 0, items: [] });
     expect(html).toContain("AI tools changed 5 memories");
     expect(html).not.toContain("held");
   });
 
+  it("uses the singular form for one memory", () => {
+    const ctx = load();
+    const html = ctx.aiChangesPanelBodyHtml({ count: 1, held: 0, items: [] });
+    expect(html).toContain("AI tools changed 1 memory");
+    expect(html).not.toContain("1 memories");
+  });
+
   it("appends the held suffix when held > 0", () => {
     const ctx = load();
-    const html = ctx.aiChangesStopHtml({ count: 5, held: 2, items: [] });
+    const html = ctx.aiChangesPanelBodyHtml({ count: 5, held: 2, items: [] });
     expect(html).toContain("AI tools changed 5 memories");
     expect(html).toContain("2 held");
   });
@@ -203,7 +241,7 @@ describe("expanded rows with tool name or 'an AI tool'", () => {
   it("names the client when present", () => {
     const ctx = load();
     const html = ctx.aiChangesRowsHtml({ items: [itemFixture({ client: "Cursor" })] });
-    expect(html).toContain("by Cursor");
+    expect(html).toContain("via Cursor");
   });
 
   it("falls back to 'an AI tool' when client is null", () => {
@@ -224,6 +262,24 @@ describe("expanded rows with tool name or 'an AI tool'", () => {
     expect(ctx.aiChangeEventLabel(itemFixture({ family: "status", status: "deprecated" }))).toBe("Marked as wrong");
     expect(ctx.aiChangeEventLabel(itemFixture({ family: "held", reasons: ["instruction"] }))).toBe("Held: looks like an instruction to an AI");
     expect(ctx.aiChangeEventLabel(itemFixture({ family: "held", reasons: ["too_long"] }))).toBe("Held: too long");
+  });
+
+  it("labels a group by its family, pluralized on the group's count, then the time", () => {
+    const ctx = load();
+    const html = ctx.aiChangeGroupRowHtml(groupFixture({ family: "status", count: 1 }));
+    expect(html).toContain("1 status change");
+    expect(html).not.toContain("1 status changes");
+
+    const many = ctx.aiChangeGroupRowHtml(groupFixture({ family: "held", count: 4, can_undo_all: undefined, can_release_all: true }));
+    expect(many).toContain("4 memories held");
+    expect(ctx.aiChangeFamilyPhrase("held", 1)).toBe("1 memory held");
+    expect(ctx.aiChangeFamilyPhrase("held", 4)).toBe("4 memories held");
+    expect(ctx.aiChangeFamilyPhrase("released", 1)).toBe("1 held memory released");
+    expect(ctx.aiChangeFamilyPhrase("released", 3)).toBe("3 held memories released");
+    expect(ctx.aiChangeFamilyPhrase("trash", 1)).toBe("1 memory moved to the trash");
+    expect(ctx.aiChangeFamilyPhrase("revert", 2)).toBe("2 memories put back to an earlier version");
+    expect(ctx.aiChangeFamilyPhrase("canonical_edit", 1)).toBe("1 edit to trusted memories");
+    expect(ctx.aiChangeFamilyPhrase("capsule_changed", 2)).toBe("2 changes to what AI tools always see");
   });
 });
 
@@ -294,7 +350,16 @@ describe("Undo all confirms, loops pages until remaining 0, reports partial resu
     expect(ctx.__fetchCalls).toHaveLength(2);
     expect(ctx.__fetchCalls[0].url).toBe("https://example.test/undo/group");
     expect(JSON.parse(ctx.__fetchCalls[0].init.body)).toEqual({ group: "grouptoken" });
-    expect(ctx.__toasts.at(-1)?.message).toBe("Undid 7 of 8. 1 changed since, so they were left as they are.");
+    expect(ctx.__toasts.at(-1)?.message).toBe("Undid 7 of 8. 1 had changed again since, so it was left as it is.");
+  });
+
+  it("uses the plural 'they were left as they are' form when more than one is skipped", async () => {
+    const ctx = load([
+      { ok: true, results: [{ id: "a", result: "reverted" }, { id: "b", result: "changed_since" }, { id: "c", result: "changed_since" }], done: true, remaining: 0, group: "grouptoken" },
+    ]);
+    ctx.aiChangeGroupAction("grouptoken", "undo", 3);
+    await ctx.__confirmOpts.onConfirm(false, () => {}, () => {});
+    expect(ctx.__toasts.at(-1)?.message).toBe("Undid 1 of 3. 2 changed since, so they were left as they are.");
   });
 
   it("release-all loops the same way and confirms with the release wording", async () => {
@@ -352,34 +417,48 @@ describe("client names and previews are escaped", () => {
 });
 
 describe("both locales, no em dash", () => {
-  it("renders the collapsed line in Italian", () => {
+  it("renders the collapsed line in Italian, singular held suffix included", () => {
     const ctx = baseCtx("it");
     run(ctx);
-    const html = ctx.aiChangesStopHtml({ count: 3, held: 1, items: [] });
+    const html = ctx.aiChangesPanelBodyHtml({ count: 3, held: 1, items: [] });
     expect(html).toContain("Gli strumenti di IA hanno modificato 3 ricordi");
-    expect(html).toContain("1 trattenuti");
+    expect(html).toContain("1 trattenuto");
+    expect(html).not.toContain("1 trattenuti");
   });
 
-  it("has no em dash in either locale's aiChanges strings", () => {
+  it("has no em dash in either locale's aiChanges strings, plain and pluralized alike", () => {
     // I18N_EN/I18N_IT are `const`, so - like WORKER_URL before the
     // vm.runInContext reassignment trick - they live in i18n.js's own
-    // lexical scope, not as properties this test can read directly. `t` and
-    // `initI18n` are function declarations, so they ARE reachable, and
-    // reading every key through them exercises the real interpolation path.
+    // lexical scope, not as properties this test can read directly. `t`,
+    // `tPlural` and `initI18n` are function declarations, so they ARE
+    // reachable, and reading every key through them exercises the real
+    // interpolation path.
     const ctx = baseCtx();
     run(ctx);
-    const keys = [
-      "line", "heldSuffix", "review", "byTool", "anAiTool", "evEditedTrusted", "evCapsule",
-      "evTrusted", "evUnconfirmed", "evWrong", "evTrash", "evReverted", "evReleased", "evHeld",
-      "evHeldTooLong", "group", "undoAll", "releaseAll", "confirmUndoAll", "confirmReleaseAll",
-      "partial", "teammateNote",
+    const plainKeys = [
+      "review", "byTool", "anAiTool", "evEditedTrusted", "evCapsule", "evTrusted", "evUnconfirmed",
+      "evWrong", "evTrash", "evReverted", "evReleased", "evHeld", "evHeldTooLong", "group",
+      "undoAll", "releaseAll", "confirmUndoAll", "confirmReleaseAll", "teammateNote",
+      "panelTitle", "panelSub",
+    ];
+    const pluralPaths = [
+      "aiChanges.line", "aiChanges.heldSuffix", "aiChanges.partial",
+      "aiChanges.family.status", "aiChanges.family.canonical_edit", "aiChanges.family.capsule_changed",
+      "aiChanges.family.trash", "aiChanges.family.revert", "aiChanges.family.released", "aiChanges.family.held",
     ];
     for (const locale of ["en", "it"] as const) {
       ctx.initI18n(locale);
-      for (const key of keys) {
+      for (const key of plainKeys) {
         const value = ctx.t(`aiChanges.${key}`, { n: 1, tool: "Cursor", reason: "x", time: "3:00 PM", done: 1, skipped: 1 });
         expect(typeof value, `${locale}.${key}`).toBe("string");
         expect(value, `${locale}.${key}`).not.toContain("—");
+      }
+      for (const path of pluralPaths) {
+        for (const n of [1, 2]) {
+          const value = ctx.tPlural(path, n, { done: 1, skipped: n });
+          expect(typeof value, `${locale}.${path}.${n}`).toBe("string");
+          expect(value, `${locale}.${path}.${n}`).not.toContain("—");
+        }
       }
     }
   });

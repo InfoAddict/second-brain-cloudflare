@@ -1,7 +1,16 @@
-/* T3/T4 S4 (16-t3-t4-trust-spec.md ~1341): the "AI tools changed N memories"
-   line's expanded rows. The collapsed line itself reuses board.css's .stop /
-   .stop-actions / .attn - the same treatment as the stale/unindexed/due rows
-   above it in the decide panel - so only the expanded content is new here. */
+/* T3/T4 S4 (16-t3-t4-trust-spec.md ~1341): its own small board panel, above
+   "Needs a decision" (UX review: AI edits are already live, not a decision).
+   boardPanel() already supplies the title/subtitle head and the panel card;
+   this only styles the summary line, the Review button (main.css's .attn,
+   used context-free here, the same class the decide panel's own rows use)
+   and the expanded rows. */
+
+.ai-changes-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
 
 .ai-changes-line {
   display: flex;

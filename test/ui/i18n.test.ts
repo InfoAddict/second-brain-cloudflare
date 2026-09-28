@@ -469,6 +469,9 @@ describe("dashboard i18n", () => {
     "integrations.connect.calendar-icloud.placeholder",
     "brief.shapeSuffix",
     "download.withTag",
+    // FORMAT ONLY — "{what} · {time}": both placeholders, a middle dot
+    // between them, nothing to translate.
+    "aiChanges.group",
     // PROPER NOUN — "Worker" names the Cloudflare Worker component; kept
     // unchanged in Italian same as "Second Brain" (auth.brand) above.
     "board.railVersion",

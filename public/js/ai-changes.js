@@ -1,36 +1,47 @@
-// T3/T4 S4 (16-t3-t4-trust-spec.md, ~1341): the home board's "AI tools
-// changed N memories" line, one more stop inside board.js's decide panel
-// (renderDecisionPanel). One GET /brief already carries `changes` (Lane S,
-// src/brief/changes.ts); this file only renders it, expands it, and drives
-// the write endpoints every other row already uses: POST /undo (single item;
-// Release is Undo on a held row, S5) and POST /undo/group (Undo all/Release
-// all, paged 5 at a time - the caller loops while remaining > 0).
+// T3/T4 S4 (16-t3-t4-trust-spec.md, ~1341): the home board's own small panel
+// for "changed by AI tools", rendered directly above "Needs a decision"
+// (board.js's BOARD_PANELS order) rather than as a row inside it - a UX
+// review call: AI edits are already live, not a decision, so they must not
+// sit under "Nothing here is recallable until you rule on it" (false for
+// them), and folding an informational line into the decision panel turns it
+// into a chore against the "nothing asks" principle. One GET /brief already
+// carries `changes` (Lane S, src/brief/changes.ts); this file only renders
+// it, expands it, and drives the write endpoints every other row already
+// uses: POST /undo (single item; Release is Undo on a held row, S5) and
+// POST /undo/group (Undo all/Release all, paged 5 at a time - the caller
+// loops while remaining > 0).
 
 let aiChangesExpanded = false
 let aiChangesData = null
 
 /**
- * Called once from renderDecisionPanel with brief.changes. Empty string when
- * there is nothing to show (7.9 "absent when count is 0") - board.js already
- * drops an empty stop, the same as its stale/unindexed/due rows above it.
+ * One more entry in board.js's BOARD_PANELS, called with (board, brief) like
+ * every other panel renderer. Absent entirely when there is nothing to show
+ * (no empty state, no badge) - a panel about live AI activity has nothing
+ * honest to say when there has been none.
  */
-function aiChangesStopHtml(changes) {
-  aiChangesData = changes || null
-  if (!changes || !changes.count) return ''
-  const lineText = t('aiChanges.line', { n: changes.count }) + (changes.held > 0 ? ` · ${t('aiChanges.heldSuffix', { n: changes.held })}` : '')
-  return `<article class="stop ai-changes-stop" id="ai-changes-stop">
-    <div class="stop-actions">
-      <span class="ai-changes-line"><i class="ti ti-sparkles"></i>${escHtml(lineText)}</span>
-      <button class="attn" type="button" aria-expanded="${aiChangesExpanded ? 'true' : 'false'}" onclick="toggleAiChanges()">${escHtml(t('aiChanges.review'))}</button>
-    </div>
-    <div class="ai-changes-rows" id="ai-changes-rows"${aiChangesExpanded ? '' : ' hidden'}>${aiChangesExpanded ? aiChangesRowsHtml(aiChangesData) : ''}</div>
-  </article>`
+function renderAiChangesPanel(board, brief) {
+  const changes = (brief && brief.changes) || null
+  aiChangesData = changes
+  if (!changes || !changes.count) return
+  const panel = boardPanel('ai-changes', { title: t('aiChanges.panelTitle'), sub: t('aiChanges.panelSub'), span: 4 })
+  panel.body.innerHTML = aiChangesPanelBodyHtml(changes)
+  board.appendChild(panel)
+}
+
+function aiChangesPanelBodyHtml(changes) {
+  const lineText = tPlural('aiChanges.line', changes.count) + (changes.held > 0 ? ` · ${tPlural('aiChanges.heldSuffix', changes.held)}` : '')
+  return `<div class="ai-changes-summary">
+    <span class="ai-changes-line"><i class="ti ti-sparkles"></i>${escHtml(lineText)}</span>
+    <button class="attn" type="button" id="ai-changes-review" aria-expanded="${aiChangesExpanded ? 'true' : 'false'}" onclick="toggleAiChanges()">${escHtml(t('aiChanges.review'))}</button>
+  </div>
+  <div class="ai-changes-rows" id="ai-changes-rows"${aiChangesExpanded ? '' : ' hidden'}>${aiChangesExpanded ? aiChangesRowsHtml(aiChangesData) : ''}</div>`
 }
 
 function toggleAiChanges() {
   aiChangesExpanded = !aiChangesExpanded
   const rows = document.getElementById('ai-changes-rows')
-  const btn = document.querySelector('#ai-changes-stop .attn')
+  const btn = document.getElementById('ai-changes-review')
   if (rows) {
     rows.hidden = !aiChangesExpanded
     rows.innerHTML = aiChangesExpanded ? aiChangesRowsHtml(aiChangesData) : ''
@@ -70,6 +81,18 @@ function aiChangeEventLabel(item) {
     const phrase = typeof heldReasonPhrase === 'function' ? heldReasonPhrase(reason) : ''
     return t('aiChanges.evHeld', { reason: phrase })
   }
+  return ''
+}
+
+/** Same explicit if-else reasoning as aiChangeEventLabel: aiChanges.family.<family> is a literal path per branch, never a computed one. */
+function aiChangeFamilyPhrase(family, count) {
+  if (family === 'status') return tPlural('aiChanges.family.status', count)
+  if (family === 'canonical_edit') return tPlural('aiChanges.family.canonical_edit', count)
+  if (family === 'capsule_changed') return tPlural('aiChanges.family.capsule_changed', count)
+  if (family === 'trash') return tPlural('aiChanges.family.trash', count)
+  if (family === 'revert') return tPlural('aiChanges.family.revert', count)
+  if (family === 'released') return tPlural('aiChanges.family.released', count)
+  if (family === 'held') return tPlural('aiChanges.family.held', count)
   return ''
 }
 
@@ -126,7 +149,8 @@ function aiChangeGroupButtonsHtml(group) {
 function aiChangeGroupRowHtml(group) {
   const by = aiChangeByLine(group.client)
   const when = formatDateUI(group.until, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-  const label = t('aiChanges.group', { n: group.count, time: when })
+  const what = aiChangeFamilyPhrase(group.family, group.count)
+  const label = t('aiChanges.group', { what, time: when })
   return `<div class="ai-change-row ai-change-group" data-group="${escAttr(group.group)}">
     <div class="ai-change-meta">${escHtml(`${label} · ${by}`)}</div>
     ${aiChangeGroupButtonsHtml(group)}
@@ -206,8 +230,11 @@ function aiChangeGroupAction(group, kind, total) {
           remaining = Number(data.remaining) || 0
           if (remaining > 0 && typeof progress === 'function') progress(confirmLabel)
         }
+        // DRAFT: the copywriter's aiChanges.partial reads "Undid", which is
+        // the right verb for undo-all but not for release-all's own partial
+        // outcome - no distinct release-partial key exists yet, flagged.
         if (skipped > 0) {
-          showToast(t('aiChanges.partial', { done: doneCount, n: doneCount + skipped, skipped }))
+          showToast(tPlural('aiChanges.partial', skipped, { done: doneCount, n: doneCount + skipped, skipped }))
         } else if (isRelease) {
           showToast(t('held.released'))
         } else {

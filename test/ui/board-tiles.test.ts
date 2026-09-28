@@ -8,7 +8,7 @@ import vm from "node:vm";
 import { describe, it, expect } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "../..");
-const src = ["public/js/i18n.js", "public/utils.js", "public/js/state.js", "public/js/api.js", "public/js/loops.js", "public/js/ledger.js", "public/js/board.js", "public/js/chart.js"]
+const src = ["public/js/i18n.js", "public/utils.js", "public/js/state.js", "public/js/api.js", "public/js/loops.js", "public/js/ledger.js", "public/js/ai-changes.js", "public/js/board.js", "public/js/chart.js"]
   .map((f) => readFileSync(resolve(ROOT, f), "utf8"))
   .join("\n");
 
@@ -310,6 +310,7 @@ describe("decisions thread refit", () => {
   it("spans exactly the first dot to the last stop's dot, and updates when a stop settles and shrinks the layout", () => {
     const ctx: any = { console };
     vm.createContext(ctx);
+    vm.runInContext(readFileSync(resolve(ROOT, "public/js/ai-changes.js"), "utf8"), ctx);
     vm.runInContext(readFileSync(resolve(ROOT, "public/js/board.js"), "utf8"), ctx);
 
     const body = makeNode();
