@@ -327,3 +327,17 @@ export const MEMBER_REMOVAL_NIGHTLY_MAX = 1;
  * hundreds of merges in one request, over the platform's per-invocation service subrequest limit.
  * The rest are written with vector_ids = '[]' for POST /vectorize-pending to backfill. */
 export const UNDO_MERGE_REEMBED_INLINE = 25;
+
+// ── Standing memory (4.0, Track 7, T-0089.7.1) ──
+// Fixed caps (never user tunables — see src/config.ts for STANDING_THRESHOLD and STANDING_MAX,
+// which are eval-tuned / capacity settings and belong in DEFAULTS instead).
+/** Firing selection keeps at most this many results (Design 2.7, 2.9). */
+export const STANDING_MAX_FIRES = 2;
+/** A longer instruction is saved as an ordinary memory instead (Design 2.1, P7.10). */
+export const STANDING_MAX_CHARS = 500;
+/** A cache older than this is served stale and a rebuild is scheduled (Design 2.4 "Revalidation"). */
+export const STANDING_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** KV key prefix; "-" stands for the pre-tenancy "" workspace (Design 2.3). */
+export const STANDING_KV_PREFIX = "standing:v1:";
+/** Isolate-level read memo and rebuild-scheduling throttle, both windowed the same (Design 2.5). */
+export const STANDING_ISOLATE_MEMO_MS = 60_000;

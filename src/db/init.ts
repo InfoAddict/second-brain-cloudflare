@@ -375,6 +375,11 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
   idx_entries_task: `CREATE INDEX IF NOT EXISTS idx_entries_task ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"task"') > 0`,
   idx_entries_insight: `CREATE INDEX IF NOT EXISTS idx_entries_insight ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"auto-insight"') > 0`,
   idx_entries_stale: `CREATE INDEX IF NOT EXISTS idx_entries_stale ON entries(workspace_id, id) WHERE instr(lower(tags), '"stale:as-of"') > 0`,
+  // Track 7 (T-0089.7.1, T-0089.7.2): the decision log and standing-memory cache build each
+  // scan only their own marker. Post-column like the three above: workspace_id arrives by
+  // ALTER on older brains. Neither writes a row on upgrade — both tags are new.
+  idx_entries_ledger: `CREATE INDEX IF NOT EXISTS idx_entries_ledger ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"ledger:decision"') > 0`,
+  idx_entries_standing: `CREATE INDEX IF NOT EXISTS idx_entries_standing ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"standing:active"') > 0`,
   prompt_capsule_entry_insert: `CREATE TRIGGER IF NOT EXISTS prompt_capsule_entry_insert
     AFTER INSERT ON entries
     WHEN instr(lower(NEW.tags), '"capsule:') > 0 OR instr(lower(NEW.tags), '"capsule-slot:') > 0

@@ -258,6 +258,14 @@ WHERE instr(lower(tags), '"auto-insight"') > 0;
 CREATE INDEX IF NOT EXISTS idx_entries_stale ON entries(workspace_id, id)
 WHERE instr(lower(tags), '"stale:as-of"') > 0;
 
+-- Track 7 (T-0089.7.1, T-0089.7.2): the decision log and standing-memory cache build each
+-- scan only their own marker, not every memory. Neither writes a row on upgrade — the two
+-- tags are new, so both indexes start empty. Must stay in step with src/db/init.ts.
+CREATE INDEX IF NOT EXISTS idx_entries_ledger ON entries(workspace_id, created_at)
+WHERE instr(lower(tags), '"ledger:decision"') > 0;
+CREATE INDEX IF NOT EXISTS idx_entries_standing ON entries(workspace_id, created_at)
+WHERE instr(lower(tags), '"standing:active"') > 0;
+
 -- Web Push subscriptions. One row per subscribed browser/device, scoped to
 -- the workspace it was created against. Must stay in step with src/db/init.ts.
 CREATE TABLE IF NOT EXISTS push_subscriptions (

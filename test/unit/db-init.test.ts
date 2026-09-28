@@ -80,6 +80,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "idx_entries_conflict_held",
   // Agent brief queues (T-0089.6): partial indexes, post-column.
   "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
+  // Decision ledger and standing memory (T-0089.7.1, T-0089.7.2): partial indexes, post-column.
+  "idx_entries_ledger", "idx_entries_standing",
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
   // Content history and soft delete (T-0089.1.1, T-0089.1.2).
@@ -290,7 +292,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 66 -> 70 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
       // MOVED 70 -> 71 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER.
       // MOVED 71 -> 72 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER.
-      expect(migrated).toBe(72); // 31 base objects + 20 ALTERs + 15 post-column objects + the email-index CREATE
+      // MOVED 72 -> 74 (T-0089.7.1, T-0089.7.2) by idx_entries_ledger and idx_entries_standing.
+      expect(migrated).toBe(74); // 31 base objects + 20 ALTERs + 17 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -521,6 +524,30 @@ describe("initializeDatabase against real SQLite", () => {
     expect(sameColumns(d1.columns())).toBe(true);
   });
 
+  it("creates idx_entries_ledger and idx_entries_standing on a fresh brain, both empty", async () => {
+    d1 = makeSqliteD1({ schema: false });
+    await initializeDatabase(envFor(d1));
+
+    const objects = (await d1.db.prepare(
+      `SELECT name, type FROM sqlite_master WHERE name IN ('idx_entries_ledger','idx_entries_standing')`,
+    ).all()).results as { name: string; type: string }[];
+    expect(objects.map(o => o.name).sort()).toEqual(["idx_entries_ledger", "idx_entries_standing"]);
+    expect(objects.every(o => o.type === "index")).toBe(true);
+
+    // Neither tag exists yet on a fresh brain, so both partial indexes start empty (Design "Global constraints").
+    await d1.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'ordinary', '["work"]', 'api', 1, '[]')`,
+    ).run();
+    const ledgerCount = (await d1.db.prepare(
+      `SELECT COUNT(*) AS n FROM entries INDEXED BY idx_entries_ledger WHERE workspace_id = '' AND instr(lower(tags), '"ledger:decision"') > 0`,
+    ).first()) as { n: number };
+    const standingCount = (await d1.db.prepare(
+      `SELECT COUNT(*) AS n FROM entries INDEXED BY idx_entries_standing WHERE workspace_id = '' AND instr(lower(tags), '"standing:active"') > 0`,
+    ).first()) as { n: number };
+    expect(ledgerCount.n).toBe(0);
+    expect(standingCount.n).toBe(0);
+  });
+
   it("advances Prompt Capsule revisions atomically on entry writes and workspace moves", async () => {
     d1 = makeSqliteD1({ schema: false });
     await initializeDatabase(envFor(d1));
@@ -631,7 +658,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 64 -> 65 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER — wasted on a fresh brain
     // (the CREATE above already has the column), same as every other ALTER a fresh CREATE subsumes.
     // MOVED 65 -> 66 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER, wasted the same way.
-    expect(cold).toBe(66); // one probe, then the 65 statements a new brain needs
+    // MOVED 66 -> 68 (T-0089.7.1, T-0089.7.2) by idx_entries_ledger and idx_entries_standing.
+    expect(cold).toBe(68); // one probe, then the 67 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });

@@ -1,8 +1,6 @@
 /**
  * The calibration read (src/decisions/queries.ts): the SQL builder, and its
- * row parser feeding straight into src/decisions/calibration.ts. The
- * EXPLAIN QUERY PLAN assertion against idx_entries_ledger is skipped until
- * Task 6 creates that index (spec 15-t7-wow-spec.md, Task 4).
+ * row parser feeding straight into src/decisions/calibration.ts.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -72,9 +70,13 @@ describe("calibrationQuery", () => {
     expect(bindings).toEqual(["ws-company", AUTH.personalWorkspaceId, AUTH.userId]);
   });
 
-  it.skip("uses idx_entries_ledger (EXPLAIN QUERY PLAN) — enabled once Task 6 creates the partial index", () => {
-    // Task 6 (Lane C, after Track 1) adds idx_entries_ledger to db/schema.sql
-    // and src/db/init.ts; this assertion is wired up then.
+  it("uses idx_entries_ledger (EXPLAIN QUERY PLAN)", async () => {
+    sq = makeSqliteD1();
+    const { sql, bindings } = calibrationQuery(READ_SCOPE, decisionsActionable(AUTH));
+    const rows = (await sq.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...bindings).all())
+      .results as { detail: string }[];
+    const plan = rows.map(r => r.detail).join("\n");
+    expect(plan).toContain("idx_entries_ledger");
   });
 });
 

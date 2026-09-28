@@ -167,6 +167,26 @@ export const DEFAULTS = {
   VERSION_KEEP: 20,
   // Days a forgotten memory waits in the trash before it is purged for good.
   TRASH_RETENTION_DAYS: 14,
+
+  // ── Standing memory (src/standing/*, Track 7, T-0089.7.1) ──
+  // Eval-tuned firing threshold (test/eval/data/baselines/standing.bge-small-en-v1.5.json,
+  // Task 2's chosen value for the raw-input curve). Not a fixed constant: a future re-run of
+  // the eval retunes this without a code change.
+  STANDING_THRESHOLD: 0.67,
+  // Capacity, not a fixed cap: how many standing memories one workspace may hold at once
+  // (Design 2.1 "the cap", 2.4's oldest-first cache build).
+  STANDING_MAX: 50,
+  // Dimension of DEFAULTS.EMBEDDING_MODEL's vectors (bge-small-en-v1.5). Threaded explicitly
+  // into the standing cache codec/build rather than hard-coded there, so a future embedding
+  // model change updates both together.
+  EMBEDDING_DIM: 384,
+
+  // ── Decision ledger (src/decisions/*, Track 7, T-0089.7.2) ──
+  // D7.3: a decision's review date when neither review_by nor when is given.
+  DECISION_REVIEW_DEFAULT_DAYS: 90,
+  CALIBRATION_MIN_N: 10,
+  CALIBRATION_MIN_BUCKET_N: 5,
+  CALIBRATION_MIN_TOPIC_N: 5,
 } as const;
 
 // DEFAULTS is `as const` so the shipped values are pinned and a typo shows up
@@ -247,6 +267,15 @@ export const RULES: Record<ConfigKey, Rule> = {
   PUSH_CONTACT: { kind: "string" },
   VERSION_KEEP: { kind: "number", min: 5, max: 500, integer: true },
   TRASH_RETENTION_DAYS: { kind: "number", min: 1, max: 365, integer: true },
+
+  STANDING_THRESHOLD: { kind: "number", min: 0.5, max: 0.95 },
+  STANDING_MAX: { kind: "number", min: 1, max: 100, integer: true },
+  EMBEDDING_DIM: { kind: "number", min: 1, max: 4096, integer: true },
+
+  DECISION_REVIEW_DEFAULT_DAYS: { kind: "number", min: 7, max: 730, integer: true },
+  CALIBRATION_MIN_N: { kind: "number", min: 5, max: 100, integer: true },
+  CALIBRATION_MIN_BUCKET_N: { kind: "number", min: 3, max: 50, integer: true },
+  CALIBRATION_MIN_TOPIC_N: { kind: "number", min: 3, max: 50, integer: true },
 };
 
 /**

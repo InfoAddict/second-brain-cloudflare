@@ -1,4 +1,4 @@
-import { VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
+import { STANDING_CACHE_MAX_AGE_MS, STANDING_ISOLATE_MEMO_MS, STANDING_KV_PREFIX, VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
 import type { Config } from "../config";
 import type { Env } from "../env";
 import { encodeVector, parseStandingCache, type StandingCacheItem, type StandingCacheV1 } from "./codec";
@@ -6,11 +6,9 @@ import { encodeVector, parseStandingCache, type StandingCacheItem, type Standing
 /** The config keys this module needs. Passed explicitly (Task 3: "no config.ts edit is needed yet"); STANDING_MAX and EMBEDDING_DIM are Task 6 additions to DEFAULTS, EMBEDDING_MODEL already exists there today. */
 export type StandingCacheConfig = { STANDING_MAX: number; EMBEDDING_DIM: number } & Pick<Config, "EMBEDDING_MODEL">;
 
-// Provisional constants, kept at the values Task 6's spec names so that later moving them into
-// src/constants.ts is a pure rename with no behavior change.
-export const STANDING_KV_PREFIX = "standing:v1:";
-export const STANDING_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-export const STANDING_ISOLATE_MEMO_MS = 60_000;
+// Re-exported so every existing caller and test keeps working unchanged now that Task 6 has
+// moved the real definitions into src/constants.ts (a pure rename with no behavior change).
+export { STANDING_KV_PREFIX, STANDING_CACHE_MAX_AGE_MS, STANDING_ISOLATE_MEMO_MS };
 const KV_WRITE_RETRY_DELAY_MS = 1_100;
 
 // Retry backoff for a row that failed to resolve a vector (budget audit dab677a5: a flat 10-minute retry, with
