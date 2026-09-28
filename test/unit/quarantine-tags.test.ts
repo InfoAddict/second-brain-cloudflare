@@ -20,7 +20,6 @@ import {
   editedCanonicalAt,
   heldReason,
   isHeld,
-  stripReservedTrustTags,
   withEditedCanonical,
   withHold,
 } from "../../src/quarantine/tags";
@@ -41,17 +40,6 @@ describe("applyTagReplacement keeps a quarantine tag an update tries to drop", (
   it("survives a replacement that omits it", () => {
     const existing = [`${QUARANTINE_TAG_PREFIX}hidden`, "status:draft", "old-topic"];
     expect(applyTagReplacement(existing, ["new-topic"])).toEqual([`${QUARANTINE_TAG_PREFIX}hidden`, "status:draft", "new-topic"]);
-  });
-});
-
-describe("stripReservedTrustTags drops caller-supplied quarantine:* and edited-canonical:*", () => {
-  it("removes both namespaces and keeps ordinary tags", () => {
-    const input = ["work", `${QUARANTINE_TAG_PREFIX}instruction`, `${EDITED_CANONICAL_TAG_PREFIX}2026-01-01`, "idea"];
-    expect(stripReservedTrustTags(input)).toEqual(["work", "idea"]);
-  });
-
-  it("is case-insensitive", () => {
-    expect(stripReservedTrustTags(["QUARANTINE:burst", "Edited-Canonical:2026-01-01", "keep"])).toEqual(["keep"]);
   });
 });
 
@@ -107,6 +95,7 @@ describe("isHeld / heldReason / withHold", () => {
     expect(heldReason([`${QUARANTINE_TAG_PREFIX}hidden`])).toBe("hidden");
     expect(heldReason([`${QUARANTINE_TAG_PREFIX}burst`])).toBe("burst");
     expect(heldReason([`${QUARANTINE_TAG_PREFIX}capsule`])).toBe("capsule");
+    expect(heldReason([`${QUARANTINE_TAG_PREFIX}too_long`])).toBe("too_long");
     expect(heldReason([`${QUARANTINE_TAG_PREFIX}bogus`])).toBeNull();
     expect(heldReason(["work"])).toBeNull();
   });

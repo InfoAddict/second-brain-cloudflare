@@ -14,17 +14,17 @@ import type { ScoreResult, SignalHit } from "./score";
 export interface HeldInfo { reasons: HoldReason[]; score: number }
 
 /**
- * One policy, used by every write path that scores content (Codex review class D, T-0089.4.2):
- * turns a scorer result into "does this write hold, and with what reason." A write that scored
- * `hold` on what it could scan holds for that reason as before. A write that scored `partial`
- * (over 32 KB — the scorer only scanned the head and tail) but did NOT hold on what it scanned
- * still holds, reason `pending-scan`, rather than shipping unheld and indexable with an
- * unscanned middle: the nightly rescan pass (src/quarantine/rescan.ts) owns clearing it, in
- * bounded chunks, once every part of the note has been checked.
+ * One policy, used by every write path that scores content (Codex review class D, T-0089.4.2,
+ * simplified 2026-09-28 to drop the automatic nightly release): turns a scorer result into "does
+ * this write hold, and with what reason." A write that scored `hold` on what it could scan holds
+ * for that reason as before. A write that scored `partial` (over 32 KB — the scorer only scanned
+ * the head and tail) but did NOT hold on what it scanned still holds, reason `too_long`, rather
+ * than shipping unheld and indexable with an unscanned middle. There is no automatic release:
+ * the owner reads it and releases it themselves, the same as any other hold.
  */
 export function holdDecision(score: ScoreResult): { hold: true; reasons: HoldReason[]; score: number; signals: SignalHit[] } | { hold: false } {
   if (score.hold) return { hold: true, reasons: score.reasons, score: score.score, signals: score.signals };
-  if (score.partial) return { hold: true, reasons: ["pending-scan"], score: score.score, signals: score.signals };
+  if (score.partial) return { hold: true, reasons: ["too_long"], score: score.score, signals: score.signals };
   return { hold: false };
 }
 

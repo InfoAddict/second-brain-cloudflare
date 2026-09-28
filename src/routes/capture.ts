@@ -17,7 +17,11 @@ import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/vo
 import { parseExplicitWhen } from "../when/input";
 import { contentByteLength, isOverContentLimit, tooLargeRestBody, MAX_CONTENT_BYTES } from "../lib/content-size";
 import { parseValidityInput, updateEntryValidity, VALIDITY_WITH_CONTENT_ERROR, type UpdateValidityResult } from "../memory/validity";
-import { restHeldReason } from "../quarantine/tags";
+
+// Copy deck 9.1 (T-0089.4.2): too_long's own REST message, ahead of any T7 reply text or the
+// generic held message — there is no nightly check to wait on any more, just a note over the
+// scorer's budget that only the owner can read and release.
+const TOO_LONG_MESSAGE = "Saved, but held out of search because it is too long to check automatically. Read it and release it if it's fine. Shorter memories (about 5,000 words or less) are not held.";
 
 /** Validate route-only volatility input; MCP gets equivalent Zod validation. */
 /** Where this caller's writes land and who gets stamped on them. */
@@ -231,9 +235,6 @@ export async function handleCaptureRoutes(
     if (result.status === "merged") {
       return json(withReservedNote({ ok: true, id: result.id, action: "merged", message: "Merged into an existing memory." }, ignoredReservedTags, t7Notes));
     }
-    // Class D copy (T-0089.4.2, copy deck 9.1): pending-scan's own REST message, ahead of any
-    // T7 reply text — a delay is what happened here, not a decision T7 made.
-    const PENDING_SCAN_MESSAGE = "Saved, but held out of search until the nightly check has read all of it. That can take one or more nights.";
     if (result.status === "flagged") {
       const message = await t7Message();
       return json(withReservedNote({
@@ -242,16 +243,16 @@ export async function handleCaptureRoutes(
         warning: "similar",
         matchId: result.matchId,
         score: parseFloat((result.score * 100).toFixed(1)),
-        held: result.held ? { reason: restHeldReason(result.held.reasons[0]) } : null,
-        message: result.held?.reasons[0] === "pending-scan" ? PENDING_SCAN_MESSAGE : (message ?? "Stored but similar entry exists: tagged as duplicate-candidate"),
+        held: result.held ? { reason: result.held.reasons[0] } : null,
+        message: result.held?.reasons[0] === "too_long" ? TOO_LONG_MESSAGE : (message ?? "Stored but similar entry exists: tagged as duplicate-candidate"),
       }, ignoredReservedTags, t7Notes));
     }
     // Additive: older clients ignore the extra field, and the dashboard uses it
     // to show what was filed under what.
     return json(withReservedNote({
       ok: true, id: result.id, tags: result.tags ?? [],
-      held: result.held ? { reason: restHeldReason(result.held.reasons[0]) } : null,
-      message: result.held?.reasons[0] === "pending-scan" ? PENDING_SCAN_MESSAGE : await t7Message(),
+      held: result.held ? { reason: result.held.reasons[0] } : null,
+      message: result.held?.reasons[0] === "too_long" ? TOO_LONG_MESSAGE : await t7Message(),
     }, ignoredReservedTags, t7Notes));
   }
 
@@ -319,10 +320,10 @@ export async function handleCaptureRoutes(
     ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
 
     if (held) {
-      const message = held.reasons[0] === "pending-scan"
-        ? "Saved, but held out of search until the nightly check has read all of it. That can take one or more nights."
+      const message = held.reasons[0] === "too_long"
+        ? TOO_LONG_MESSAGE
         : "Update appended, but held out of recall: it looks like an instruction to an AI. Release it once you're sure it's fine.";
-      return json({ ok: true, id, held: { reason: restHeldReason(held.reasons[0]) }, message });
+      return json({ ok: true, id, held: { reason: held.reasons[0] }, message });
     }
 
     return json({
@@ -460,11 +461,11 @@ export async function handleCaptureRoutes(
     ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
 
     if (result.held) {
-      const message = result.held.reasons[0] === "pending-scan"
-        ? "Saved, but held out of search until the nightly check has read all of it. That can take one or more nights."
+      const message = result.held.reasons[0] === "too_long"
+        ? TOO_LONG_MESSAGE
         : "Updated, but held out of recall: it looks like an instruction to an AI. Release it once you're sure it's fine.";
       return json(withReservedNote({
-        ...endFields, ok: true, id, held: { reason: restHeldReason(result.held.reasons[0]) }, message,
+        ...endFields, ok: true, id, held: { reason: result.held.reasons[0] }, message,
       }, ignoredReservedTags));
     }
 

@@ -15,7 +15,6 @@ import { runWhenExtractPass } from "./when/pass";
 import { runFtsMaintenance } from "./db/fts-backfill";
 import { runNightlyCleanup } from "./memory/cleanup";
 import { runNightlyVectorizePending } from "./vectorize/pending";
-import { runQuarantineRescan } from "./quarantine/rescan";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -259,15 +258,6 @@ export default {
         await runNightlyVectorizePending(env, () => resolveConfig(env));
       } catch (e) {
         console.error("Nightly vectorize-pending failed (non-fatal):", e);
-      }
-
-      // Lane W follow-up (16-t3-t4-trust-spec.md 5.1 point 2): scores the unscanned middle of
-      // any >32 KB write the scorer could only partially check inline. A small bounded slice
-      // each night, same shape as vectorize-pending above. No cron of its own.
-      try {
-        await runQuarantineRescan(env, ctx, await resolveConfig(env));
-      } catch (e) {
-        console.error("Quarantine rescan failed (non-fatal):", e);
       }
 
       // No single workspace to attribute the summary to: an empty corpus (nothing

@@ -103,7 +103,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       // calendar invite sets its own `source` and can never declare itself `direct`.
       const change = { actorId: writeCtx.actorId, channel: "system:mirror" as const };
       const score = scoreWrite({ content, tags: finalTags, source, channel: "system:mirror", kind: "create" }, cfg);
-      // Codex review class D (T-0089.4.2): a `partial` score holds too, reason pending-scan.
+      // Codex review class D (T-0089.4.2): a `partial` score holds too, reason too_long.
       const decision = holdDecision(score);
 
       // versioning: exempt: creation — a new row has no prior state to keep
@@ -174,7 +174,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
         const score = alreadyHeld ? null : scoreWrite(
           { content, tags: refreshedTags, source: row.source as string, channel: "system:mirror", kind: "update" }, cfg,
         );
-        // Codex review class D (T-0089.4.2): a `partial` score holds too, reason pending-scan.
+        // Codex review class D (T-0089.4.2): a `partial` score holds too, reason too_long.
         const decision = score ? holdDecision(score) : { hold: false as const };
         const heldTags = decision.hold ? heldTagsFor(refreshedTags, decision.reasons) : null;
 

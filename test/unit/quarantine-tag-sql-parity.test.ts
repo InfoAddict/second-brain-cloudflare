@@ -42,7 +42,7 @@ const CASES: { name: string; tags: string[] }[] = [
   { name: "ordinary unheld tags", tags: ["work", "status:canonical"] },
   { name: "empty tags", tags: [] },
   { name: "held with an unrelated leading-space tag elsewhere", tags: [" work", ...withHold([], "hidden")] },
-  { name: "pending-scan hold", tags: withHold(["work"], "pending-scan") },
+  { name: "too_long hold", tags: withHold(["work"], "too_long") },
 ];
 
 describe("isHeld and the SQL held filters agree, for every tag array normalizeTagList produces", () => {

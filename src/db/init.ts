@@ -394,11 +394,6 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
   // ALTER on older brains. Neither writes a row on upgrade — both tags are new.
   idx_entries_ledger: `CREATE INDEX IF NOT EXISTS idx_entries_ledger ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"ledger:decision"') > 0`,
   idx_entries_standing: `CREATE INDEX IF NOT EXISTS idx_entries_standing ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"standing:active"') > 0`,
-  // Budget auditor R19 (T-0089.4.2, Lane W class D/C): the nightly quarantine-rescan pass's
-  // candidate read (src/quarantine/rescan.ts) is corpus-wide, not per-workspace, so no
-  // workspace_id prefix — unlike the indexes above. Its query's WHERE must match this verbatim
-  // (case, instr/lower form and literal) or the planner falls back to a full table scan.
-  idx_entries_quarantine_pending_scan: `CREATE INDEX IF NOT EXISTS idx_entries_quarantine_pending_scan ON entries(id) WHERE instr(lower(tags), '"quarantine:pending-scan"') > 0`,
   prompt_capsule_entry_insert: `CREATE TRIGGER IF NOT EXISTS prompt_capsule_entry_insert
     AFTER INSERT ON entries
     WHEN instr(lower(NEW.tags), '"capsule:') > 0 OR instr(lower(NEW.tags), '"capsule-slot:') > 0

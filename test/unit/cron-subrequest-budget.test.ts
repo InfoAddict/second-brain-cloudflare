@@ -343,9 +343,10 @@ describe("nightly cron D1 subrequest cost", () => {
     // MOVED 22 -> 24 (T-0089.1.2): +1 trash purge candidate read, +1 pending-member-removal probe.
     // The purge resolves the config only when something is old enough to purge, so it adds no KV read.
     // MOVED 24 -> 25 (T-0089.1.1 close-out): the vectorize-pending candidate read; nothing deferred, no batch.
-    // MOVED 25 -> 27 (T-0089.4.2, Lane W follow-up): the quarantine rescan pass's own resolveConfig
-    // KV read plus its NEEDS_RESCAN_TAG candidate SELECT; nothing queued, no batch.
-    expect(statements.length).toBe(27);
+    // MOVED 25 -> 27 -> 25 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
+    // pass's own resolveConfig KV read plus its candidate SELECT, added then removed with
+    // rescan.ts itself.
+    expect(statements.length).toBe(25);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -368,9 +369,10 @@ describe("nightly cron D1 subrequest cost", () => {
     // same commit, see the scope-checker test's convention for this pattern.
     // MOVED 23 -> 25 (T-0089.1.2): the same two statements.
     // MOVED 25 -> 26 (T-0089.1.1 close-out): the vectorize-pending candidate read.
-    // MOVED 26 -> 28 (T-0089.4.2, Lane W follow-up): the quarantine rescan pass's own resolveConfig
-    // KV read plus its NEEDS_RESCAN_TAG candidate SELECT.
-    expect(statements.length).toBe(28);
+    // MOVED 26 -> 28 -> 26 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
+    // pass's own resolveConfig KV read plus its candidate SELECT, added then removed with
+    // rescan.ts itself.
+    expect(statements.length).toBe(26);
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -412,9 +414,10 @@ describe("nightly cron D1 subrequest cost", () => {
     // moves, say why in the same commit.
     // MOVED 24 -> 26 (T-0089.1.2): the trash purge read and the pending-removal probe.
     // MOVED 26 -> 27 (T-0089.1.1 close-out): the vectorize-pending candidate read.
-    // MOVED 27 -> 29 (T-0089.4.2, Lane W follow-up): the quarantine rescan pass's own resolveConfig
-    // KV read plus its NEEDS_RESCAN_TAG candidate SELECT.
-    expect(statements.length).toBe(29);
+    // MOVED 27 -> 29 -> 27 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
+    // pass's own resolveConfig KV read plus its candidate SELECT, added then removed with
+    // rescan.ts itself.
+    expect(statements.length).toBe(27);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

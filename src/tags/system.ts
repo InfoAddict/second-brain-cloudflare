@@ -14,7 +14,7 @@
 // additionally hides machine identifiers (`#5118`, `#fd540a`). That extra rule is
 // deliberately absent here: hiding a junk tag costs nothing, but treating it as
 // unowned would let an edit silently delete a tag that is genuinely stored.
-import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX, QUARANTINE_SCANNED_TAG_PREFIX, isHoldReasonValue, isEditedCanonicalDateValue } from "../quarantine/tags";
+import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX, isHoldReasonValue, isEditedCanonicalDateValue } from "../quarantine/tags";
 import {
   T7_TAG_PREFIXES, OWED_TO_ME_TAG,
   STANDING_TAG_PREFIX, LEDGER_TAG_PREFIX, CONFIDENCE_TAG_PREFIX, CONFIDENCE_SOURCE_TAG_PREFIX,
@@ -70,9 +70,6 @@ export const RESERVED_TAG_PREFIXES = [
   CAPSULE_SLOT_TAG_PREFIX,
   QUARANTINE_TAG_PREFIX,
   EDITED_CANONICAL_TAG_PREFIX,
-  // The pending-scan progress cursor (class D, T-0089.4.2): a namespace, not a bare marker,
-  // since it carries a numeric offset. Reserved so a caller cannot forge scan progress.
-  QUARANTINE_SCANNED_TAG_PREFIX,
   ...T7_TAG_PREFIXES,
 ];
 
