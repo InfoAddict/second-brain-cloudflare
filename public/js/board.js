@@ -274,6 +274,26 @@ function renderLoopsPanel(board, brief) {
   board.appendChild(panel)
 }
 
+/**
+ * "Decision log" (T7-E, Design 7.4): the calibration sentence (or the
+ * not-ready line, both `result.line`), and a way to the full sheet. Hidden
+ * with zero decisions — in practice, hidden until the brief's own
+ * `decisions_resolved` gate exposes `calibration` at all (C11: the Worker
+ * never runs the calibration read below 10 resolved decisions, to keep an
+ * ordinary brief load free of it), so an unused ledger costs nothing here.
+ * Lists no review items itself: Due already does, and listing them twice
+ * would be a new chore, not a saved one.
+ */
+function renderLedgerPanel(board, brief) {
+  const calibration = brief && brief.calibration
+  if (!calibration) return
+  const panel = boardPanel('ledger', { title: t('board.ledgerTitle'), sub: t('board.ledgerSub'), span: 3 })
+  panel.body.innerHTML =
+    `<p class="digest-note">${escHtml(calibration.line || '')}</p>` +
+    `<button class="digest-more" type="button" onclick="openLedgerSheet()">${escHtml(t('ledger.openLog'))}</button>`
+  board.appendChild(panel)
+}
+
 /** Bars proportional to their own max, not to each other's panel's max. */
 function boardBars(rows, onClick) {
   const max = Math.max(...rows.map((r) => r.count), 1)
@@ -1055,6 +1075,7 @@ BOARD_PANELS.push(
   renderGrowthPanel,
   renderDecisionPanel,
   renderLoopsPanel,
+  renderLedgerPanel,
   renderGraphPanel,
   renderRecalledPanel,
   renderNightPanel,

@@ -1035,6 +1035,123 @@
   margin-bottom: 4px;
 }
 
+/* T7-E (Design 7.4): the decision log's calibration dot plot. A hollow ring
+   at "you said" and a filled dot at "came true", joined by a connector — 1
+   hue (--s1) plus a de-emphasis gray (--data), never color alone (ring vs
+   filled dot, plus the legend). Validated with the dataviz skill's
+   validate_palette.js; see the commit body for the run. */
+.ledger-chart-wrap {
+  margin: 10px 0;
+}
+
+/* Five columns (range, n, you said, came true, stated/inferred) do not fit
+   390px next to each other at a readable size — scrolls rather than
+   clipping the rightmost column or shrinking text past legibility. */
+.ledger-table-scroll {
+  overflow-x: auto;
+}
+
+/* Deliberately its own class, not .chart: the dot plot's natural height is
+   fixed by its row count (30px per bucket, 5 buckets), not the activity
+   chart's flex-filled panel height, and .chart's own mobile media query
+   (height: 240px at <= 700px) would otherwise win the cascade here since
+   this rule loads after it with equal specificity. */
+.ledger-chart {
+  position: relative;
+  width: 100%;
+  height: 190px;
+}
+
+.ledger-chart svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.cal-grid line {
+  stroke: var(--surface-3);
+  stroke-width: 1;
+}
+
+.cal-connector {
+  stroke: var(--data);
+  stroke-width: 2;
+}
+
+.cal-mark-ring {
+  fill: var(--bg-card);
+  stroke: var(--data);
+  stroke-width: 2;
+}
+
+.cal-mark-dot {
+  fill: var(--s1);
+  stroke: var(--bg-card);
+  stroke-width: 2;
+}
+
+.cal-bucket-label,
+.cal-n-label,
+.cal-not-enough {
+  font-size: 11px;
+  fill: var(--text-secondary);
+  font-family: var(--font-sans);
+}
+
+.cal-row-hit {
+  cursor: pointer;
+}
+
+.cal-row-hit:focus-visible rect {
+  outline: 2px solid var(--accent-ink);
+}
+
+.cal-mark {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+
+.cal-mark--ring {
+  background: var(--bg-card);
+  border: 2px solid var(--data);
+}
+
+.cal-mark--dot {
+  background: var(--s1);
+  border: 2px solid var(--bg-card);
+  box-shadow: 0 0 0 1px var(--data);
+}
+
+.ledger-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill, 999px);
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+.ledger-chip--good {
+  color: var(--good);
+}
+
+.ledger-chip--danger {
+  color: var(--danger);
+}
+
+.ledger-chip--warn {
+  color: var(--warn);
+}
+
 /* ── Upkeep and connected sources ─────────────────────────────────────── */
 .task {
   display: flex;

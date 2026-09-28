@@ -473,6 +473,11 @@ describe("dashboard i18n", () => {
     // PROPER NOUN — "Worker" names the Cloudflare Worker component; kept
     // unchanged in Italian same as "Second Brain" (auth.brand) above.
     "board.railVersion",
+    // FORMAT ONLY — the statistics symbol "n" (sample size), a table column
+    // header next to actual words (18-copy-deck.md's own calibration wording
+    // spells out "based on {n} decisions" rather than using the bare symbol
+    // in prose, but a table header has no room for that).
+    "ledger.tableColN",
   ].sort();
 
   it("has no Italian string left as a copy of its English twin", () => {

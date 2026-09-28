@@ -1732,6 +1732,7 @@
       #stale-sheet,
       #loops-sheet,
       #due-sheet,
+      #ledger-sheet,
       #install-guide-sheet,
       #view-sheet {
         display: none;
@@ -1772,6 +1773,7 @@
       #stale-sheet.open,
       #loops-sheet.open,
       #due-sheet.open,
+      #ledger-sheet.open,
       #install-guide-sheet.open,
       #view-sheet.open {
         display: flex;
@@ -2563,8 +2565,12 @@
 
       /* T7-E: the decision row's optional note, expanded by "Add a note"
          (Design 7.2) before the outcome buttons. Never required, so it stays
-         a plain one-line field rather than the memory sheet's own textarea. */
-      .due-note-input {
+         a plain one-line field rather than the memory sheet's own textarea.
+         display:block would otherwise outrank the [hidden] attribute's own
+         UA-stylesheet rule (an element selector, lower specificity than this
+         class), so the collapsed state is scoped to :not([hidden]) instead of
+         setting display unconditionally. */
+      .due-note-input:not([hidden]) {
         display: block;
         width: 100%;
         margin: 0 0 8px;
@@ -4222,6 +4228,7 @@
         #stale-sheet,
         #loops-sheet,
         #due-sheet,
+        #ledger-sheet,
         #install-guide-sheet,
         #view-sheet {
           align-items: center;

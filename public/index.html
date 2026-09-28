@@ -879,6 +879,43 @@
       </div>
     </div>
 
+    <!-- The decision log (T7-E, Design 4.4, 7.4): every logged decision
+         (ledger:decision) with its outcome, plus a calibration dot plot of
+         how often confident calls came true. js/ledger.js. -->
+    <div id="ledger-sheet">
+      <div class="menu-inner patterns-inner">
+        <div class="view-header">
+          <h2 style="margin-bottom: 0" data-i18n="ledger.title">Decision log</h2>
+          <button class="btn-close-icon" onclick="closeLedgerSheet()"><i class="ti ti-x"></i></button>
+        </div>
+        <div class="loops-tabs" role="tablist" aria-label="Confidence source">
+          <button type="button" class="loops-tab active" id="ledger-source-all" role="tab" aria-selected="true" onclick="setLedgerSource('all')" data-i18n="ledger.sourceAll">All</button>
+          <button type="button" class="loops-tab" id="ledger-source-stated" role="tab" aria-selected="false" onclick="setLedgerSource('stated')" data-i18n="ledger.sourceStated">Stated</button>
+          <button type="button" class="loops-tab" id="ledger-source-inferred" role="tab" aria-selected="false" onclick="setLedgerSource('inferred')" data-i18n="ledger.sourceInferred">Inferred</button>
+        </div>
+        <div class="loops-tabs" role="tablist" aria-label="Decision state">
+          <button type="button" class="loops-tab active" id="ledger-state-open" role="tab" aria-selected="true" onclick="setLedgerState('open')" data-i18n="ledger.stateOpen">Open</button>
+          <button type="button" class="loops-tab" id="ledger-state-resolved" role="tab" aria-selected="false" onclick="setLedgerState('resolved')" data-i18n="ledger.stateResolved">Resolved</button>
+        </div>
+        <p class="digest-note" id="ledger-sentence"></p>
+        <div class="ledger-chart-wrap">
+          <div class="legend" id="ledger-legend"></div>
+          <div class="ledger-chart" id="ledger-chart"><svg></svg></div>
+          <button class="digest-more" id="ledger-table-toggle" type="button" onclick="toggleLedgerTable()"></button>
+          <div class="ledger-table-scroll">
+            <table class="data-table" id="ledger-table" hidden>
+              <caption class="vh"></caption>
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="digest-note" id="ledger-caption" hidden></p>
+        <p class="digest-note" id="ledger-topic" hidden></p>
+        <div id="ledger-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
+      </div>
+    </div>
+
     <!-- Browser-aware "Add to Home Screen" guide (T-0048): the answer to
          "Enable notifications" on a browser that cannot receive Web Push
          outside an installed PWA. js/install-guide.js decides the content;
@@ -926,6 +963,7 @@
     <script src="js/loops.js"></script>
     <script src="js/pending-due.js"></script>
     <script src="js/due.js"></script>
+    <script src="js/ledger.js"></script>
     <script src="js/install-guide.js"></script>
     <script src="js/notifications.js"></script>
     <script src="js/integrations.js"></script>

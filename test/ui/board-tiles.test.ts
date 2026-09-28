@@ -967,6 +967,46 @@ describe("open loops panel", () => {
   });
 });
 
+describe("decision log panel (T7-E, Design 7.4)", () => {
+  function ctxFor() {
+    const { document } = fakeDoc();
+    const ctx: any = { document, window: {}, console, Intl, WORKER_URL: "http://x", AUTH_TOKEN: "t" };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    return ctx;
+  }
+
+  it("panel hidden with zero decisions", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+
+    ctx.renderLedgerPanel(board, { ok: true, total: 4, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
+
+    expect(board.children).toHaveLength(0);
+  });
+
+  it("shows the calibration sentence and a way to the full log once the brief carries one", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+
+    ctx.renderLedgerPanel(board, { calibration: { ready: false, n: 4, line: "You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 4 so far." } });
+
+    expect(board.children).toHaveLength(1);
+    const html = board.children[0].body.innerHTML;
+    expect(html).toContain("You have 4 so far");
+    expect(html).toContain("openLedgerSheet()");
+  });
+
+  it("shows the ready sentence once calibration is ready", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+
+    ctx.renderLedgerPanel(board, { calibration: { ready: true, n: 14, line: "So far, your 74% calls came true 52% of the time, based on 14 decisions." } });
+
+    expect(board.children[0].body.innerHTML).toContain("came true 52%");
+  });
+});
+
 describe("resurface card", () => {
   function ctxFor() {
     const { document } = fakeDoc();
