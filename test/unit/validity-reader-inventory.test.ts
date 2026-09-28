@@ -121,7 +121,9 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // against the real scanner output on the merged tree.
   // MOVED +2 (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): the /insights/dry-run
   // held-row exclusion.
-  "src/routes/admin.ts": [611, 624, 636, 661, 734, 759, 808, 857, 862, 1001, 1008, 1124, 1130, 1454, 1545, 1575, 1691],
+  // MOVED (T-0089.2.3): GET /stale's own `reason` computation (spec 14 5.9) added lines above it
+  // and everything after; recomputed against the real scanner output.
+  "src/routes/admin.ts": [611, 624, 636, 661, 734, 759, 808, 857, 862, 1001, 1008, 1125, 1131, 1460, 1551, 1581, 1697],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };

@@ -78,6 +78,16 @@ describe("DEFAULTS parity with shipped constants", () => {
   it("WHEN_LLM_MODEL starts equal to INSIGHT_LLM_MODEL", () => {
     expect(DEFAULTS.WHEN_LLM_MODEL).toBe(DEFAULTS.INSIGHT_LLM_MODEL);
   });
+
+  // Spec 14 5.8 (T-0089.2.3): a state fact ships at the same 90-day age the nightly pass used
+  // for everyone before volatility split the threshold, so a brain that never overrides these
+  // keeps re-checking state facts exactly as often as it always has.
+  it("STALE_AFTER_DAYS_VOLATILE and STALE_AFTER_DAYS_STATE ship at 14 and 90, within their rules", () => {
+    expect(DEFAULTS.STALE_AFTER_DAYS_VOLATILE).toBe(14);
+    expect(DEFAULTS.STALE_AFTER_DAYS_STATE).toBe(90);
+    expect(RULES.STALE_AFTER_DAYS_VOLATILE).toEqual({ kind: "number", min: 1, max: 365, integer: true });
+    expect(RULES.STALE_AFTER_DAYS_STATE).toEqual({ kind: "number", min: 7, max: 730, integer: true });
+  });
 });
 
 describe("config rule coverage", () => {

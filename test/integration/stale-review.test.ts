@@ -104,6 +104,47 @@ describe("GET /stale", () => {
     expect(data.total).toBe(0);
   });
 
+  // After A1 (T-0089.2.1): a closed window is history, not a live claim to re-verify, even
+  // if it still carries stale:as-of from before it was replaced.
+  it("leaves a replaced entry out of the queue", async () => {
+    sq = await migrated();
+    sq.seed({ id: "replaced", content: "Old claim", createdAt: 1000, tags: ["work", "stale:as-of"], validUntil: 2000 });
+
+    const data = await (await worker.fetch(req("GET", "/stale"), envOf(sq), ctx)).json() as any;
+
+    expect(data.entries).toEqual([]);
+    expect(data.total).toBe(0);
+  });
+
+  // After A6 (T-0089.2.4): a memory built on a source later marked wrong deserves a second
+  // look even though it was never itself flagged stale by age.
+  it("includes retracted-source rows with reason retracted_source", async () => {
+    sq = await migrated();
+    sq.seed({ id: "built-on-retracted", content: "Built on a claim that was later retracted", createdAt: 1000, tags: ["work", "retracted-source"] });
+    seedStale(sq, "old-1", "Our deploy target is the staging cluster");
+
+    const data = await (await worker.fetch(req("GET", "/stale"), envOf(sq), ctx)).json() as any;
+
+    expect(data.total).toBe(2);
+    const retracted = data.entries.find((e: any) => e.id === "built-on-retracted");
+    expect(retracted).toBeDefined();
+    expect(retracted.reason).toBe("retracted_source");
+    const aged = data.entries.find((e: any) => e.id === "old-1");
+    expect(aged.reason).toBe("not_confirmed");
+  });
+
+  // Director, 2026-09-28 (dashboard lane D3's contract): the stale sheet needs valid_until
+  // alongside reason, already read by the same query, to render the reason line.
+  it("carries valid_until so the stale sheet can render the reason line", async () => {
+    sq = await migrated();
+    seedStale(sq, "old-1", "Our deploy target is the staging cluster");
+
+    const data = await (await worker.fetch(req("GET", "/stale"), envOf(sq), ctx)).json() as any;
+
+    expect(data.entries[0]).toHaveProperty("valid_until");
+    expect(data.entries[0].valid_until).toBeNull();
+  });
+
   it("counts the whole queue, not the page", async () => {
     sq = await migrated();
     for (let i = 0; i < 30; i++) seedStale(sq, `s${i}`, `Claim ${i}`);

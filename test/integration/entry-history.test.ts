@@ -198,4 +198,65 @@ describe("buildEntryHistory", () => {
     const result = await buildEntryHistory(env, owner, await historyRowFor("e9"), config);
     expect(changesOf(result.items)[0].client).toBeNull();
   });
+
+  // T-0089.2.3/spec 14 5.9: entry.history.items gains cause/by/until for a validity change, the
+  // gap the dashboard lane's failing tests documented (only entry.timeline had them before).
+  it("a supersede change carries cause, by and the live valid_until as its until", async () => {
+    await seedRow("e10", "old text");
+    await sqlite.db.batch([
+      snapshotStatement(env, {
+        entryId: "e10", reason: "validity", change: { actorId: owner.userId, channel: "rest" },
+        content: { kind: "unchanged" }, nextTags: "unchanged", nextState: { valid_until: 5000 },
+        meta: { cause: "supersede", by: "closer-id" }, now: 1000,
+      }),
+      sqlite.db.prepare(`UPDATE entries SET valid_until = ? WHERE id = ?`).bind(5000, "e10"),
+    ] as any[]);
+    const config = await resolveConfig(env);
+    const historyRow = { ...(await historyRowFor("e10")), valid_until: 5000 };
+    const result = await buildEntryHistory(env, owner, historyRow, config);
+    const change = changesOf(result.items)[0];
+    expect(change.cause).toBe("supersede");
+    expect(change.by).toBe("closer-id");
+    expect(change.until).toBe(5000);
+  });
+
+  it("an older validity change's until comes from the next-newer version's own state, not the live value", async () => {
+    await seedRow("e11", "v0");
+    // First explicit end date: 3000. Second, later edit moves it to 5000. The chain's OLDER
+    // row (seq 1, the first change) must report 3000 as its own until, not the live 5000.
+    await sqlite.db.batch([
+      snapshotStatement(env, {
+        entryId: "e11", reason: "validity", change: { actorId: owner.userId, channel: "rest" },
+        content: { kind: "unchanged" }, nextTags: "unchanged", nextState: { valid_until: 3000 },
+        meta: { cause: "explicit" }, now: 1000,
+      }),
+      sqlite.db.prepare(`UPDATE entries SET valid_until = ? WHERE id = ?`).bind(3000, "e11"),
+    ] as any[]);
+    await sqlite.db.batch([
+      snapshotStatement(env, {
+        entryId: "e11", reason: "validity", change: { actorId: owner.userId, channel: "rest" },
+        content: { kind: "unchanged" }, nextTags: "unchanged", nextState: { valid_until: 5000 },
+        meta: { cause: "explicit" }, now: 2000,
+      }),
+      sqlite.db.prepare(`UPDATE entries SET valid_until = ? WHERE id = ?`).bind(5000, "e11"),
+    ] as any[]);
+    const config = await resolveConfig(env);
+    const historyRow = { ...(await historyRowFor("e11")), valid_until: 5000 };
+    const result = await buildEntryHistory(env, owner, historyRow, config);
+    const changes = changesOf(result.items);
+    expect(changes.map(c => c.seq)).toEqual([2, 1]);
+    expect(changes[0].until).toBe(5000); // newest: the live value
+    expect(changes[1].until).toBe(3000); // older: what it changed to, per the newer row's own state
+  });
+
+  it("cause, by and until are null for a non-validity change", async () => {
+    await seedRow("e12", "v0");
+    await edit("e12", "v1", { now: 1000 });
+    const config = await resolveConfig(env);
+    const result = await buildEntryHistory(env, owner, await historyRowFor("e12"), config);
+    const change = changesOf(result.items)[0];
+    expect(change.cause).toBeNull();
+    expect(change.by).toBeNull();
+    expect(change.until).toBeNull();
+  });
 });

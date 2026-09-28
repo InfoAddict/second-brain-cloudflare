@@ -15,7 +15,7 @@ import { classifyEntry } from "../capture/classify";
 import { PENDING_WHERE, indexPendingRow, type PendingRow } from "../vectorize/pending";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
-import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
+import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf, staleReasonFor } from "../memory/stale";
 import { openLoopSql, withTaskDone, withoutTask } from "../memory/loops";
 import { openOutboundSql, openInboundSql, directionOf, counterpartyOf, dueKindOf } from "../commitments/direction";
 import { getStatus, withStatus } from "../memory/status";
@@ -1119,9 +1119,10 @@ export async function handleAdminRoutes(
     // and an admin gets a 404 from GET /entry for a member's personal row. The
     // reviewer confirms or corrects their own claims, not a colleague's.
     const scope = scopeWhere(auth);
+    const now = Date.now();
     const [rows, countRow] = await Promise.all([
       env.DB.prepare(
-        `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated
+        `SELECT id, content, tags, source, created_at, when_at, valid_until, COALESCE(updated_at, created_at) AS last_updated
          FROM entries
          WHERE ${STALE_REVIEW_SQL} AND ${scope.clause}
          ORDER BY COALESCE(updated_at, created_at) ASC LIMIT ? OFFSET ?`,
@@ -1136,14 +1137,19 @@ export async function handleAdminRoutes(
       // Oldest-touched first: the least recently confirmed claim is the one most
       // worth a human's attention, and it keeps paging stable while entries drop
       // out of the queue as they are edited.
-      entries: (rows.results as Record<string, any>[]).map(r => ({
-        id: r.id as string,
-        content: r.content as string,
-        tags: JSON.parse((r.tags as string) ?? "[]") as string[],
-        source: r.source as string,
-        created_at: r.created_at as number,
-        last_updated: r.last_updated as number,
-      })),
+      entries: (rows.results as Record<string, any>[]).map(r => {
+        const tags = JSON.parse((r.tags as string) ?? "[]") as string[];
+        return {
+          id: r.id as string,
+          content: r.content as string,
+          tags,
+          source: r.source as string,
+          created_at: r.created_at as number,
+          last_updated: r.last_updated as number,
+          valid_until: r.valid_until as number | null,
+          reason: staleReasonFor(tags, r.when_at as number | null, now),
+        };
+      }),
       total: (countRow?.n as number) ?? 0,
       limit,
       offset,

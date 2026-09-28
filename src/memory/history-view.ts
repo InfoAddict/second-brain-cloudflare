@@ -59,6 +59,19 @@ export interface HistoryChangeItem {
   hold: { reason: string } | null;
   /** 6.5: set when meta.release is (a `reason: "status"` version that released a hold, 5.6). */
   release: boolean;
+  /** T-0089.2.3/spec 14 5.9: meta.cause on this version (supersede, explicit, retraction,
+   * unretraction, propagate, or the retraction cascade's own flag onto a dependent). Null for
+   * every reason that is not a validity or retracted-source cause. */
+  cause: string | null;
+  /** The other entry this change names: the new closer (supersede), the row whose retraction
+   * reopened this one or whose un-retraction reclosed it, or the retracted source a dependent
+   * was flagged over. Null for `explicit` (no closer) or when `cause` is null. */
+  by: string | null;
+  /** This row's own valid_until immediately after this change: the live value for the newest
+   * version, or the next-newer version's own recorded state otherwise (chain.rows is ordered
+   * newest first, so that row's "before" state is exactly this one's "after"). Null when the
+   * change left validity open, or `cause` is null. */
+  until: number | null;
 }
 
 export interface HistoryEventItem {
@@ -94,6 +107,9 @@ export interface EntryHistoryRow {
   actor_id: string;
   content: string;
   created_at: number;
+  /** The entry's own live valid_until, already read by every caller's own row fetch: the "after"
+   * value for the newest change's cause/until (T-0089.2.3), never a new statement to get it. */
+  valid_until?: number | null;
 }
 
 /**
@@ -116,13 +132,25 @@ export async function buildEntryHistoryFromReads(
   const newestSeq = chain.rows[0]?.seq;
   const labelMap = timelineResult.labelMap;
 
-  const changeItems: HistoryChangeItem[] = chain.rows.map(r => {
+  const changeItems: HistoryChangeItem[] = chain.rows.map((r, i) => {
     const meta = parseJsonObject(r.meta);
     const holdMeta = meta.hold && typeof meta.hold === "object" ? (meta.hold as Record<string, unknown>) : null;
     const reasons = holdMeta && Array.isArray(holdMeta.reasons) ? (holdMeta.reasons as unknown[]) : null;
     const primaryReason = reasons && typeof reasons[0] === "string" ? (reasons[0] as string) : null;
     const verdict = canRevert(identity, { workspace_id: row.workspace_id, actor_id: row.actor_id }, r, newestSeq, visibleSeqs, { ownerUserId });
     const isNewest = r.seq === newestSeq;
+    const cause = typeof meta.cause === "string" ? meta.cause : null;
+    // `by`/`retracted` are the two field names validity.ts's meta uses for "the other entry",
+    // depending on cause (T-0089.2.1/2.4). Never both on the same row.
+    const by = cause
+      ? (typeof meta.by === "string" ? meta.by : (typeof meta.retracted === "string" ? meta.retracted : null))
+      : null;
+    // This row's own state column is its PRE-image (the same convention before_preview/before_status
+    // already read): what changed TO is either the live entry (this is the newest version) or the
+    // next-newer version's own recorded pre-image (chain.rows is newest-first, already fully loaded).
+    const until = cause
+      ? (isNewest ? (row.valid_until ?? null) : (parseJsonObject(chain.rows[i - 1].state).valid_until as number | null ?? null))
+      : null;
     return {
       kind: "change",
       seq: r.seq,
@@ -137,6 +165,9 @@ export async function buildEntryHistoryFromReads(
       can_restore: !isNewest && verdict.ok,
       hold: primaryReason ? { reason: primaryReason } : null,
       release: meta.release !== undefined && meta.release !== null,
+      cause,
+      by,
+      until,
     };
   });
 
