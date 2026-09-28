@@ -258,11 +258,7 @@ describe("the 128 KB size cap", () => {
 
   it("append: shows the composer's size-cap line inline and keeps the text, in English", async () => {
     const ctx = load();
-    ctx.apiMcp = async () => {
-      throw new Error(
-        "Not saved: this is too long for one memory (the limit is about 20,000 words). Split it into smaller memories and save each one.",
-      );
-    };
+    ctx.fetch = async () => ({ ok: false, status: 413, json: async () => ({ ok: false, error: "too_large" }) });
     ctx.openAppend("e1", "Preview");
     ctx.__els.get("append-textarea").value = "x".repeat(200000);
     await ctx.saveAppend();
@@ -277,11 +273,7 @@ describe("the 128 KB size cap", () => {
   it("append: speaks Italian when the page does", async () => {
     const ctx = load();
     ctx.initI18n("it");
-    ctx.apiMcp = async () => {
-      throw new Error(
-        "Not saved: this is too long for one memory (the limit is about 20,000 words). Split it into smaller memories and save each one.",
-      );
-    };
+    ctx.fetch = async () => ({ ok: false, status: 413, json: async () => ({ ok: false, error: "too_large" }) });
     ctx.openAppend("e1", "Preview");
     ctx.__els.get("append-textarea").value = "x".repeat(200000);
     await ctx.saveAppend();
@@ -292,7 +284,7 @@ describe("the 128 KB size cap", () => {
 
   it("append: any other failure still uses the generic toast, not the size-cap line", async () => {
     const ctx = load();
-    ctx.apiMcp = async () => {
+    ctx.fetch = async () => {
       throw new Error("Network unreachable");
     };
     ctx.openAppend("e1", "Preview");
@@ -304,9 +296,7 @@ describe("the 128 KB size cap", () => {
 
   it("append: reopening the sheet clears a previous size-cap message", async () => {
     const ctx = load();
-    ctx.apiMcp = async () => {
-      throw new Error("this is too long for one memory, split it up");
-    };
+    ctx.fetch = async () => ({ ok: false, status: 413, json: async () => ({ ok: false, error: "too_large" }) });
     ctx.openAppend("e1", "Preview");
     ctx.__els.get("append-textarea").value = "x".repeat(200000);
     await ctx.saveAppend();

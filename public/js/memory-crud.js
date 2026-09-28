@@ -47,13 +47,6 @@ function closeAppend() {
   clearAppendError()
 }
 
-/** The MCP tool's own reply text (copy deck 6.8, English only - it is meant
- * for an AI tool client, not this UI) names the same limit this sheet's
- * dashboard-native inline message does; matching on it is how the dashboard
- * tells the two apart from any other append failure without a structured
- * error code over this transport. */
-const APPEND_TOO_LARGE_RE = /too long for one memory/i
-
 async function saveAppend() {
   const addition = document.getElementById('append-textarea').value.trim()
   if (!addition || !pendingAppendId) return
@@ -70,8 +63,23 @@ async function saveAppend() {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
       body: JSON.stringify({ id: appendedId, addition }),
     })
+    if (!res.ok) {
+      let data = {}
+      try {
+        data = await res.json()
+      } catch {}
+      // Shown in place, text left in append-textarea exactly as typed -
+      // nothing here ever clears it on failure, so "your text is still
+      // here" holds. Same 413/too_large REST contract saveEdit checks
+      // (src/lib/content-size.ts), not a message-text match.
+      if (res.status === 413 && data.error === 'too_large') {
+        showAppendError(t('home.tooLong'))
+        return
+      }
+      throw new Error(t('auth.serverError', { status: res.status }))
+    }
     const data = await res.json()
-    if (!res.ok || !data.ok) throw new Error(data.error || '')
+    if (!data.ok) throw new Error(data.error || '')
     closeAppend()
     notifyMemoryResolved(appendedId)
     refreshAll()
@@ -79,13 +87,7 @@ async function saveAppend() {
       undoToast(t('undo.added'), appendedId, { onUndone: () => notifyMemoryRestored(appendedId) })
     }
   } catch (e) {
-    // Shown in place, text left in append-textarea exactly as typed - nothing
-    // here ever clears it on failure, so "your text is still here" holds.
-    if (APPEND_TOO_LARGE_RE.test(e.message || '')) {
-      showAppendError(t('home.tooLong'))
-    } else {
-      showToast(t('memories.appendFailed', { message: e.message }))
-    }
+    showToast(t('memories.appendFailed', { message: e.message }))
   } finally {
     resetAppendSaveBtn()
   }
