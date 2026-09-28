@@ -162,7 +162,9 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // MOVED 23 -> 24 (T-0089.1.1 round 5): plus the failure-count read, only on a night with deferred rows.
     // MOVED 24 -> 25 -> 24 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
     // pass's own resolveConfig KV read, added then removed with rescan.ts itself.
-    expect(L.kv.length).toBe(24);
+    // MOVED 24 -> 25 (T-0089.2.3): the staleness pass now resolves config every night, for its own
+    // volatility thresholds (STALE_AFTER_DAYS_VOLATILE/STATE), not only on a deferred-rows night.
+    expect(L.kv.length).toBe(25);
     // The cron makes no external (non-Cloudflare) fetches at all, so it is nowhere near the
     // separate 50-external-fetch cap either.
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -184,7 +186,8 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // MOVED 20 -> 21 (T-0089.1.1 round 5): the vectorize-pending failure-count read.
     // MOVED 21 -> 22 -> 21 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
     // pass's own resolveConfig KV read, added then removed with rescan.ts itself.
-    expect(L.kv.length).toBe(21);
+    // MOVED 21 -> 22 (T-0089.2.3): the staleness pass now resolves config every night.
+    expect(L.kv.length).toBe(22);
   });
 });
 

@@ -129,9 +129,9 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/memory/validity.ts', line: 640, kind: 'snapshot', standing: 'exempt: the propagate UPDATE moves a REPLACED row\'s own valid_until; a standing row is never itself in a supersede chain, and if it were, the primary row\'s own touch above plus the 24h revalidation (2.4) covers it' },
   { file: 'src/quarantine/hold.ts', line: 113, kind: 'snapshot', standing: 'exempt: Track 4\'s own quarantine hold/release wiring (spec 15 2.13, Task 16), not lane D' },
   { file: 'src/recall/search.ts', line: 1423, kind: 'exempt', standing: 'exempt: recall_count bookkeeping only, no tags column' },
-  { file: 'src/routes/admin.ts', line: 1564, kind: 'exempt', standing: 'exempt: same hygiene classify write as capture/classify.ts:78 (withKind/withStatus only), never touches standing:active' },
-  { file: 'src/staleness/pass.ts', line: 87, kind: 'exempt', standing: 'exempt: a staleness marker addition, never removes standing:active, and hydration re-checks validity independently (2.4/2.6) regardless' },
-  { file: 'src/staleness/pass.ts', line: 97, kind: 'exempt', standing: 'exempt: staleness_checked_at only, no tags column' },
+  { file: 'src/routes/admin.ts', line: 1570, kind: 'exempt', standing: 'exempt: same hygiene classify write as capture/classify.ts:78 (withKind/withStatus only), never touches standing:active' },
+  { file: 'src/staleness/pass.ts', line: 91, kind: 'exempt', standing: 'exempt: a staleness marker addition, never removes standing:active, and hydration re-checks validity independently (2.4/2.6) regardless' },
+  { file: 'src/staleness/pass.ts', line: 101, kind: 'exempt', standing: 'exempt: staleness_checked_at only, no tags column' },
   { file: 'src/vectorize/pending.ts', line: 165, kind: 'exempt', standing: 'exempt: vector_ids only, no tags column' },
   { file: 'src/when/pass.ts', line: 373, kind: 'exempt', standing: 'exempt: when_* only, no tags column' },
 ];
@@ -143,11 +143,11 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
  * snapshot, trash or hard-delete (the undo invariant).
  */
 const HYGIENE_EXEMPT = new Set([
-  "src/staleness/pass.ts:87", "src/staleness/pass.ts:97",
+  "src/staleness/pass.ts:91", "src/staleness/pass.ts:101",
   // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): recomputed against the real
   // scanner output on the merged tree.
   "src/when/pass.ts:373",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1564", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1570", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   // MOVED 540/601 -> 589/650 -> 591/652 -> 598/659 -> 600/661 -> 604/665 (T-0089.4.2 Lane W, then

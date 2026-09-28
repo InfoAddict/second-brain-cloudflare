@@ -107,7 +107,7 @@ export async function readEntryTimeline(
  * makes covers version actors too.
  */
 export async function readEntryHistory(env: Env, identity: Identity, id: string) {
-  const entry = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, content, created_at, source");
+  const entry = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, content, created_at, source, valid_until");
   if (!entry) return null;
   const edgeScope = scopeWhereForRead(identity, undefined, "e.workspace_id");
   const otherScope = scopeWhereForRead(identity, undefined, "o.workspace_id");
@@ -115,6 +115,7 @@ export async function readEntryHistory(env: Env, identity: Identity, id: string)
   const historyRow = {
     id: entry.id, workspace_id: String(entry.workspace_id ?? ""), actor_id: String(entry.actor_id ?? ""),
     content: String(entry.content ?? ""), created_at: Number(rawEntry.created_at ?? 0),
+    valid_until: rawEntry.valid_until == null ? null : Number(rawEntry.valid_until),
   };
   const config = await resolveConfig(env);
   const chain = await loadHistory(env, identity, { id: historyRow.id, content: historyRow.content }, config.VERSION_KEEP);

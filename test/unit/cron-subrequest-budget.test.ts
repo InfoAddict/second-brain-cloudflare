@@ -346,7 +346,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // MOVED 25 -> 27 -> 25 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
     // pass's own resolveConfig KV read plus its candidate SELECT, added then removed with
     // rescan.ts itself.
-    expect(statements.length).toBe(25);
+    // MOVED 25 -> 26 (T-0089.2.3): the staleness pass now resolves config every night, for its
+    // own volatility thresholds; its candidate SELECT is still one statement.
+    expect(statements.length).toBe(26);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -372,7 +374,8 @@ describe("nightly cron D1 subrequest cost", () => {
     // MOVED 26 -> 28 -> 26 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
     // pass's own resolveConfig KV read plus its candidate SELECT, added then removed with
     // rescan.ts itself.
-    expect(statements.length).toBe(26);
+    // MOVED 26 -> 27 (T-0089.2.3): the staleness pass now resolves config every night.
+    expect(statements.length).toBe(27);
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -417,7 +420,8 @@ describe("nightly cron D1 subrequest cost", () => {
     // MOVED 27 -> 29 -> 27 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
     // pass's own resolveConfig KV read plus its candidate SELECT, added then removed with
     // rescan.ts itself.
-    expect(statements.length).toBe(27);
+    // MOVED 27 -> 28 (T-0089.2.3): the staleness pass now resolves config every night.
+    expect(statements.length).toBe(28);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {
