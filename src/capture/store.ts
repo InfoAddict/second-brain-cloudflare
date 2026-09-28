@@ -437,7 +437,7 @@ export class WriteConflictError extends Error {
 
 /** The row was forgotten between the caller's guard read and the write. */
 export class EntryGoneError extends Error {
-  constructor(id: string) { super(`No entry found with ID: ${id}`); }
+  constructor(id: string) { super(`No memory found with ID: ${id}`); }
 }
 
 /**

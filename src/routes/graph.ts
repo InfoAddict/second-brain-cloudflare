@@ -34,9 +34,9 @@ export async function handleGraphRoutes(
     // tags ride along on the reads this route already makes, so the kind gate
     // below costs no extra query.
     const source = await getReadableEntry(env, auth, sourceId, "id, workspace_id, actor_id, tags");
-    if (!source) return json({ ok: false, error: `No entry found with ID: ${sourceId}` }, 404);
+    if (!source) return json({ ok: false, error: `No memory found with ID: ${sourceId}` }, 404);
     const target = await getReadableEntry(env, auth, targetId, "id, workspace_id, actor_id, tags");
-    if (!target) return json({ ok: false, error: `No entry found with ID: ${targetId}` }, 404);
+    if (!target) return json({ ok: false, error: `No memory found with ID: ${targetId}` }, 404);
     // Same-workspace only. edges.workspace_id is one denormalized column copied
     // from the source entry, and a share re-stamps it to follow the entry that
     // moved — so an edge whose endpoints started in different workspaces has no
@@ -79,9 +79,9 @@ export async function handleGraphRoutes(
     }
 
     const source = await getReadableEntry(env, auth, sourceId);
-    if (!source) return json({ ok: false, error: `No entry found with ID: ${sourceId}` }, 404);
+    if (!source) return json({ ok: false, error: `No memory found with ID: ${sourceId}` }, 404);
     const target = await getReadableEntry(env, auth, targetId);
-    if (!target) return json({ ok: false, error: `No entry found with ID: ${targetId}` }, 404);
+    if (!target) return json({ ok: false, error: `No memory found with ID: ${targetId}` }, 404);
 
     const deleted = await deleteEdge(sourceId, targetId, type, env);
     return json({ ok: true, deleted });

@@ -20,7 +20,7 @@ const I18N_EN = {
     serverError: 'Server error: {status}',
     haveInvite: 'I received a team invite',
     inviteHide: 'Hide',
-    inviteStep1: 'Leave the address above as it is — it is already this team’s Second Brain.',
+    inviteStep1: 'Leave the address above as it is. It is already this team’s Second Brain.',
     inviteStep2: 'Paste the one-time token your admin sent you into the field above.',
     inviteStep3: 'Press Connect. Everything you capture stays personal until you share it with the team.',
     sessionExpired: 'Your access token is no longer valid. Sign in again with a current token.',
@@ -37,7 +37,7 @@ const I18N_EN = {
       one: '{n} memory stored',
       other: '{n} memories stored',
     },
-    vectorizeFilterDegraded: 'Workspace filtering unavailable — results are ranked across all layers',
+    vectorizeFilterDegraded: "Filtering by layer isn't available right now, so results are ranked across all layers.",
   },
   home: {
     greetingDefault: 'Hello',
@@ -62,7 +62,7 @@ const I18N_EN = {
     receiptAlreadyKept: 'already kept',
     receiptAlreadyKeptNote: 'Something very similar is already in your brain, so this was skipped.',
     receiptCouldNotSave: 'could not save',
-    receiptCouldNotSaveNote: 'Nothing was lost — the text is still in the box. Try again.',
+    receiptCouldNotSaveNote: 'Nothing was lost. The text is still in the box. Try again.',
     tooLong: 'Too long to save as one memory (about 20,000 words at most). Your text is still here, so you can split it.',
     receiptStored: 'stored to brain',
     receiptMerged: 'merged into an existing memory',
@@ -83,7 +83,7 @@ const I18N_EN = {
     firstRunStep1:
       'The box above does both: write a statement and it is saved, ask a question and it is answered. It says which one it is about to do before you send.',
     firstRunStep2:
-      'Memories is everything you have kept — as a list by date, or as a graph of how it connects.',
+      'Memories is everything you have kept, as a list by date or as a graph of how it connects.',
     firstRunStep3:
       'Settings is where you connect Claude, ChatGPT, Cursor, your email and calendar, so they read from and add to this same memory.',
     autoPersonalYours: 'Auto → Personal (your setting)',
@@ -192,7 +192,7 @@ const I18N_EN = {
   },
   recall: {
     eyebrow: 'Recall',
-    hero: "Ask me anything you've stored away — I'll find it and answer in your own words.",
+    hero: "Ask me anything you've stored away. I'll find it and answer in your own words.",
     placeholder: 'Ask your brain...',
     backHome: 'Back to home',
     allTags: 'All tags',
@@ -231,8 +231,8 @@ const I18N_EN = {
     loadingShort: 'Loading...',
     loadFailed: 'Could not load memories.',
     empty: 'No memories yet. Use Remember to save your first one.',
-    vecPendingTitle: 'Vectorizing… (just captured)',
-    vecOffTitle: "Not vectorized — won't appear in recall",
+    vecPendingTitle: 'Getting it ready for search… (just saved)',
+    vecOffTitle: 'Not searchable by meaning yet',
     vecNotIndexed: 'Not indexed',
     append: 'Append',
     edit: 'Edit',
@@ -243,7 +243,7 @@ const I18N_EN = {
     personalLayer: 'Personal',
     sharedLayer: 'Shared',
     sharedChip: 'shared',
-    sharedTitle: 'Visible to the whole team — the overflow menu makes it private again',
+    sharedTitle: 'Visible to the whole team. Use More actions to make it private again.',
     shareWithTeam: 'Share with team',
     makePrivate: 'Make private',
     authorLabel: 'Author: {name}',
@@ -298,7 +298,7 @@ const I18N_EN = {
       one: 'Something newer has disagreed with this {n} time.',
       other: 'Something newer has disagreed with this {n} times.',
     },
-    notIndexedYet: 'Not indexed yet — recall cannot find this memory.',
+    notIndexedYet: "Not searchable by meaning until it's indexed. Edit it, or use Index now in the menu.",
     related: 'Related',
     close: 'Close',
     selectMemory: 'Select memory: {title}',
@@ -311,7 +311,7 @@ const I18N_EN = {
     evCreated: 'Captured',
     evUpdated: 'Edited',
     evAppended: 'Text added',
-    evDeleted: 'Deleted',
+    evDeleted: 'Moved to the trash',
     evStatusChanged: 'Status changed',
     evShared: 'Shared with the team',
     evUnshared: 'Made personal again',
@@ -399,7 +399,7 @@ const I18N_EN = {
     failed: 'Could not change the status: {message}',
   },
   graph: {
-    empty: 'No connections yet — link memories, or let them auto-connect as you add more.',
+    empty: 'No connections yet. Link memories, or let them connect on their own as you add more.',
     loadFailed: 'Could not load the graph.',
     zoomOut: 'Zoom out',
     zoomIn: 'Zoom in',
@@ -521,7 +521,7 @@ const I18N_EN = {
     requestFailed: 'Request failed',
     digestLabel: 'Ready to compress',
     digestNote:
-      "Originals are never deleted — digest adds a summary and ranks originals lower in recall so they don't crowd results.",
+      "Originals are never deleted. A digest adds a summary and ranks the originals lower in search, so they don't crowd the results.",
     digestEntries: { one: '{n} entry', other: '{n} entries' },
     digestAction: 'Digest →',
     digestMore: '{n} more ›',
@@ -532,27 +532,27 @@ const I18N_EN = {
     },
     vectorizeLabel: 'Not indexed',
     vectorizeNote: {
-      one: "{n} memory failed to embed and won't appear in recall.",
-      other: "{n} memories failed to embed and won't appear in recall.",
+      one: "{n} memory can't be found by meaning yet.",
+      other: "{n} memories can't be found by meaning yet.",
     },
-    vectorizeAction: 'Vectorize now →',
-    vectorizeDone: 'Done — {n} re-indexed',
+    vectorizeAction: 'Index now →',
+    vectorizeDone: { one: 'Done. {n} indexed.', other: 'Done. {n} indexed.' },
     classifyLabel: 'Not classified',
     classifyNote: {
       one: '{n} memory has no kind or status tag yet (captured before classification existed).',
       other: '{n} memories have no kind or status tag yet (captured before classification existed).',
     },
     classifyAction: 'Classify now →',
-    classifyDone: 'Done — {n} classified',
+    classifyDone: { one: 'Done. {n} classified.', other: 'Done. {n} classified.' },
     restoreLabel: 'Restore',
     restoreProgress: 'Restoring from {filename}…',
     restoreOf: '{done} of {total}',
     restoreTryAgain: 'Try again →',
     restoreFailureTail:
-      "Your backup file is untouched, and it's safe to try again — anything already restored will be skipped, not duplicated.",
+      "Your backup file is untouched, and it's safe to try again: anything already restored is skipped, not duplicated.",
     restoreInvalidJson: "{filename} isn't valid JSON.",
     restoreNotBackup:
-      "{filename} doesn't look like a Second Brain backup — it has no entries list. Use a file created by \"Back up as JSON\".",
+      "{filename} doesn't look like a Second Brain backup, because it has no list of memories. Use a file made with \"Back up as JSON\".",
     restoreStopped: 'The restore stopped partway.',
     restoreSummaryRestored: '{n} restored',
     restoreSummaryConnections: '{n} connections',
@@ -561,18 +561,20 @@ const I18N_EN = {
       one: '{n} memory was too long to import and was skipped.',
       other: '{n} memories were too long to import and were skipped.',
     },
-    restoreFailNote:
-      "{n} item(s) couldn't be restored — usually rows edited by hand; the rest are unaffected.",
+    restoreFailNote: {
+      one: "{n} item couldn't be restored, usually because it was edited by hand. The rest are unaffected.",
+      other: "{n} items couldn't be restored, usually because they were edited by hand. The rest are unaffected.",
+    },
     restoreNeedsIndex: "Restored memories can't be searched until they're indexed.",
     restoreMakeSearchable: 'Make searchable →',
     restoreIndexing: 'Indexing…',
     restoreIndexingProgress: 'Indexing… {done} done, {remaining} to go',
     restoreIndexingDoneOnly: 'Indexing… {done} done',
-    restoreQuotaLeft: '{n} left — daily AI limit reached, try tomorrow',
+    restoreQuotaLeft: '{n} left. The daily AI limit is used up; it resets at midnight UTC.',
     restoreAllSearchable: 'All restored memories are searchable',
-    restoreIndexFailed: 'Failed — tap to retry',
-    importStalled: 'Server did not advance the import cursor — is the Worker up to date?',
-    vectorizeBannerTitle: 'Semantic search is disabled. The Vectorize index "{name}" was not found.',
+    restoreIndexFailed: 'Failed. Tap to retry.',
+    importStalled: 'The import stopped making progress. Your Second Brain may need an update.',
+    vectorizeBannerTitle: 'Search by meaning is off. The Vectorize index "{name}" was not found.',
     vectorizeBannerHowToFix: 'How to fix',
     vectorizeBannerRunOnce: 'Run this once in your terminal:',
     vectorizeBannerGui:
@@ -625,8 +627,8 @@ const I18N_EN = {
     // end "OK = delete them / Cancel = keep them", which described a pair of
     // buttons that are no longer on screen.
     purgeConfirm: {
-      one: 'Also delete the {n} synced {noun}',
-      other: 'Also delete the {n} synced {noun}',
+      one: 'Also move the {n} synced {noun} to the trash',
+      other: 'Also move the {n} synced {noun} to the trash',
     },
     disconnecting: 'Disconnecting…',
     disconnectFailed: 'Disconnect failed',
@@ -639,7 +641,7 @@ const I18N_EN = {
         label: 'Paste your Google Calendar secret iCal URL',
         placeholder: 'https://calendar.google.com/calendar/ical/…/basic.ics',
         hint:
-          'In Google Calendar (web): Settings → your calendar → <b>Integrate calendar</b> → copy the <b>"Secret address in iCal format"</b>. Keep it private — anyone with it can read the calendar.',
+          'In Google Calendar (web): Settings → your calendar → <b>Integrate calendar</b> → copy the <b>"Secret address in iCal format"</b>. Keep it private: anyone with it can read the calendar.',
       },
       'calendar-outlook': {
         label: 'Paste your Outlook published ICS URL',
@@ -669,7 +671,7 @@ const I18N_EN = {
     connectedByLabel: 'Connected by {name}',
     mirrorPersonal: 'New memories from this source go to the personal layer',
     mirrorShared: 'New memories from this source go to the shared team layer',
-    mirrorLayerNewSyncsOnly: 'Applies to new syncs only — memories already synced stay where they are.',
+    mirrorLayerNewSyncsOnly: 'Applies to new syncs only. Memories already synced stay where they are.',
     connectedOn: 'Connected {when}',
     // #347 — moving memories a connection already synced into its current
     // layer. Owner-only, so this whole family only ever renders for the
@@ -690,16 +692,16 @@ const I18N_EN = {
     // as opposed to moveResultNone, which is only stale pointers. States the
     // count, that they could not be moved, and what to do next.
     moveResultFailed: {
-      one: '{n} memory could not be moved — check the connection and try again.',
-      other: '{n} memories could not be moved — check the connection and try again.',
+      one: '{n} memory could not be moved. Check the connection and try again.',
+      other: '{n} memories could not be moved. Check the connection and try again.',
     },
     moveResultNeedsRepair: 'Not yet searchable',
     moveStoppedPartway:
-      'Moved {n} so far — the move stopped partway. Safe to try again: anything already moved will be skipped, not duplicated.',
+      "Moved {n} so far, then the move stopped. It's safe to try again: anything already moved is skipped, not duplicated.",
     moveFailedFirstCall: 'Move failed before anything moved. Safe to try again.',
     // Refusals, not transient failures — retrying can never fix either, so
     // neither sentence uses the "safe to try again"/"resume" family.
-    moveRefusedOwner: "Refused — only the brain's owner can move these memories.",
+    moveRefusedOwner: 'Refused. Only the owner can move these memories.',
     moveLayerChanged: 'The layer changed since this move was confirmed. Reconfirm to continue.',
     moveLayerChangedPartial: {
       one: 'The layer changed since this move was confirmed. {n} memory already moved to the previously confirmed layer. Reconfirm to decide what happens next.',
@@ -710,8 +712,8 @@ const I18N_EN = {
     // pass stops without reaching zero. The move itself succeeded — only
     // search hasn't caught up — so this must reassure, not alarm.
     moveVectorFailures: {
-      one: '{n} memory moved successfully but is not yet searchable in its new layer — run the move again to finish repairing it.',
-      other: '{n} memories moved successfully but are not yet searchable in their new layer — run the move again to finish repairing them.',
+      one: "{n} memory moved but isn't searchable in its new layer yet. Run the move again to finish.",
+      other: "{n} memories moved but aren't searchable in their new layer yet. Run the move again to finish.",
     },
     // The confirmation gate (locked decision 11, #347): states the count, the
     // target layer, and — since only the shared layer changes who can read
@@ -854,7 +856,7 @@ const I18N_EN = {
     tokenTitle: 'One-time sign-in token',
     tokenReady: 'Your one-time token is ready. Copy it now.',
     tokenFor: 'for {name}',
-    tokenWarning: 'Copy it now — you will not see this again.',
+    tokenWarning: "Copy it now. You won't see it again.",
     copy: 'Copy',
     copied: 'Copied',
     done: 'Done',
@@ -889,8 +891,8 @@ const I18N_EN = {
       'Turning this on adds a shared layer everyone on the team can read. Your personal memories stay private.',
     modeLocked:
       'There are {n} people on this team, so the shared layer stays on. Remove everyone but yourself to turn it off.',
-    modeOnSaved: 'Team mode on — the shared layer is live',
-    modeOffSaved: 'Team mode off — this brain is personal again',
+    modeOnSaved: 'Team mode on. The shared layer is live.',
+    modeOffSaved: 'Team mode off. This Second Brain is personal again.',
   },
   invite: {
     copy: 'Copy invite message',
@@ -898,7 +900,7 @@ const I18N_EN = {
     email: 'Email invite',
     subject: 'Your Second Brain team invite',
     body:
-      'Hi {name},\n\nYou have been added to our shared Second Brain — one memory the whole team can search.\n\n1. Open {url}\n2. Paste your team sign-in token:\n{token}\n3. Press Connect.\n\nAnything you capture stays personal unless you share it with the team. Keep it — you\'ll need it again if you set up another computer. Ask an admin to reissue it if it stops working.',
+      'Hi {name},\n\nYou have been added to our shared Second Brain: one set of memories the whole team can search.\n\n1. Open {url}\n2. Paste your team sign-in token:\n{token}\n3. Press Connect.\n\nAnything you capture stays personal unless you share it with the team. Keep it. You\'ll need it again if you set up another computer. Ask an admin to reissue it if it stops working.',
   },
   brief: {
     eyebrow: 'Your brain, lately',
@@ -914,9 +916,9 @@ const I18N_EN = {
     patternNoticed: 'Insight noticed',
     confirm: 'Confirm',
     dismiss: 'Dismiss',
-    confirmed: 'Confirmed — now recallable',
+    confirmed: 'Confirmed. Search can find it now.',
     dismissed: 'Dismissed',
-    failedRetry: 'Failed — retry',
+    failedRetry: 'Failed. Retry',
     worthRereading: 'Worth re-reading',
     fromDate: '· from {date}',
     shapeSuffix: ' · {shape}',
@@ -1066,7 +1068,7 @@ const I18N_EN = {
     // above”, because it still shows when /team/me has not answered and the
     // hint line is empty.
     sharedBody:
-      'A shared memory can be found by everyone on this team. A personal one is only ever yours — you decide which, for each memory or by default.',
+      'A shared memory can be found by everyone on this team. A personal one is only ever yours. You decide which, for each memory or by default.',
     // Named “Auto”, which is what the hint line it points at calls the control.
     autoTitle: 'What “Auto” means',
     // True whether the member has set their own default or is inheriting the
@@ -1076,17 +1078,17 @@ const I18N_EN = {
     // 3.2 gave the member: the previous copy called this “your team’s capture
     // policy”, which taught a member not to look for a setting they now own.
     autoBody:
-      'Auto means you have not picked a layer for this memory. The line above says where it lands and whose setting decides that — change your own under “Your new captures” on the Team screen.',
+      'Auto means you have not picked a layer for this memory. The line above says where it lands and whose setting decides that. Change your own under “Your new captures” on the Team screen.',
     lockTitle: 'Only the author can change a shared memory',
     lockBody:
-      'Once a memory is shared, only the person who shared it — or an admin — can edit or delete it. Everyone else can read it and link to it.',
+      'Once a memory is shared, only the person who shared it or an admin can edit or forget it. Everyone else can read it and link to it.',
   },
   // The admin activity feed. The ev* family is reached only through
   // activityEventLabel()'s map in js/activity.js, keyed by the audit event
   // name — which is why it is declared in DYNAMICALLY_REFERENCED.
   activity: {
     title: 'Recent activity',
-    intro: 'Who changed what, newest first. Kept as a record — nothing here can be edited.',
+    intro: "Who changed what, newest first. It's kept as a record, so nothing here can be edited.",
     loading: 'Loading…',
     empty: 'Nothing has happened on this team yet.',
     loadFailed: 'Could not load the activity log.',
@@ -1147,8 +1149,8 @@ const I18N_EN = {
       other: '{n} moved',
     },
     resultRefused: {
-      one: '{n} refused — still selected',
-      other: '{n} refused — still selected',
+      one: '{n} refused and still selected',
+      other: '{n} refused and still selected',
     },
     resultNone: 'Nothing moved',
   },
@@ -1171,7 +1173,7 @@ const I18N_IT = {
     serverError: 'Errore del server: {status}',
     haveInvite: 'Ho ricevuto un invito al team',
     inviteHide: 'Nascondi',
-    inviteStep1: 'Lascia l’indirizzo qui sopra com’è — è già il Second Brain di questo team.',
+    inviteStep1: 'Lascia l’indirizzo qui sopra com’è: è già il Second Brain di questo team.',
     inviteStep2: 'Incolla nel campo qui sopra il token monouso che ti ha inviato l’amministratore.',
     inviteStep3: 'Premi Connetti. Tutto ciò che salvi resta personale finché non lo condividi col team.',
     sessionExpired: 'Il tuo token di accesso non è più valido. Accedi di nuovo con un token aggiornato.',
@@ -1188,7 +1190,7 @@ const I18N_IT = {
       one: '{n} ricordo salvato',
       other: '{n} ricordi salvati',
     },
-    vectorizeFilterDegraded: 'Filtro per spazio di lavoro non disponibile — i risultati sono ordinati su tutti i livelli',
+    vectorizeFilterDegraded: 'Il filtro per livello non è disponibile al momento, quindi i risultati sono ordinati su tutti i livelli.',
   },
   home: {
     greetingDefault: 'Ciao',
@@ -1213,7 +1215,7 @@ const I18N_IT = {
     receiptAlreadyKept: 'già presente',
     receiptAlreadyKeptNote: 'Qualcosa di molto simile è già nel tuo cervello, quindi è stato saltato.',
     receiptCouldNotSave: 'salvataggio non riuscito',
-    receiptCouldNotSaveNote: 'Non è andato perso nulla — il testo è ancora nel riquadro. Riprova.',
+    receiptCouldNotSaveNote: 'Non è andato perso nulla: il testo è ancora nel riquadro. Riprova.',
     tooLong: 'Troppo lungo per un solo ricordo (al massimo circa 20.000 parole). Il testo è ancora qui, così puoi dividerlo.',
     receiptStored: 'salvato nel cervello',
     receiptMerged: 'unito a un ricordo esistente',
@@ -1234,7 +1236,7 @@ const I18N_IT = {
     firstRunStep1:
       'Il riquadro sopra fa entrambe le cose: scrivi un’affermazione e viene salvata, fai una domanda e viene risposta. Indica quale sta per fare prima di inviare.',
     firstRunStep2:
-      'Ricordi è tutto ciò che hai tenuto — come elenco per data, o come grafo di come si collega.',
+      'Ricordi è tutto ciò che hai tenuto, come elenco per data o come grafo dei collegamenti.',
     firstRunStep3:
       'Impostazioni è dove colleghi Claude, ChatGPT, Cursor, email e calendario, così leggono e aggiungono a questa stessa memoria.',
     autoPersonalYours: 'Auto → Personale (tua impostazione)',
@@ -1343,7 +1345,7 @@ const I18N_IT = {
   },
   recall: {
     eyebrow: 'Richiamo',
-    hero: 'Chiedimi qualsiasi cosa tu abbia messo da parte — la trovo e rispondo con le tue parole.',
+    hero: 'Chiedimi qualsiasi cosa tu abbia messo da parte: la trovo e rispondo con le tue parole.',
     placeholder: 'Chiedi al tuo cervello...',
     backHome: 'Torna alla home',
     allTags: 'Tutti i tag',
@@ -1382,8 +1384,8 @@ const I18N_IT = {
     loadingShort: 'Caricamento...',
     loadFailed: 'Impossibile caricare i ricordi.',
     empty: 'Nessun ricordo ancora. Usa Ricorda per salvarne il primo.',
-    vecPendingTitle: 'Vettorializzazione… (appena catturato)',
-    vecOffTitle: 'Non vettorializzato — non apparirà nel richiamo',
+    vecPendingTitle: 'Preparazione per la ricerca… (appena salvato)',
+    vecOffTitle: 'Non ancora trovabile per significato',
     vecNotIndexed: 'Non indicizzato',
     append: 'Aggiungi',
     edit: 'Modifica',
@@ -1394,14 +1396,14 @@ const I18N_IT = {
     personalLayer: 'Personale',
     sharedLayer: 'Condiviso',
     sharedChip: 'condiviso',
-    sharedTitle: 'Visibile a tutto il team — il menu lo rende di nuovo privato',
+    sharedTitle: 'Visibile a tutto il team. Usa Altre azioni per renderlo di nuovo privato.',
     shareWithTeam: 'Condividi col team',
     makePrivate: 'Rendi privato',
     authorLabel: 'Autore: {name}',
     timelineLabel: 'Cronologia',
     confirmTitle: 'Dimenticare questo ricordo?',
-    confirmBody: 'Il ricordo viene spostato nel cestino e rimosso per sempre dopo il periodo di conservazione (14 giorni per impostazione predefinita).',
-    confirmBodyRetention: 'Il ricordo viene spostato nel cestino e rimosso per sempre dopo {n} giorni.',
+    confirmBody: 'Il ricordo viene spostato nel cestino ed eliminato definitivamente dopo il periodo di conservazione (14 giorni per impostazione predefinita).',
+    confirmBodyRetention: 'Il ricordo viene spostato nel cestino ed eliminato definitivamente dopo {n} giorni.',
     forgetHardDeleted: 'Troppo grande per il cestino, quindi è stato eliminato per sempre.',
     cancel: 'Annulla',
     appendTitle: 'Aggiungi un aggiornamento',
@@ -1417,7 +1419,7 @@ const I18N_IT = {
     editFailed: 'Modifica non riuscita: {message}',
     removeTag: 'Rimuovi tag {tag}',
     viewTitle: 'Ricordo',
-    forgetting: 'Eliminazione...',
+    forgetting: 'Spostamento nel cestino...',
     deleteForever: 'Elimina per sempre',
     deleteForeverTitle: 'Eliminare questo ricordo per sempre?',
     deleteForeverConfirm: "Eliminare ora questo ricordo e la sua cronologia? Non si può annullare. I riepiloghi e gli insight creati a partire da esso conservano il proprio testo.",
@@ -1449,7 +1451,7 @@ const I18N_IT = {
       one: 'Qualcosa di più recente è in disaccordo con questo {n} volta.',
       other: 'Qualcosa di più recente è in disaccordo con questo {n} volte.',
     },
-    notIndexedYet: 'Non ancora indicizzato — il richiamo non può trovare questo ricordo.',
+    notIndexedYet: 'Non trovabile per significato finché non è indicizzato. Modificalo, oppure usa Indicizza ora nel menu.',
     related: 'Correlati',
     close: 'Chiudi',
     selectMemory: 'Seleziona il ricordo: {title}',
@@ -1463,7 +1465,7 @@ const I18N_IT = {
     evCreated: 'Salvato',
     evUpdated: 'Modificato',
     evAppended: 'Testo aggiunto',
-    evDeleted: 'Eliminato',
+    evDeleted: 'Spostato nel cestino',
     evStatusChanged: 'Stato cambiato',
     evShared: 'Condiviso col team',
     evUnshared: 'Reso di nuovo personale',
@@ -1545,7 +1547,7 @@ const I18N_IT = {
   },
   graph: {
     empty:
-      'Ancora nessuna connessione — collega i ricordi, oppure lasciali auto-collegare man mano che ne aggiungi.',
+      'Ancora nessuna connessione. Collega i ricordi, oppure lascia che si colleghino da soli man mano che ne aggiungi.',
     loadFailed: 'Impossibile caricare il grafo.',
     zoomOut: 'Riduci zoom',
     zoomIn: 'Aumenta zoom',
@@ -1667,7 +1669,7 @@ const I18N_IT = {
     requestFailed: 'Richiesta non riuscita',
     digestLabel: 'Pronto da comprimere',
     digestNote:
-      'Gli originali non vengono mai cancellati — il riepilogo aggiunge una sintesi e abbassa gli originali nel richiamo così non affollano i risultati.',
+      'Gli originali non vengono mai eliminati. Il riepilogo aggiunge una sintesi e abbassa gli originali nella ricerca, così non affollano i risultati.',
     digestEntries: { one: '{n} voce', other: '{n} voci' },
     digestAction: 'Riepilogo →',
     digestMore: 'altre {n} ›',
@@ -1678,27 +1680,27 @@ const I18N_IT = {
     },
     vectorizeLabel: 'Non indicizzati',
     vectorizeNote: {
-      one: '{n} ricordo non è stato incorporato e non apparirà nel richiamo.',
-      other: '{n} ricordi non sono stati incorporati e non appariranno nel richiamo.',
+      one: '{n} ricordo non è ancora trovabile per significato.',
+      other: '{n} ricordi non sono ancora trovabili per significato.',
     },
-    vectorizeAction: 'Vettorializza ora →',
-    vectorizeDone: 'Fatto — {n} reindicizzati',
+    vectorizeAction: 'Indicizza ora →',
+    vectorizeDone: { one: 'Fatto. {n} indicizzato.', other: 'Fatto. {n} indicizzati.' },
     classifyLabel: 'Non classificati',
     classifyNote: {
       one: '{n} ricordo non ha ancora tipo o stato (catturato prima della classificazione).',
       other: '{n} ricordi non hanno ancora tipo o stato (catturati prima della classificazione).',
     },
     classifyAction: 'Classifica ora →',
-    classifyDone: 'Fatto — {n} classificati',
+    classifyDone: { one: 'Fatto. {n} classificato.', other: 'Fatto. {n} classificati.' },
     restoreLabel: 'Ripristino',
     restoreProgress: 'Ripristino da {filename}…',
     restoreOf: '{done} di {total}',
     restoreTryAgain: 'Riprova →',
     restoreFailureTail:
-      'Il file di backup è intatto ed è sicuro riprovare — ciò che è già ripristinato verrà saltato, non duplicato.',
+      'Il file di backup è intatto ed è sicuro riprovare: ciò che è già stato ripristinato viene saltato, non duplicato.',
     restoreInvalidJson: '{filename} non è JSON valido.',
     restoreNotBackup:
-      '{filename} non sembra un backup di Second Brain — non ha un elenco di voci. Usa un file creato con «Backup come JSON».',
+      '{filename} non sembra un backup di Second Brain, perché non contiene un elenco di ricordi. Usa un file creato con «Backup come JSON».',
     restoreStopped: 'Il ripristino si è fermato a metà.',
     restoreSummaryRestored: '{n} ripristinati',
     restoreSummaryConnections: '{n} connessioni',
@@ -1707,19 +1709,21 @@ const I18N_IT = {
       one: '{n} ricordo era troppo lungo per essere importato ed è stato saltato.',
       other: '{n} ricordi erano troppo lunghi per essere importati e sono stati saltati.',
     },
-    restoreFailNote:
-      '{n} elemento/i non ripristinabili — di solito righe modificate a mano; il resto non è influenzato.',
+    restoreFailNote: {
+      one: '{n} elemento non è stato ripristinato, di solito perché è stato modificato a mano. Il resto non è interessato.',
+      other: '{n} elementi non sono stati ripristinati, di solito perché sono stati modificati a mano. Il resto non è interessato.',
+    },
     restoreNeedsIndex: 'I ricordi ripristinati non si possono cercare finché non sono indicizzati.',
     restoreMakeSearchable: 'Rendi ricercabili →',
     restoreIndexing: 'Indicizzazione…',
     restoreIndexingProgress: 'Indicizzazione… {done} fatti, {remaining} rimanenti',
     restoreIndexingDoneOnly: 'Indicizzazione… {done} fatti',
-    restoreQuotaLeft: '{n} rimasti — limite AI giornaliero raggiunto, riprova domani',
+    restoreQuotaLeft: '{n} rimasti. Il limite giornaliero di IA è esaurito: si azzera a mezzanotte UTC.',
     restoreAllSearchable: 'Tutti i ricordi ripristinati sono ricercabili',
-    restoreIndexFailed: 'Non riuscito — tocca per riprovare',
-    importStalled: 'Il server non ha avanzato il cursore di importazione — il Worker è aggiornato?',
+    restoreIndexFailed: 'Non riuscito. Tocca per riprovare.',
+    importStalled: 'L’importazione non va avanti. Il tuo Second Brain potrebbe aver bisogno di un aggiornamento.',
     vectorizeBannerTitle:
-      'La ricerca semantica è disattivata. L’indice Vectorize «{name}» non è stato trovato.',
+      'La ricerca per significato è disattivata. L’indice Vectorize «{name}» non è stato trovato.',
     vectorizeBannerHowToFix: 'Come risolvere',
     vectorizeBannerRunOnce: 'Esegui questo una volta nel terminale:',
     vectorizeBannerGui:
@@ -1767,8 +1771,8 @@ const I18N_IT = {
     never: 'mai',
     disconnectConfirm: 'Disconnettere {name}? Smetterà di sincronizzare.',
     purgeConfirm: {
-      one: 'Elimina anche il {n} {noun} sincronizzato',
-      other: 'Elimina anche i {n} {noun} sincronizzati',
+      one: 'Sposta nel cestino anche il {n} {noun} sincronizzato',
+      other: 'Sposta nel cestino anche i {n} {noun} sincronizzati',
     },
     disconnecting: 'Disconnessione…',
     disconnectFailed: 'Disconnessione non riuscita',
@@ -1781,7 +1785,7 @@ const I18N_IT = {
         label: 'Incolla l’URL iCal segreto di Google Calendar',
         placeholder: 'https://calendar.google.com/calendar/ical/…/basic.ics',
         hint:
-          'In Google Calendar (web): Impostazioni → il tuo calendario → <b>Integra calendario</b> → copia l’<b>«Indirizzo segreto in formato iCal»</b>. Tienilo privato — chiunque lo abbia può leggere il calendario.',
+          'In Google Calendar (web): Impostazioni → il tuo calendario → <b>Integra calendario</b> → copia l’<b>«Indirizzo segreto in formato iCal»</b>. Tienilo privato: chiunque lo abbia può leggere il calendario.',
       },
       'calendar-outlook': {
         label: 'Incolla l’URL ICS pubblicato di Outlook',
@@ -1811,7 +1815,7 @@ const I18N_IT = {
     connectedByLabel: 'Collegata da {name}',
     mirrorPersonal: 'I nuovi ricordi da questa fonte vanno nel livello personale',
     mirrorShared: 'I nuovi ricordi da questa fonte vanno nel livello condiviso del team',
-    mirrorLayerNewSyncsOnly: 'Vale solo per le nuove sincronizzazioni — i ricordi già sincronizzati restano dove sono.',
+    mirrorLayerNewSyncsOnly: 'Vale solo per le nuove sincronizzazioni: i ricordi già sincronizzati restano dove sono.',
     connectedOn: 'Collegata il {when}',
     moveHint: {
       one: 'Sposta i {n} {noun} già sincronizzati in "{layer}".',
@@ -1826,22 +1830,22 @@ const I18N_IT = {
     moveResultMissing: { one: '{n} mancante', other: '{n} mancanti' },
     moveResultNone: 'Niente da spostare',
     moveResultFailed: {
-      one: '{n} ricordo non è stato spostato — controlla la connessione e riprova.',
-      other: '{n} ricordi non sono stati spostati — controlla la connessione e riprova.',
+      one: '{n} ricordo non è stato spostato. Controlla la connessione e riprova.',
+      other: '{n} ricordi non sono stati spostati. Controlla la connessione e riprova.',
     },
     moveResultNeedsRepair: 'Non ancora ricercabile',
     moveStoppedPartway:
-      'Spostati {n} finora — lo spostamento si è interrotto a metà. Puoi riprovare senza rischi: quanto già spostato non verrà duplicato.',
+      'Spostati {n} finora, poi lo spostamento si è interrotto. Puoi riprovare senza rischi: quanto già spostato non verrà duplicato.',
     moveFailedFirstCall: 'Spostamento non riuscito, niente è stato spostato. Puoi riprovare senza rischi.',
-    moveRefusedOwner: 'Rifiutato — solo il proprietario del brain può spostare questi ricordi.',
+    moveRefusedOwner: 'Rifiutato. Solo il proprietario può spostare questi ricordi.',
     moveLayerChanged: 'Il livello è cambiato da quando hai confermato lo spostamento. Riconferma per continuare.',
     moveLayerChangedPartial: {
       one: 'Il livello è cambiato da quando hai confermato lo spostamento. {n} ricordo è già stato spostato nel livello confermato in precedenza. Riconferma per decidere come continuare.',
       other: 'Il livello è cambiato da quando hai confermato lo spostamento. {n} ricordi sono già stati spostati nel livello confermato in precedenza. Riconferma per decidere come continuare.',
     },
     moveVectorFailures: {
-      one: '{n} ricordo spostato correttamente ma non ancora ricercabile nel suo nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',
-      other: '{n} ricordi spostati correttamente ma non ancora ricercabili nel loro nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',
+      one: '{n} ricordo spostato ma non ancora ricercabile nel nuovo livello. Esegui di nuovo lo spostamento per completare.',
+      other: '{n} ricordi spostati ma non ancora ricercabili nel nuovo livello. Esegui di nuovo lo spostamento per completare.',
     },
     confirmMoveBodyShared: {
       one: 'Sposta il {n} {noun} già sincronizzato nel livello condiviso del team, dove finisce visibile a tutto il team.',
@@ -1961,7 +1965,7 @@ const I18N_IT = {
     privateEntries: { one: '{n} voce privata', other: '{n} voci private' },
     rotateToken: 'Reimposta token',
     remove: 'Rimuovi',
-    removeConfirm: 'Rimuovere {name}? Le sue {n} memorie private verranno eliminate per sempre. Quelle condivise con il team restano.',
+    removeConfirm: 'Rimuovere {name}? I suoi {n} ricordi privati verranno eliminati definitivamente. Quelli condivisi con il team restano.',
     defaultShareLabel: 'Acquisizioni:',
     suspend: 'Sospendi',
     restore: 'Ripristina',
@@ -1979,7 +1983,7 @@ const I18N_IT = {
     tokenTitle: 'Token di accesso monouso',
     tokenReady: 'Il tuo token monouso è pronto. Copialo adesso.',
     tokenFor: 'per {name}',
-    tokenWarning: 'Copialo ora — non lo vedrai più.',
+    tokenWarning: 'Copialo ora: non lo vedrai più.',
     copy: 'Copia',
     copied: 'Copiato',
     done: 'Fatto',
@@ -2014,8 +2018,8 @@ const I18N_IT = {
       'Attivandolo aggiungi un livello condiviso che tutto il team può leggere. I tuoi ricordi personali restano privati.',
     modeLocked:
       'In questo team ci sono {n} persone, quindi il livello condiviso resta attivo. Rimuovi tutte le altre persone per disattivarlo.',
-    modeOnSaved: 'Modalità team attiva — il livello condiviso è operativo',
-    modeOffSaved: 'Modalità team disattivata — questo cervello torna personale',
+    modeOnSaved: 'Modalità team attiva: il livello condiviso è operativo.',
+    modeOffSaved: 'Modalità team disattivata: questo Second Brain torna personale.',
   },
   invite: {
     copy: 'Copia messaggio d’invito',
@@ -2023,7 +2027,7 @@ const I18N_IT = {
     email: 'Invia per email',
     subject: 'Il tuo invito al team di Second Brain',
     body:
-      'Ciao {name},\n\nSei stata/o aggiunta/o al nostro Second Brain condiviso — una memoria che tutto il team può consultare.\n\n1. Apri {url}\n2. Incolla il tuo token di accesso del team:\n{token}\n3. Premi Connetti.\n\nTutto ciò che salvi resta personale finché non lo condividi col team. Conservalo: ti servirà di nuovo se configuri un altro computer. Chiedi a un amministratore di emetterne uno nuovo se smette di funzionare.',
+      'Ciao {name},\n\nOra fai parte del nostro Second Brain condiviso: un insieme di ricordi che tutto il team può consultare.\n\n1. Apri {url}\n2. Incolla il tuo token di accesso del team:\n{token}\n3. Premi Connetti.\n\nTutto ciò che salvi resta personale finché non lo condividi col team. Conservalo: ti servirà di nuovo se configuri un altro computer. Chiedi a un amministratore di emetterne uno nuovo se smette di funzionare.',
   },
   brief: {
     eyebrow: 'Il tuo cervello, di recente',
@@ -2039,9 +2043,9 @@ const I18N_IT = {
     patternNoticed: 'Insight notato',
     confirm: 'Conferma',
     dismiss: 'Ignora',
-    confirmed: 'Confermato — ora richiamabile',
+    confirmed: 'Confermato: ora la ricerca lo trova.',
     dismissed: 'Ignorato',
-    failedRetry: 'Non riuscito — riprova',
+    failedRetry: 'Non riuscito. Riprova',
     worthRereading: 'Da rileggere',
     fromDate: '· dal {date}',
     shapeSuffix: ' · {shape}',
@@ -2189,7 +2193,7 @@ const I18N_IT = {
       '“Auto” vuol dire che non hai scelto un livello per questo ricordo. La riga qui sopra dice dove finisce e quale impostazione lo decide: cambia la tua in “Le tue nuove acquisizioni”, nella schermata Team.',
     lockTitle: 'Solo chi l’ha condiviso può modificarlo',
     lockBody:
-      'Quando un ricordo è condiviso, solo chi l’ha condiviso — o un amministratore — può modificarlo o eliminarlo. Le altre persone possono leggerlo e collegarlo.',
+      'Quando un ricordo è condiviso, solo chi l’ha condiviso o un amministratore può modificarlo o dimenticarlo. Le altre persone possono leggerlo e collegarlo.',
   },
   activity: {
     title: 'Attività recente',
@@ -2253,8 +2257,8 @@ const I18N_IT = {
       other: '{n} spostati',
     },
     resultRefused: {
-      one: '{n} rifiutato — resta selezionato',
-      other: '{n} rifiutati — restano selezionati',
+      one: '{n} rifiutato, resta selezionato',
+      other: '{n} rifiutati, restano selezionati',
     },
     resultNone: 'Niente spostato',
   },

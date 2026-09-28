@@ -472,7 +472,7 @@ export function buildMcpServer(
       const client = await resolveClient(extra);
       if (action === "confirm_insight" || action === "dismiss_insight") {
         const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, vector_ids") as (Record<string, any> | null);
-        if (!row) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+        if (!row) return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
         if (!(JSON.parse(row.tags ?? "[]") as string[]).includes("auto-insight")) {
           return { content: [{ type: "text", text: "Entry is not a derived insight" }] };
         }
@@ -539,7 +539,7 @@ export function buildMcpServer(
       const id = rawId.trim();
       if (!id) return { content: [{ type: "text", text: "id is required" }] };
       const history = await readEntryHistory(env, identity, id);
-      if (!history) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      if (!history) return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       const text = formatHistoryReply(id, history.history, history.edges);
       return { content: [{ type: "text", text }] };
     },
@@ -626,25 +626,25 @@ export function buildMcpServer(
         });
       }
       if (result.status === "blocked") {
-        return { content: [{ type: "text", text: `Duplicate detected (${(result.score * 100).toFixed(0)}% match) — not stored. Existing entry ID: ${result.matchId}` }] };
+        return { content: [{ type: "text", text: `Not stored: this is a ${(result.score * 100).toFixed(0)}% match with memory ${result.matchId}, which already exists.` }] };
       }
       if (result.status === "contradiction") {
-        return { content: [{ type: "text", text: `Stored. ID: ${result.id} — resolved contradiction with entry ${result.resolvedConflict}${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
+        return { content: [{ type: "text", text: `Stored. ID: ${result.id}. It replaced memory ${result.resolvedConflict}, which disagreed${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
       }
       if (result.status === "contradiction_protected") {
         const disposition = result.entryStatus
           ? `Stored as ${result.entryStatus}`
           : "Stored without a status pending classification";
-        return { content: [{ type: "text", text: `${disposition} (ID: ${result.id}) — conflicts with a canonical memory (${result.canonicalId}), which was kept${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
+        return { content: [{ type: "text", text: `${disposition} (ID: ${result.id}). It disagrees with trusted memory ${result.canonicalId}, which was kept${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
       }
       if (result.status === "replaced") {
-        return { content: [{ type: "text", text: `Memory updated — new content replaced outdated entry (ID: ${result.id}).${noteSuffix}` }] };
+        return { content: [{ type: "text", text: `Memory updated: the new text replaced the older text (ID: ${result.id}).${noteSuffix}` }] };
       }
       if (result.status === "merged") {
-        return { content: [{ type: "text", text: `Memories merged — combined into existing entry (ID: ${result.id}).${noteSuffix}` }] };
+        return { content: [{ type: "text", text: `Merged into existing memory ${result.id}. Undo is available.${noteSuffix}` }] };
       }
       if (result.status === "flagged") {
-        return { content: [{ type: "text", text: `Stored with ID: ${result.id} — note: similar entry exists (${(result.score * 100).toFixed(0)}% match, ID: ${result.matchId}). Tagged as duplicate-candidate.${noteSuffix}` }] };
+        return { content: [{ type: "text", text: `Stored. ID: ${result.id}. A similar memory exists (${(result.score * 100).toFixed(0)}% match, ID: ${result.matchId}), so this one is tagged duplicate-candidate.${noteSuffix}` }] };
       }
       return { content: [{ type: "text", text: `Stored. ID: ${result.id}${noteSuffix}` }] };
     }
@@ -668,7 +668,7 @@ export function buildMcpServer(
 
       if (!row) {
         return {
-          content: [{ type: "text", text: `No entry found with ID: ${id}` }],
+          content: [{ type: "text", text: `No memory found with ID: ${id}` }],
         };
       }
 
@@ -761,7 +761,7 @@ export function buildMcpServer(
       const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, source");
 
       if (!row) {
-        return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+        return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       }
 
       const denied = assertCanEditContent(identity, row);
@@ -784,7 +784,7 @@ export function buildMcpServer(
 
       // Only reachable if the entry was deleted between the guard read and the write.
       if (result.status === "not_found") {
-        return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+        return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       }
 
       // R2-5: the row is still there, just moved out of this caller's reach mid-edit.
@@ -797,7 +797,7 @@ export function buildMcpServer(
       // text, and no repair path could see it — /vectorize-pending and /stats both look for
       // an empty vector_ids, which a mis-indexed entry does not have (#289).
       if (result.status === "reembed_failed") {
-        return { content: [{ type: "text", text: `Couldn't update entry ${id}: search re-index failed. Your memory is unchanged — please try again.` }] };
+        return { content: [{ type: "text", text: `Couldn't update memory ${id}: search did not update. The memory is unchanged. Try again.` }] };
       }
 
       if (result.status === "conflict") {
@@ -812,7 +812,7 @@ export function buildMcpServer(
         return {
           content: [{
             type: "text",
-            text: `Updated entry ${id}. Note: it was not re-indexed for semantic search because the Vectorize index is missing — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.${noteSuffix}`,
+            text: `Updated memory ${id}. Search by meaning is unavailable because the Vectorize index is missing, so it is findable by its words only. Fix: ${VECTORIZE_FIX_HINT}.${noteSuffix}`,
           }],
         };
       }
@@ -835,13 +835,13 @@ export function buildMcpServer(
     },
     async ({ id, status }, extra) => {
       const row = await getReadableEntry(env, identity, id);
-      if (!row) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      if (!row) return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       const denied = assertCanMutateEntry(identity, row);
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
       const client = identity ? await resolveClient(extra) : undefined;
       const result = await applyStatus(id, status as MemoryStatus, env, { ...mcpChange, client }, await resolveConfig(env), row.workspace_id as string);
-      if (result.status === "not_found") return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      if (result.status === "not_found") return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       if (result.status === "reembed_failed") {
         return { content: [{ type: "text", text: "Could not change the status: re-indexing failed. Nothing changed. Try again." }] };
       }
@@ -852,7 +852,7 @@ export function buildMcpServer(
       // on; "removed from recall, kept for audit" is implementation detail moved into the tool's
       // own description instead of repeated on every reply.
       const replies: Record<MemoryStatus, string> = {
-        deprecated: `Marked entry ${id} as wrong: it is hidden from recall and kept in its history. Undo is available.`,
+        deprecated: `Marked memory ${id} as wrong: it is hidden from recall and kept in its history. Undo is available.`,
         canonical: `Marked entry ${id} as trusted.`,
         draft: `Marked entry ${id} as unconfirmed.`,
       };
@@ -877,7 +877,7 @@ export function buildMcpServer(
       const teamRead = readTeamParam(team, identity, target);
       if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
       const result = await moveEntry(id, target, env, identity, mcpChange, teamRead.teamId);
-      if (result.status === "not_found") return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      if (result.status === "not_found") return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       if (result.status === "forbidden") return { content: [{ type: "text", text: `Only the entry's author or an admin can un-share ${id}.` }] };
       if (result.status === "conflict") return { content: [{ type: "text", text: `Entry ${id} changed while saving, try again.` }] };
       if (result.status === "no_change") return { content: [{ type: "text", text: `Entry ${id} is already in the ${workspace ?? "company"} workspace.` }] };
@@ -885,7 +885,7 @@ export function buildMcpServer(
       // Before the response — see moveEntry's own comment: the D1 move is already committed, so a
       // Vectorize outage here costs only this cosmetic ranking follow-up.
       ctx.waitUntil(restampVectorWorkspace(env, result.vectorIds, result.workspaceId));
-      return { content: [{ type: "text", text: `Entry ${id} ${result.status} — now in the ${workspace ?? "company"} workspace.` }] };
+      return { content: [{ type: "text", text: `Entry ${id} ${result.status}: now in the ${workspace ?? "company"} workspace.` }] };
     }
   );
 
@@ -1169,7 +1169,7 @@ export function buildMcpServer(
         `SELECT id, content, tags, source, created_at, workspace_id, actor_id FROM entries WHERE id = ?${scope ? ` AND ${scope.clause}` : ""}`
       ).bind(...(scope ? [id, ...scope.bindings] : [id])).first() as Record<string, any> | null;
       if (!row) {
-        return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+        return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       }
       const tags: string[] = JSON.parse(row.tags ?? "[]");
       // get is the tool an agent calls before acting on a memory, so it is the
@@ -1199,7 +1199,7 @@ export function buildMcpServer(
   server.registerTool(
     "forget",
     {
-      description: "Delete an entry from your second brain by ID. Only call when the user explicitly asks to delete something. Confirm the entry ID using recall or list_recent first. Deleted entries go to the trash and are removed for good after the retention period (14 days unless the owner changed it).",
+      description: "Move a memory to the trash by ID. Only call when the user explicitly asks to forget or delete something. Confirm the ID with recall or list_recent first. It stays in the trash for the retention period (14 days unless the owner changed it), and undo brings it back until then.",
       inputSchema: {
         id: z.string().describe("Entry ID from recall or list_recent"),
       },
@@ -1207,7 +1207,7 @@ export function buildMcpServer(
     },
     async ({ id }, extra) => {
       const row = await getReadableEntry(env, identity, id);
-      if (!row) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      if (!row) return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       const denied = assertCanMutateEntry(identity, row);
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
@@ -1215,7 +1215,7 @@ export function buildMcpServer(
       const client = identity ? await resolveClient(extra) : undefined;
       const result = await forgetEntry(id, env, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp", client }, { reason: "forget", config: cfg }, row.workspace_id as string);
       if (result.status === "not_found") {
-        return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+        return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       }
       if (identity) {
         auditEvent(env, ctx, {
@@ -1282,9 +1282,9 @@ export function buildMcpServer(
         case "unreadable":
           return { content: [{ type: "text", text: unreadableMessage(id) }] };
         case "not_found":
-          return { content: [{ type: "text", text: result.gone ? goneMessage(id, result.gone, cfg.TRASH_RETENTION_DAYS) : `No entry found with ID: ${id}` }] };
+          return { content: [{ type: "text", text: result.gone ? goneMessage(id, result.gone, cfg.TRASH_RETENTION_DAYS) : `No memory found with ID: ${id}` }] };
         case "reembed_failed":
-          return { content: [{ type: "text", text: `Couldn't update entry ${id}: search re-index failed. Your memory is unchanged; try again.` }] };
+          return { content: [{ type: "text", text: `Couldn't update memory ${id}: search did not update. The memory is unchanged. Try again.` }] };
       }
     }
   );
@@ -1311,9 +1311,9 @@ export function buildMcpServer(
     async ({ source_id, target_id, type }) => {
       // tags ride along on the reads this tool already makes, for the kind gate below.
       const source = await getReadableEntry(env, identity, source_id, "id, workspace_id, actor_id, tags");
-      if (!source) return { content: [{ type: "text", text: `No entry found with ID: ${source_id}` }] };
+      if (!source) return { content: [{ type: "text", text: `No memory found with ID: ${source_id}` }] };
       const target = await getReadableEntry(env, identity, target_id, "id, workspace_id, actor_id, tags");
-      if (!target) return { content: [{ type: "text", text: `No entry found with ID: ${target_id}` }] };
+      if (!target) return { content: [{ type: "text", text: `No memory found with ID: ${target_id}` }] };
       // Same rule and same sentence as POST /link — see CROSS_WORKSPACE_LINK_MESSAGE.
       if (source.workspace_id !== target.workspace_id) {
         return { content: [{ type: "text", text: CROSS_WORKSPACE_LINK_MESSAGE }] };
@@ -1342,9 +1342,9 @@ export function buildMcpServer(
     },
     async ({ source_id, target_id, type }) => {
       const source = await getReadableEntry(env, identity, source_id);
-      if (!source) return { content: [{ type: "text", text: `No entry found with ID: ${source_id}` }] };
+      if (!source) return { content: [{ type: "text", text: `No memory found with ID: ${source_id}` }] };
       const target = await getReadableEntry(env, identity, target_id);
-      if (!target) return { content: [{ type: "text", text: `No entry found with ID: ${target_id}` }] };
+      if (!target) return { content: [{ type: "text", text: `No memory found with ID: ${target_id}` }] };
 
       const deleted = await deleteEdge(source_id, target_id, type, env);
       if (!deleted) return { content: [{ type: "text", text: "No link found between those entries." }] };

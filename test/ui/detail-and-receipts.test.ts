@@ -145,7 +145,7 @@ describe("memory detail — what the brain knows", () => {
   it("warns when recall cannot see the memory at all", () => {
     const ctx = load();
     ctx.renderViewBrain({ tags: [], indexed: false });
-    expect(ctx.__els.get("view-brain").innerHTML).toContain("Not indexed");
+    expect(ctx.__els.get("view-brain").innerHTML).toContain("Not searchable by meaning");
   });
 
   it("keeps the facts together and the caveats after them", () => {
@@ -454,7 +454,7 @@ describe("the history of a shared memory", () => {
       "Captured",
       "Edited",
       "Text added",
-      "Deleted",
+      "Moved to the trash",
       "Status changed",
       "Shared with the team",
       "Made personal again",

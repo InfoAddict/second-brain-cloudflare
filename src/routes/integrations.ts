@@ -248,7 +248,7 @@ export async function handleIntegrationsRoutes(
       const roots = await ensureTenantBootstrap(env);
       if (auth.userId !== roots.ownerUserId) {
         return json(
-          { ok: false, error: "Only the brain's owner can move memories this connection already synced — they live in the owner's own workspace." },
+          { ok: false, error: "Only the brain's owner can move memories this connection already synced: they live in the owner's own workspace." },
           403,
         );
       }
@@ -265,7 +265,7 @@ export async function handleIntegrationsRoutes(
       // Nothing moves for this page; the caller must re-confirm.
       if (body.expectedTarget && body.expectedTarget !== target) {
         return json(
-          { ok: false, error: "The layer changed since this move was confirmed — reconfirm to continue." },
+          { ok: false, error: "The layer changed since this move was confirmed. Reconfirm to continue." },
           409,
         );
       }

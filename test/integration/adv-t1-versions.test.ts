@@ -638,7 +638,7 @@ describe("R2-5 (MINOR): the author sharing their own memory mid-edit turns their
       return raw.prepare(sql);
     } } } as unknown as Env;
     const res = await worker.fetch(req("POST", "/update", { body: { id: "m1", content: "my edited note" } }), racing, ctx);
-    expect(res.status).toBe(409); // FAILS: 404 "No entry found with ID: m1"
+    expect(res.status).toBe(409); // FAILS: 404 "No memory found with ID: m1"
   });
 });
 

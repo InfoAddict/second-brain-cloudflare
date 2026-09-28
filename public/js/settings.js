@@ -206,7 +206,7 @@ async function runVectorize(btn) {
       if ((data.processed ?? 0) === 0 && remaining > 0) break
     }
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(t('upkeep.vectorizeDone', { n: totalProcessed }))}`
+    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('upkeep.vectorizeDone', totalProcessed, { n: totalProcessed }))}`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
     refreshAll()
@@ -254,7 +254,7 @@ async function runClassify(btn) {
       prevRemaining = remaining
     }
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(t('upkeep.classifyDone', { n: totalProcessed }))}`
+    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('upkeep.classifyDone', totalProcessed, { n: totalProcessed }))}`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
     refreshAll()
@@ -367,7 +367,7 @@ function renderRestoreDone(totals) {
   if (totals.skipped) parts.push(t('upkeep.restoreSummaryPresent', { n: totals.skipped.toLocaleString(localeTag()) }))
   const failures = totals.failed + totals.edges_failed
   const failNote = failures
-    ? ` ${t('upkeep.restoreFailNote', { n: failures.toLocaleString(localeTag()) })}`
+    ? ` ${tPlural('upkeep.restoreFailNote', failures, { n: failures.toLocaleString(localeTag()) })}`
     : ''
   const tooLargeNote = totals.too_large
     ? ` ${tPlural('upkeep.importTooLarge', totals.too_large, { n: totals.too_large.toLocaleString(localeTag()) })}`

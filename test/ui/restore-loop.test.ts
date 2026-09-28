@@ -131,7 +131,7 @@ describe("runImportLoop", () => {
     });
 
     await expect(runImportLoop({ entries: new Array(100), edges: [] }, post))
-      .rejects.toThrow(/did not advance/);
+      .rejects.toThrow(/stopped making progress/);
   });
 
   it("propagates a page failure instead of swallowing it", async () => {
