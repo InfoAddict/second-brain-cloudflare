@@ -326,6 +326,11 @@ describe("captureEntry()", () => {
     expect(JSON.parse(fresh.tags)).toContain("duplicate-candidate");
   });
 
+  // D2 (T-0089.4.6, 16-t3-t4-trust-spec.md Lane D) moved to
+  // test/unit/capture-entry-system-contradiction.test.ts: the third case (a
+  // system job deprecating its own row) exercises a compare-and-set UPDATE
+  // that D1Mock does not model, so all three need real SQLite.
+
   it("replace: deletes old vectors after re-embedding", async () => {
     db.entries.push({
       id: "existing", content: "I use VSCode", tags: "[]", source: "api",
