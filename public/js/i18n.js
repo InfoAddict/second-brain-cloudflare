@@ -2201,8 +2201,8 @@ const I18N_IT = {
     lineInLine: 'Finora la tua sicurezza corrisponde più o meno a come sono andate le cose, su {n} decisioni.',
     lineNoRange: 'Vedrai quanto spesso hai ragione quando 5 decisioni avranno una sicurezza simile. Finora ne hai {n}.',
     lineEstimated: {
-      one: 'Per {k} di queste, la percentuale è stata stimata dalle tue parole.',
-      other: 'Per {k} di queste, la percentuale è stata stimata dalle tue parole.',
+      one: 'In {k} caso, la percentuale è stata stimata dalle tue parole.',
+      other: 'In {k} casi, le percentuali sono state stimate dalle tue parole.',
     },
     topicOver: 'Su {topic}, finora hai avuto ragione meno spesso di quanto ti aspettassi, su {n} decisioni.',
     topicUnder: 'Su {topic}, finora hai avuto ragione più spesso di quanto ti aspettassi, su {n} decisioni.',
