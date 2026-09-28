@@ -243,8 +243,8 @@ function loopsPanelRow(item, inbound) {
   return `<div class="task" id="loop-tile-${escAttr(item.id)}">
         <div class="task-t">${escHtml(titleLine(item.content, 80))}${meta}</div>
         <div class="task-actions">
-          <button class="btn btn-secondary btn-sm" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'done', this)">${escHtml(doneLabel)}</button>
-          <button class="btn btn-secondary btn-sm" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'not-task', this)">${escHtml(notTaskLabel)}</button>
+          <button class="card-action-btn" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'done', this)">${escHtml(doneLabel)}</button>
+          <button class="card-action-btn" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'not-task', this)">${escHtml(notTaskLabel)}</button>
         </div>
       </div>`
 }

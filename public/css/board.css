@@ -1026,10 +1026,15 @@
   margin-top: 14px;
 }
 
+/* UI reviewer final pass: the app has no other board-panel section label to
+   match, and the monospace eyebrow used elsewhere (.brief-eyebrow,
+   .view-status-title) reads as a plain small-caps label here instead - the
+   app's own sans font, uppercase and letter-spaced. */
 .loops-group-title {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-secondary);
   margin-bottom: 4px;

@@ -354,7 +354,10 @@ function renderLedgerCaption(result) {
     return
   }
   el.hidden = false
-  el.textContent = t('ledger.caption', { brier: result.brier.toFixed(2) })
+  // toLocaleString, not toFixed: Italian reads a comma decimal separator
+  // ("0,25"), and toFixed always returns a period regardless of locale.
+  const brier = result.brier.toLocaleString(localeTag(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  el.textContent = t('ledger.caption', { brier })
 }
 
 /** Icon and CSS tone per outcome, kept separate from the label text below so no translation lookup is ever built from a variable key. */

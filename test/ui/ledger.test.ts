@@ -208,6 +208,39 @@ describe("ledger math (pure, no DOM)", () => {
   });
 });
 
+describe("the accuracy caption's locale-aware number (UI reviewer final pass)", () => {
+  function loadLocale(locale: "en" | "it") {
+    const ctx: any = { console };
+    vm.createContext(ctx);
+    installI18n(ctx, locale);
+    vm.runInContext(readFileSync(resolve(ROOT, "public/utils.js"), "utf8"), ctx);
+    vm.runInContext(readFileSync(resolve(ROOT, "public/js/ledger.js"), "utf8"), ctx);
+    return ctx;
+  }
+
+  it("formats the brier score with a period in English", () => {
+    const ctx = loadLocale("en");
+    const el = { hidden: true, textContent: "" };
+    ctx.document.getElementById = () => el;
+
+    ctx.renderLedgerCaption({ ready: true, brier: 0.4258 });
+
+    expect(el.textContent).toContain("0.43");
+    expect(el.textContent).not.toContain("0,43");
+  });
+
+  it("formats the brier score with a comma in Italian, not toFixed's hardcoded period", () => {
+    const ctx = loadLocale("it");
+    const el = { hidden: true, textContent: "" };
+    ctx.document.getElementById = () => el;
+
+    ctx.renderLedgerCaption({ ready: true, brier: 0.4258 });
+
+    expect(el.textContent).toContain("0,43");
+    expect(el.textContent).not.toContain("0.43");
+  });
+});
+
 /**
  * A fake DOM capable enough to drive renderCalibrationChart end to end:
  * querySelector/querySelectorAll resolve into a real (if tiny) tree,
