@@ -19,7 +19,7 @@ import type { RecallMatch, RetractedBelief } from "./types";
 /** Beliefs shown under/after actually-true results: at most this many, newest retraction first (spec 14 5.7 item 7). */
 export const AS_OF_BELIEFS_MAX = 3;
 
-interface AsOfVersionRow extends VersionRow {
+export interface AsOfVersionRow extends VersionRow {
   entry_id: string;
 }
 
@@ -41,7 +41,7 @@ function parseTagsSafe(raw: string): string[] {
   }
 }
 
-interface AtT { content: string; tags: string[]; changedAt: number | null; statusAt: MemoryStatus | null; pruned: boolean; textHidden: boolean }
+export interface AtT { content: string; tags: string[]; changedAt: number | null; statusAt: MemoryStatus | null; pruned: boolean; textHidden: boolean }
 
 /**
  * `text`/`tags` a match had at T, from its full stored version chain (buildChain, Track 1): the
@@ -49,7 +49,7 @@ interface AtT { content: string; tags: string[]; changedAt: number | null; statu
  * just before the oldest of them is the text at T. `pruned` marks a chain that ran out of stored
  * history (VERSION_KEEP eviction) before crossing T; `textHidden` marks one D-SH cut first.
  */
-function resolveAtT(match: RecallMatch, rowsNewestFirst: AsOfVersionRow[], canRead: (ws: string) => boolean, asOf: number): AtT {
+export function resolveAtT(match: RecallMatch, rowsNewestFirst: AsOfVersionRow[], canRead: (ws: string) => boolean, asOf: number): AtT {
   const chain = buildChain(match.content, rowsNewestFirst, canRead);
   let cut = 0;
   while (cut < chain.rows.length && chain.rows[cut].created_at > asOf) cut++;
@@ -146,6 +146,8 @@ export async function enrichWithAsOf(
       asOfTextChangedAt: resolved.changedAt,
       statusAt: resolved.statusAt,
       recordedAfterAsOf: match.createdAt > asOf,
+      asOfPruned: resolved.pruned,
+      asOfTextHidden: resolved.textHidden,
       retractedBelief: null,
     };
   });
@@ -158,11 +160,13 @@ export async function enrichWithAsOf(
   }
   const beliefs = [...byId.values()].sort((a, b) => (b.retracted_at as number) - (a.retracted_at as number));
 
-  const trueById = new Map(enrichedTrue.map(m => [m.id, m]));
+  const trueIdSet = new Set(enrichedTrue.map(m => m.id));
   const beliefMatches: RecallMatch[] = [];
   for (const belief of beliefs) {
     if (beliefMatches.length >= AS_OF_BELIEFS_MAX) break;
-    const attachedTo = belief.attached_to && trueById.has(belief.attached_to) ? belief.attached_to : null;
+    // Only the belief entry itself carries retractedBelief; a renderer pairs it with its true
+    // result by scanning beliefMatches for attachedTo, rather than this mirroring onto that match.
+    const attachedTo = belief.attached_to && trueIdSet.has(belief.attached_to) ? belief.attached_to : null;
     const retractedBelief: RetractedBelief = { retractedAt: belief.retracted_at as number, attachedTo };
     const tags = parseTagsSafe(belief.tags);
     const source = standaloneBeliefs.find(m => m.id === belief.id);
@@ -176,14 +180,7 @@ export async function enrichWithAsOf(
       tags,
       retractedBelief,
     });
-    if (attachedTo) {
-      const trueMatch = trueById.get(attachedTo)!;
-      trueById.set(attachedTo, { ...trueMatch, retractedBelief });
-    }
   }
 
-  return {
-    trueMatches: enrichedTrue.map(m => trueById.get(m.id) ?? m),
-    beliefMatches,
-  };
+  return { trueMatches: enrichedTrue, beliefMatches };
 }

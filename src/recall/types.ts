@@ -81,11 +81,16 @@ export interface RecallMatch {
   retractedSource: boolean;
   /**
    * As-of fields (spec 14 5.7), present only when `asOf` was set. A true-at-T result carries
-   * asOfTextChangedAt/statusAt/recordedAfterAsOf; a belief entry carries only retractedBelief.
+   * asOfTextChangedAt/statusAt/recordedAfterAsOf/asOfPruned/asOfTextHidden; a belief entry carries
+   * only retractedBelief.
    */
   asOfTextChangedAt?: number | null;
   statusAt?: MemoryStatus | null;
   recordedAfterAsOf?: boolean;
+  /** The oldest version history still kept ran out before reaching a row at or before T (item 6). */
+  asOfPruned?: boolean;
+  /** D-SH cut the version chain before reaching a row at or before T (item 6). */
+  asOfTextHidden?: boolean;
   retractedBelief?: RetractedBelief | null;
 }
 
