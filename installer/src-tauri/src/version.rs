@@ -23,6 +23,16 @@ pub fn is_behind(deployed: Option<&str>, bundled: &str) -> bool {
     }
 }
 
+/// True when the update from `deployed` to `bundled` crosses a major version
+/// boundary (e.g. 3.7.0 -> 4.0.0). An unparseable or absent `deployed` version
+/// returns `false` — a "what's new" block needs a known starting point.
+pub fn crosses_major(deployed: Option<&str>, bundled: &str) -> bool {
+    match (deployed.and_then(parse), parse(bundled)) {
+        (Some((dmaj, _, _)), Some((bmaj, _, _))) => dmaj < bmaj,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,5 +63,20 @@ mod tests {
     fn tolerates_prerelease_and_build_suffixes() {
         assert!(is_behind(Some("2.0.0-beta"), "2.0.1"));
         assert!(!is_behind(Some("2.0.0+build7"), "2.0.0"));
+    }
+
+    #[test]
+    fn crosses_major_detects_major_bumps_only() {
+        assert!(crosses_major(Some("3.7.0"), "4.0.0"));
+        assert!(crosses_major(Some("3.9.9"), "4.0.0"));
+        assert!(!crosses_major(Some("4.0.0"), "4.1.0"));
+        assert!(!crosses_major(Some("4.0.0"), "4.0.1"));
+        assert!(!crosses_major(Some("4.0.0"), "3.9.0"));
+    }
+
+    #[test]
+    fn crosses_major_never_nags_without_a_known_start() {
+        assert!(!crosses_major(None, "4.0.0"));
+        assert!(!crosses_major(Some("not-a-version"), "4.0.0"));
     }
 }

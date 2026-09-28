@@ -1744,6 +1744,24 @@ function detailsScreen() {
 interface WorkerUpdateInfo {
   deployedVersion: string | null;
   availableVersion: string;
+  /** This update crosses a major version boundary (e.g. 3.7 -> 4.0). */
+  crossesMajor: boolean;
+  /** This computer's identity is the brain's owner, not merely permitted to
+   * run the update (a legacy Worker's member can still see the update button
+   * without owning the brain). "What's new" names what changed for the brain
+   * the person owns, so it is gated on this, not on who may click update. */
+  isOwner: boolean;
+}
+
+/** The 4.0 "What's new" block (UX-D.1): owner-only, major-version-only, and
+ * every line must stay true of what 4.0 actually ships. */
+function whatsNewBlock(): HTMLElement {
+  return h("div", { class: "card" }, [
+    h("div", { class: "url-label" }, [t("workerUpdate.whatsNew.title")]),
+    h("p", { class: "url-desc" }, [t("workerUpdate.whatsNew.undo")]),
+    h("p", { class: "url-desc" }, [t("workerUpdate.whatsNew.trash")]),
+    h("p", { class: "url-desc" }, [t("workerUpdate.whatsNew.notRecorded")]),
+  ]);
 }
 
 function updateProgressSteps(): { id: StepId; label: string }[] {
@@ -1762,7 +1780,7 @@ async function workerUpdateScreen() {
     ? t("workerUpdate.ledeWithVersion", { version: info.availableVersion })
     : t("workerUpdate.ledeGeneric");
   const start = h("button", { class: "btn-primary" }, [t("workerUpdate.signInUpdate")]);
-  start.addEventListener("click", () => void runWorkerUpdate());
+  start.addEventListener("click", () => void runWorkerUpdate(undefined, info));
   const notNow = h("button", { class: "btn-ghost btn-stack" }, [
     t("common.skipUpdateForNow"),
   ]);
@@ -1771,18 +1789,19 @@ async function workerUpdateScreen() {
     brand(),
     h("h1", {}, [t("workerUpdate.title")]),
     h("p", { class: "lede" }, [versionLine]),
+    ...(info?.crossesMajor && info.isOwner ? [whatsNewBlock()] : []),
     h("div", { class: "notice" }, [icon("shieldCheck"), h("span", {}, [t("workerUpdate.notice")])]),
     start,
     notNow,
   );
 }
 
-async function runWorkerUpdate(errorMsg?: string) {
-  currentScreen = () => void runWorkerUpdate(errorMsg);
+async function runWorkerUpdate(errorMsg?: string, info?: WorkerUpdateInfo | null) {
+  currentScreen = () => void runWorkerUpdate(errorMsg, info);
   setRail("workerUpdate");
   if (errorMsg) {
     const retry = h("button", { class: "btn-primary" }, [t("common.tryAgain")]);
-    retry.addEventListener("click", () => void runWorkerUpdate());
+    retry.addEventListener("click", () => void runWorkerUpdate(undefined, info));
     const back = h("button", { class: "btn-ghost btn-stack" }, [
       t("common.skipUpdateForNow"),
     ]);
@@ -1811,7 +1830,7 @@ async function runWorkerUpdate(errorMsg?: string) {
   try {
     await invoke<Account[]>("connect_cloudflare");
   } catch (e) {
-    return void runWorkerUpdate(String(e));
+    return void runWorkerUpdate(String(e), info);
   }
 
   const rows = new Map<StepId, HTMLLIElement>();
@@ -1853,22 +1872,31 @@ async function runWorkerUpdate(errorMsg?: string) {
   try {
     details = await invoke<ConnectionDetails>("start_worker_update");
     unlisten();
-    workerUpdateDoneScreen();
+    void workerUpdateDoneScreen(info);
   } catch (e) {
     unlisten();
-    runWorkerUpdate(String(e));
+    runWorkerUpdate(String(e), info);
   }
 }
 
-function workerUpdateDoneScreen() {
-  currentScreen = workerUpdateDoneScreen;
+async function workerUpdateDoneScreen(info?: WorkerUpdateInfo | null) {
+  currentScreen = () => void workerUpdateDoneScreen(info);
   setRail("workerUpdate");
   const done = h("button", { class: "btn-primary" }, [t("details.openDashboard")]);
   done.addEventListener("click", () => void invoke("open_dashboard"));
+  const lines = [h("p", { class: "lede" }, [t("workerUpdate.doneLede")])];
+  if (info?.crossesMajor && info.isOwner) {
+    // The brain has just been redeployed, so /config is live. Falls back to
+    // the shipped default rather than leaving the sentence half-true.
+    const days = await invoke<number | null>("worker_update_trash_retention_days").catch(() => null);
+    lines.push(
+      h("p", { class: "lede" }, [t("workerUpdate.doneMajorLine", { days: String(days ?? 14) })]),
+    );
+  }
   show(
     brand(),
     h("h1", {}, [t("workerUpdate.doneTitle")]),
-    h("p", { class: "lede" }, [t("workerUpdate.doneLede")]),
+    ...lines,
     done,
   );
 }
