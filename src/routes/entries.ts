@@ -302,8 +302,11 @@ export async function handleEntriesRoutes(
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
 
-    let body: { id?: string; to_version?: unknown; nonce?: unknown };
+    let body: { id?: string; to_version?: unknown; nonce?: unknown; group?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    // Reviewer MAJOR (server.ts's MCP undo had the same gap): a body naming both a single id and
+    // a group is ambiguous about which write the caller wants; refused before any read.
+    if (body.group !== undefined) return json({ ok: false, error: "Pass either id or group (POST /undo/group), not both." }, 400);
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     const id = body.id.trim();
     const nonce = optionalNonce(body);
@@ -380,8 +383,9 @@ export async function handleEntriesRoutes(
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
 
-    let body: { group?: unknown };
+    let body: { group?: unknown; id?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (body.id !== undefined) return json({ ok: false, error: "Pass either id (POST /undo) or group, not both." }, 400);
     if (typeof body.group !== "string" || !body.group.trim()) return json({ ok: false, error: "group is required" }, 400);
 
     const cfg = await resolveConfig(env);

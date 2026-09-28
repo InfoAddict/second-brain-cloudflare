@@ -1483,6 +1483,11 @@ export function buildMcpServer(
       // 5.9 (S3): group is mutually exclusive with id/to_version, and only ever a string copied
       // from brief — the schema itself (z.string(), not z.array) closes the "id list" path this
       // tool must never accept for a group undo.
+      // Reviewer MAJOR: id and group together used to fall through to the group branch and run
+      // the bulk write, silently ignoring id — refused outright, before anything else runs.
+      if (id !== undefined && group !== undefined) {
+        return { content: [{ type: "text", text: "Pass either id or group, not both." }] };
+      }
       if (group !== undefined) {
         if (!identity) return { content: [{ type: "text", text: FORBIDDEN_MSG }] };
         const cfg = await resolveConfig(env);
