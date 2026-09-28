@@ -65,6 +65,16 @@ describe("undoGroup() (S3)", () => {
     ).bind(opts.id, opts.entryId, opts.actorId, opts.event, JSON.stringify(opts.payload), opts.createdAt).run();
   }
 
+  /** A row moved to the trash: entries_trash's row_json follows entry-columns.ts's
+   * ENTRY_ROW_COLUMNS shape (what restoreColumnsSql reads back on undo). */
+  async function insertTrashRow(id: string, opts: { actorId: string; deletedAt: number }) {
+    const rowJson = JSON.stringify({ tags: ["work"], source: "api", created_at: opts.deletedAt - HOUR, workspace_id: "ws-p", actor_id: opts.actorId });
+    await sqlite.db.prepare(
+      `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason, nonce)
+       VALUES (?, 'ws-p', ?, ?, ?, '[]', '[]', ?, ?, 'mcp', 'forget', lower(hex(randomblob(16))))`,
+    ).bind(id, opts.actorId, `Memory ${id}`, rowJson, opts.deletedAt, opts.actorId).run();
+  }
+
   /** A "status" burst, same actor and client, all inside a 10-minute window (below the shipped
    * QUARANTINE_STATUS_BURST default, so CFG lowers it to 3 to keep fixtures small -- the same
    * technique brief-changes.test.ts's own "group thresholds" tests use). A version's `tags`
@@ -165,6 +175,42 @@ describe("undoGroup() (S3)", () => {
       const tags = await tagsOf(id);
       expect(tags.some(t2 => t2.startsWith("quarantine:"))).toBe(false);
     }
+  });
+
+  it("undo group restores each trashed member, skipping one someone already restored", async () => {
+    const ids = ["t0", "t1", "t2"];
+    let t = now - HOUR;
+    for (const id of ids) {
+      await insertTrashRow(id, { actorId: "u1", deletedAt: t });
+      await insertEvent({ id: `ev-${id}`, entryId: id, event: "deleted", actorId: "u1", createdAt: t, payload: { channel: "mcp", trash: true, client: "Cursor" } });
+      t += MIN;
+    }
+
+    const group = await discoverGroup();
+    expect(group.family).toBe("trash");
+
+    // t1 is restored by someone else (an ordinary /undo or /restore call) before undo/group runs:
+    // no longer in entries_trash, and back in entries.
+    await sqlite.db.prepare(`DELETE FROM entries_trash WHERE id = 't1'`).run();
+    await seedEntry("t1", ["work"]);
+
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    // t1 is silently excluded: never re-attempted, never reported.
+    expect(result!.results.slice().sort((a, b) => a.id.localeCompare(b.id))).toEqual(
+      [{ id: "t0", result: "restored" }, { id: "t2", result: "restored" }],
+    );
+    expect(result!.remaining).toBe(0);
+    expect(result!.done).toBe(true);
+
+    for (const id of ["t0", "t2"]) {
+      const row = await sqlite.db.prepare(`SELECT id FROM entries WHERE id = ?`).bind(id).first();
+      expect(row).not.toBeNull();
+      const trashRow = await sqlite.db.prepare(`SELECT id FROM entries_trash WHERE id = ?`).bind(id).first();
+      expect(trashRow).toBeNull();
+    }
+    // t1's own already-restored state is exactly as the "someone else" left it, untouched by this call.
+    expect(await tagsOf("t1")).toEqual(["work"]);
   });
 
   it("pages of 5, remaining counts down, 40 or fewer statements per page", async () => {
