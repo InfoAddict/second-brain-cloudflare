@@ -16,6 +16,9 @@ import { getChanges, UNDO_GROUP_PAGE, type ChangeGroup } from "../../src/brief/c
 import { undoGroup, undoGroupMcpReply } from "../../src/memory/undo";
 import { DEFAULTS } from "../../src/config";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
+import { buildMcpServer } from "../../src/mcp/server";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
@@ -331,5 +334,23 @@ describe("undoGroup() (S3)", () => {
     await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
     const page3 = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
     expect(undoGroupMcpReply(page3!)).toBe("Undid all 12 changes in that group.");
+  });
+
+  it("rejects MCP undo with both id and group before any bulk write", async () => {
+    const ids = ["e0", "e1", "e2"];
+    await seedStatusBurst(ids, now - HOUR);
+    const group = await discoverGroup();
+    const server = buildMcpServer(env, { waitUntil: () => {} } as unknown as ExecutionContext, identity);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "group-review", version: "1" });
+    await Promise.all([client.connect(ct), server.connect(st)]);
+    try {
+      await client.callTool({ name: "undo", arguments: { id: "e0", group: group.group } });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+
+    for (const id of ids) expect(await maxSeqOf(id)).toBe(1);
   });
 });
