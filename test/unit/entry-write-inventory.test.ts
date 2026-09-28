@@ -136,7 +136,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/validity.ts', line: 377, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 421, kind: 'snapshot' },
   // NEW (T-0089.2.1, Task A4): update(valid_from / valid_until) and its propagate UPDATE, each with its validity snapshot.
-  // MOVED +4 (lane A follow-up): earlier lines in this file shifted; same sites.
+  // MOVED +4 (lane A follow-up): the digest guard's comment shifted earlier lines in this file; same sites.
   { file: 'src/memory/validity.ts', line: 580, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 598, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides

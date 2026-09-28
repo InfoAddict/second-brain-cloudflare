@@ -1,7 +1,7 @@
 import { validInputTags, projectSlugError, projectTagError, withProjectTag, MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS, reservedTagsNote, stripNewReservedTags } from "../tags/system";
 import { autoCreateProject } from "../projects/autocreate";
 import type { Env } from "../env";
-import { resolveConfig } from "../config";
+import { resolveConfig, type Config } from "../config";
 import { VECTORIZE_FIX_HINT } from "../constants";
 import { json } from "../lib/http";
 import { requireIdentity, type Identity } from "../lib/identity";
@@ -261,10 +261,10 @@ export async function handleCaptureRoutes(
     if (body.content === undefined && (body.tags !== undefined || body.volatility !== undefined)) return json({ ok: false, error: "To change tags or volatility, pass content too." }, 400);
     if (body.content !== undefined && body.valid_from !== undefined) return json({ ok: false, error: VALIDITY_WITH_CONTENT_ERROR, field: "valid_from" }, 400);
     const validityCfg = hasValidity ? await resolveConfig(env) : null;
-    const validity = hasValidity ? parseValidityInput(body, Date.now(), validityCfg!.TIMEZONE, { allowNull: true }) : null;
+    const validity = hasValidity ? parseValidityInput(body, Date.now(), (validityCfg as Config).TIMEZONE, { allowNull: true }) : null;
     if (validity && "error" in validity) return json({ ok: false, error: validity.error, field: validity.field }, 400);
     const setValidity = (workspaceId: string) =>
-      updateEntryValidity(env, body.id!.trim(), validity!.value as { from?: number | null; until?: number | null }, { actorId: identity.userId, channel: "rest" }, validityCfg!, workspaceId);
+      updateEntryValidity(env, body.id!.trim(), validity!.value as { from?: number | null; until?: number | null }, { actorId: identity.userId, channel: "rest" }, validityCfg as Config, workspaceId);
     const validityBody = (r: UpdateValidityResult): { status: number; body: Record<string, unknown> } => {
       if (r.status === "updated") return { status: 200, body: { validity: { valid_from: r.effectiveFrom, valid_from_stated: r.validFrom !== null, valid_until: r.validUntil, propagated: r.propagated } } };
       if (r.status === "refused") return { status: 400, body: { ok: false, error: r.error, field: r.field } };
