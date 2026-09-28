@@ -70,14 +70,18 @@ function dueDecisionLabel(item) {
 }
 
 /**
- * "Owed to you by Priya" for an inbound commitment, or "Owed to you" alone
- * when the counterparty tag yielded no usable name (Design 5.1's own
- * fallback) — derived from `tags`, which GET /due already returns on every
+ * "Owed to you · from Priya" for an inbound commitment, or "Owed to you"
+ * alone when the counterparty tag yielded no usable name (Design 5.1's own
+ * fallback), derived from `tags`, which GET /due already returns on every
  * row (Design 5.3: kind is derived in JS for the same reason).
+ *
+ * UX advisor round 2: reuses loops.fromName rather than its own "Owed to
+ * you by {name}" wording, so the counterparty reads as "from Priya" the
+ * same way in the loops sheet, the loops panel and here.
  */
 function dueInboundLine(item) {
   const name = typeof loopCounterpartyOf === 'function' ? loopCounterpartyOf(item.tags) : ''
-  return name ? t('due.owedToYouBy', { name }) : t('due.owedToYou')
+  return name ? `${t('due.owedToYou')} · ${t('loops.fromName', { name })}` : t('due.owedToYou')
 }
 
 /** Reads whatever the row's own note input currently holds, trimmed; '' when the row has none or it was never expanded. */
@@ -104,7 +108,7 @@ function toggleDueNote(id) {
  * Done and Not a commitment never appear on one (the `done` guard on the
  * Worker's own /loops/resolve would refuse them anyway, C13). An inbound
  * commitment (`kind: "inbound"`) keeps the ordinary actions and adds the
- * "Owed to you by Priya" line above them.
+ * "Owed to you · from Priya" line above them.
  */
 function dueRow(item, expanded) {
   const isTask = (item.tags || []).includes('task')
@@ -123,6 +127,7 @@ function dueRow(item, expanded) {
     ? `<button type="button" class="card-action-btn" id="due-note-link-${escAttr(item.id)}" onclick="toggleDueNote('${escAttr(item.id)}')"><i class="ti ti-note"></i> ${escHtml(t('due.addNote'))}</button>` +
       `<input type="text" class="due-note-input" id="due-note-${escAttr(item.id)}" placeholder="${escAttr(t('due.notePlaceholder'))}" hidden />`
     : ''
+  const outcomeLabel = isDecision ? `<div class="digest-note">${escHtml(t('due.outcomeLabel'))}</div>` : ''
   const actions = isDecision
     ? `<button type="button" class="card-action-btn" onclick="resolveDecision('${escAttr(item.id)}', 'right', this)">${escHtml(t('due.right'))}</button>
         <button type="button" class="card-action-btn" onclick="resolveDecision('${escAttr(item.id)}', 'wrong', this)">${escHtml(t('due.wrong'))}</button>
@@ -145,6 +150,7 @@ function dueRow(item, expanded) {
       ${inboundLine}
       <div class="digest-note">${escHtml(dueWhenLine(item))}</div>
       ${noteRow}
+      ${outcomeLabel}
       <div class="due-actions">
         ${actions}
       </div>

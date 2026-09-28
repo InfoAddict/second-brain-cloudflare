@@ -830,7 +830,7 @@ describe("dashboard i18n", () => {
       "due.reviewLabel", "due.right", "due.wrong", "due.mixed", "due.cantTellYet",
       "due.addNote", "due.notePlaceholder", "due.outcomeFailed", "due.outcomeToastRight",
       "due.outcomeToastWrong", "due.outcomeToastMixed", "due.undo", "due.undoFailed",
-      "due.owedToYouBy", "due.owedToYou",
+      "due.owedToYou",
     ];
     const EM_DASH = "—";
     const missing: string[] = [];

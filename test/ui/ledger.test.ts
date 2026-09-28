@@ -127,6 +127,7 @@ function makeNode(tag = "div") {
     textContent: "",
     hidden: false,
     clientWidth: 320,
+    scrollWidth: 320,
     parentElement: null as any,
     _listeners: {} as Record<string, Array<(e: any) => void>>,
     classList: {
@@ -143,6 +144,14 @@ function makeNode(tag = "div") {
     getBoundingClientRect() { return { left: 0, top: 0, width: 320, height: 30 }; },
     querySelector(sel: string): any { return queryOne(node, sel); },
     querySelectorAll(sel: string): any[] { const out: any[] = []; collectAll(node, sel, out); return out; },
+    closest(sel: string): any {
+      let cur: any = node;
+      while (cur) {
+        if (matches(cur, sel)) return cur;
+        cur = cur.parentElement;
+      }
+      return null;
+    },
     // innerHTML here is a plain string sink for tests that only check the SVG
     // markup (bucketRows/xScale already cover the geometry); it never gets
     // parsed back into children, so renderCalibrationChart's own DOM-tree
@@ -174,19 +183,25 @@ function buildLedgerDom() {
   const wrap = makeNode("div");
   const legendEl = makeNode("div");
   legendEl.className = "legend";
+  const scopeEl = makeNode("p");
+  scopeEl.className = "ledger-chart-scope";
   const chartEl = makeNode("div");
   chartEl.className = "chart";
   const svg = makeNode("svg");
   chartEl.appendChild(svg);
+  const tableScrollEl = makeNode("div");
+  tableScrollEl.className = "ledger-table-scroll";
   const tableEl = makeNode("table");
   tableEl.className = "data-table";
   tableEl.appendChild(makeNode("caption"));
   tableEl.appendChild(makeNode("thead"));
   tableEl.appendChild(makeNode("tbody"));
+  tableScrollEl.appendChild(tableEl);
   wrap.appendChild(legendEl);
+  wrap.appendChild(scopeEl);
   wrap.appendChild(chartEl);
-  wrap.appendChild(tableEl);
-  return { wrap, legendEl, chartEl, svg, tableEl };
+  wrap.appendChild(tableScrollEl);
+  return { wrap, legendEl, scopeEl, chartEl, svg, tableEl, tableScrollEl };
 }
 
 function loadWithDom(extraIds: Record<string, any> = {}) {
@@ -226,12 +241,15 @@ describe("renderCalibrationChart", () => {
     expect(svg.innerHTML).toContain(">14<");
   });
 
-  it("legend is present even when not ready", () => {
+  it("UX advisor round 2: no legend when not ready, only once the chart itself is drawn", () => {
     const ctx = loadWithDom();
     const { chartEl, legendEl } = buildLedgerDom();
+    legendEl.innerHTML = "<span>stale</span>"; // simulate a previous ready render
 
     ctx.renderCalibrationChart(chartEl, notReadyResult());
+    expect(legendEl.innerHTML).toBe("");
 
+    ctx.renderCalibrationChart(chartEl, readyResult());
     expect(legendEl.innerHTML).toContain("You said");
     expect(legendEl.innerHTML).toContain("Came true");
   });
@@ -297,8 +315,9 @@ describe("the ledger sheet's filters (source, state)", () => {
       "board-tip": makeNode("div"),
       "loops-sheet": makeNode("div"), // unused, but keeps getElementById total generic
     };
-    const { wrap, legendEl, chartEl, svg, tableEl } = buildLedgerDom();
+    const { wrap, legendEl, scopeEl, chartEl, svg, tableEl, tableScrollEl } = buildLedgerDom();
     els["ledger-chart"] = chartEl;
+    els["ledger-chart-wrap"] = wrap;
     (chartEl as any).parentElement = wrap;
     ["ledger-source-all", "ledger-source-stated", "ledger-source-inferred", "ledger-state-open", "ledger-state-resolved", "ledger-table-toggle", "ledger-sheet"].forEach((id) => {
       els[id] = makeNode("button");
@@ -327,7 +346,7 @@ describe("the ledger sheet's filters (source, state)", () => {
     };
     vm.createContext(ctx);
     vm.runInContext(src, ctx);
-    return { ctx, els, fetchCalls, responses, svg, legendEl, tableEl };
+    return { ctx, els, fetchCalls, responses, svg, legendEl, scopeEl, tableEl, tableScrollEl, wrap };
   }
 
   it("source filter re-renders sentence, chart and list together", async () => {
@@ -344,7 +363,7 @@ describe("the ledger sheet's filters (source, state)", () => {
     expect(fetchCalls.some((u) => u.includes("source=stated"))).toBe(true);
     // All three surfaces reflect the new fetch's data, not the previous one's.
     expect(els["ledger-sentence"].textContent).toBe("Stated-only line.");
-    expect(els["ledger-list"].innerHTML).toContain("No decisions yet");
+    expect(els["ledger-list"].innerHTML).toContain("No open decisions");
   });
 
   it("switching state re-fetches and re-renders too, and a repeat of the same tab is a no-op", async () => {
@@ -361,12 +380,24 @@ describe("the ledger sheet's filters (source, state)", () => {
     expect(fetchCalls.some((u) => u.includes("state=resolved"))).toBe(true);
   });
 
-  it("shows the empty state with zero decisions logged", async () => {
+  it("UX advisor round 2: empty Open tab says 'No open decisions', not the onboarding line", async () => {
     const { ctx, els, responses } = harness();
     responses.calibration = notReadyResult();
     responses.decisions = [];
 
     await ctx.openLedgerSheet();
+
+    expect(els["ledger-list"].innerHTML).toContain("No open decisions");
+    expect(els["ledger-list"].innerHTML).not.toContain("No decisions yet");
+  });
+
+  it("empty Resolved tab keeps the fuller onboarding line", async () => {
+    const { ctx, els, responses } = harness();
+    responses.calibration = notReadyResult();
+    responses.decisions = [];
+    await ctx.openLedgerSheet();
+
+    await ctx.setLedgerState("resolved");
 
     expect(els["ledger-list"].innerHTML).toContain("No decisions yet");
   });
@@ -388,5 +419,73 @@ describe("the ledger sheet's filters (source, state)", () => {
     expect(html).toContain("Right call");
     expect(html).toContain("no percentage given");
     expect(html).toContain("Edited after it was logged");
+  });
+
+  it("UX advisor round 2: the calibration block (wrap) is hidden while its own fetch is in flight, and while it awaits", async () => {
+    const { ctx, els, responses } = harness();
+    let resolveCalibration: (() => void) | undefined;
+    responses.calibration = readyResult();
+    responses.decisions = [];
+    const realFetch = ctx.fetch;
+    ctx.fetch = async (url: string) => {
+      if (url.includes("/decisions/calibration")) {
+        await new Promise<void>((resolve) => { resolveCalibration = resolve; });
+      }
+      return realFetch(url);
+    };
+
+    const openPromise = ctx.openLedgerSheet();
+    // Still in flight: hidden, and no blank chart/legend showing underneath.
+    expect(els["ledger-chart-wrap"].hidden).toBe(true);
+
+    resolveCalibration!();
+    await openPromise;
+    expect(els["ledger-chart-wrap"].hidden).toBe(false);
+  });
+
+  it("UX advisor round 2: a calibration-only failure drops the chart quietly and still shows the list", async () => {
+    const { ctx, els, responses } = harness();
+    responses.decisions = [{ id: "d1", content: "Decided to hire Dana", created_at: Date.now(), confidence: 0.7, confidence_source: "stated", outcome: null, review_at: Date.UTC(2026, 11, 26, 12), rearms: 0, edited_since_recorded: false }];
+    ctx.fetch = async (url: string) => {
+      if (url.includes("/decisions/calibration")) throw new Error("network down");
+      return { ok: true, json: async () => ({ ok: true, decisions: responses.decisions, total: 1, limit: 50, offset: 0 }) };
+    };
+
+    await ctx.openLedgerSheet();
+
+    expect(els["ledger-chart-wrap"].hidden).toBe(true);
+    expect(els["ledger-sentence"].textContent).toBe("");
+    // No error text of its own on the sentence line, and the list still rendered.
+    expect(els["ledger-list"].innerHTML).toContain("Decided to hire Dana");
+  });
+
+  it("UX advisor round 2: the chart carries a scope note explaining it is not tab-scoped", async () => {
+    const { ctx, scopeEl, responses } = harness();
+    responses.calibration = readyResult();
+    responses.decisions = [];
+
+    await ctx.openLedgerSheet();
+
+    expect(scopeEl.textContent).toContain("not just this tab");
+  });
+
+  it("UI reviewer round 2: the list's own error state offers a Try again button that retries", async () => {
+    const { ctx, els, responses } = harness();
+    responses.calibration = notReadyResult();
+    let listCalls = 0;
+    ctx.fetch = async (url: string) => {
+      if (url.includes("/decisions/calibration")) return { ok: true, json: async () => ({ ok: true, ...responses.calibration }) };
+      listCalls++;
+      if (listCalls === 1) throw new Error("offline");
+      return { ok: true, json: async () => ({ ok: true, decisions: [{ id: "d1", content: "Decided to hire Dana", created_at: Date.now(), confidence: 0.7, confidence_source: "stated", outcome: null, review_at: null, rearms: 0, edited_since_recorded: false }], total: 1, limit: 50, offset: 0 }) };
+    };
+
+    await ctx.openLedgerSheet();
+    const html = els["ledger-list"].innerHTML;
+    expect(html).toContain("Could not load the decision log");
+    expect(html).toContain("loadLedgerList()");
+
+    await ctx.loadLedgerList();
+    expect(els["ledger-list"].innerHTML).toContain("Decided to hire Dana");
   });
 });

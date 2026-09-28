@@ -1044,11 +1044,32 @@
   margin: 10px 0;
 }
 
-/* Five columns (range, n, you said, came true, stated/inferred) do not fit
-   390px next to each other at a readable size — scrolls rather than
-   clipping the rightmost column or shrinking text past legibility. */
+.ledger-chart-scope {
+  margin: -4px 0 8px;
+}
+
+/*
+ * UI review round 2 (MAJOR): four columns (range, n, you said to came true,
+ * stated/estimated) still do not always fit 390px next to each other at a
+ * readable size, and a hard clip with no cue read as missing data. Scrolls
+ * (so nothing is actually lost) AND fades the right edge when there is more
+ * to see, so the cue is there without a redundant fade on a table that
+ * already fits.
+ */
 .ledger-table-scroll {
+  position: relative;
   overflow-x: auto;
+}
+
+.ledger-table-scroll.has-overflow::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 28px;
+  background: linear-gradient(to right, transparent, var(--bg));
+  pointer-events: none;
 }
 
 /* Deliberately its own class, not .chart: the dot plot's natural height is
@@ -1183,6 +1204,29 @@
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* UI review round 2: at the loops panel's narrow column width (span3), two
+   labels as long as "Received" and "Not a commitment" next to wrapped
+   content spilled outside the card. The actions move under the text
+   instead, left-aligned and compact, scoped to the loops panel only so the
+   upkeep/connected-sources panel's own .task rows are untouched. */
+.loops-group .task {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.loops-group .task-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+/* UI review round 2 (NIT): the sheet's own rows keep the side-by-side
+   layout (there is room at 390px), but centering the actions against a
+   two- or three-line title read as misaligned with it. Top-aligned instead. */
+#loops-list .task {
+  align-items: flex-start;
 }
 
 .board .src .ti {

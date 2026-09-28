@@ -110,7 +110,10 @@ const I18N_EN = {
     topicsSub: 'Most used tags',
     rereadSub: 'Old, important, and connected to what you\'re working on now',
     loopsTitle: 'Open loops',
-    loopsSub: 'Things you said you would do',
+    // T7-E, UX advisor round 2: the panel now shows both directions, so the
+    // subtitle names both. Draft, not yet in 18-copy-deck.md: flagged for
+    // the copywriter (board.loopsSub does not exist there yet).
+    loopsSub: "What you owe, and what's owed to you",
     ledgerTitle: 'Decision log',
     ledgerSub: 'How often your calls come true',
     saved: 'Saved',
@@ -812,7 +815,12 @@ const I18N_EN = {
     },
     openLog: 'Open the log',
     empty: "No decisions yet. Tell your AI about a choice you've made and how sure you are, and it can log it here.",
+    // T7-E, UX advisor round 2: the Open tab's own empty line, so a brain
+    // with resolved decisions but nothing currently open does not read the
+    // "no decisions yet" onboarding line. Draft, flagged for the copywriter.
+    emptyOpen: 'No open decisions.',
     loadFailed: 'Could not load the decision log.',
+    tryAgain: 'Try again',
     reviewAround: 'Review around {date}',
     outcomeRight: 'Right call',
     outcomeWrong: 'Wrong call',
@@ -828,6 +836,11 @@ const I18N_EN = {
     tableColSplit: 'Stated / estimated',
     tableCaption: 'What you said, next to how often it came true, by confidence',
     caption: 'Accuracy score: {brier}. Lower is better: 0 is perfect, and always saying 50% scores 0.25.',
+    // T7-E, UI reviewer round 2: the chart is scored decisions only, so it
+    // reads identically on the Open and Resolved tabs (only the list below
+    // changes). This says so, rather than the toggle looking like it does
+    // nothing. Draft, flagged for the copywriter.
+    chartScopeNote: "This reflects every decision you've resolved, not just this tab.",
   },
   loops: {
     title: 'Open loops',
@@ -854,6 +867,7 @@ const I18N_EN = {
     fromName: 'from {name}',
     dueDate: 'due {date}',
     wasDueDate: 'was due {date}',
+    tryAgain: 'Try again',
   },
   due: {
     title: 'Due',
@@ -881,6 +895,11 @@ const I18N_EN = {
     cantTellYet: 'Too early to tell',
     addNote: 'Add a note',
     notePlaceholder: 'How did it go? (optional)',
+    // T7-E, UX advisor round 2: a static label above the four outcome
+    // buttons (distinct from the note's own placeholder above, which asks
+    // the same question for the optional free-text note). Draft, flagged
+    // for the copywriter.
+    outcomeLabel: 'How did it go?',
     outcomeFailed: 'Could not record this: {message}',
     outcomeToastRight: 'Logged as the right call',
     outcomeToastWrong: 'Logged as the wrong call',
@@ -889,7 +908,6 @@ const I18N_EN = {
     outcomeToastNoMore: 'Okay. No more reviews for this one',
     undo: 'Undo',
     undoFailed: 'Could not undo: {message}',
-    owedToYouBy: 'Owed to you by {name}',
     owedToYou: 'Owed to you',
   },
   notifications: {
@@ -1187,7 +1205,7 @@ const I18N_IT = {
     topicsSub: 'I tag più usati',
     rereadSub: 'Vecchio, importante e collegato a ciò su cui stai lavorando ora',
     loopsTitle: 'Impegni aperti',
-    loopsSub: 'Cose che hai detto che avresti fatto',
+    loopsSub: 'Cosa devi fare e cosa ti devono',
     ledgerTitle: 'Registro delle decisioni',
     ledgerSub: 'Quanto spesso le tue previsioni si avverano',
     saved: 'Salvato',
@@ -1865,7 +1883,9 @@ const I18N_IT = {
     },
     openLog: 'Apri il registro',
     empty: 'Ancora nessuna decisione. Racconta alla tua IA una scelta che hai fatto e con quale sicurezza: potrà registrarla qui.',
+    emptyOpen: 'Nessuna decisione aperta.',
     loadFailed: 'Impossibile caricare il registro delle decisioni.',
+    tryAgain: 'Riprova',
     reviewAround: 'Da rivedere intorno al {date}',
     outcomeRight: 'Scelta giusta',
     outcomeWrong: 'Scelta sbagliata',
@@ -1881,6 +1901,7 @@ const I18N_IT = {
     tableColSplit: 'Dichiarate / stimate',
     tableCaption: 'La tua sicurezza dichiarata, accanto a quanto spesso le decisioni si sono avverate',
     caption: 'Punteggio di accuratezza: {brier}. Più basso è meglio: 0 è perfetto, e dire sempre 50% dà 0,25.',
+    chartScopeNote: 'Riflette tutte le decisioni che hai valutato, non solo questa scheda.',
   },
   loops: {
     title: 'Impegni aperti',
@@ -1904,6 +1925,7 @@ const I18N_IT = {
     fromName: 'da {name}',
     dueDate: 'scade il {date}',
     wasDueDate: 'scadeva il {date}',
+    tryAgain: 'Riprova',
   },
   due: {
     title: 'Scadenze',
@@ -1924,6 +1946,7 @@ const I18N_IT = {
     cantTellYet: 'Troppo presto per dirlo',
     addNote: 'Aggiungi una nota',
     notePlaceholder: "Com'è andata? (facoltativo)",
+    outcomeLabel: "Com'è andata?",
     outcomeFailed: 'Impossibile registrare: {message}',
     outcomeToastRight: 'Registrata come scelta giusta',
     outcomeToastWrong: 'Registrata come scelta sbagliata',
@@ -1932,7 +1955,6 @@ const I18N_IT = {
     outcomeToastNoMore: "Va bene. Nessun'altra revisione per questa decisione",
     undo: 'Annulla',
     undoFailed: 'Impossibile annullare: {message}',
-    owedToYouBy: 'Te lo deve {name}',
     owedToYou: 'Ti devono',
   },
   notifications: {

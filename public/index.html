@@ -898,8 +898,9 @@
           <button type="button" class="loops-tab" id="ledger-state-resolved" role="tab" aria-selected="false" onclick="setLedgerState('resolved')" data-i18n="ledger.stateResolved">Resolved</button>
         </div>
         <p class="digest-note" id="ledger-sentence"></p>
-        <div class="ledger-chart-wrap">
+        <div class="ledger-chart-wrap" id="ledger-chart-wrap" hidden>
           <div class="legend" id="ledger-legend"></div>
+          <p class="digest-note ledger-chart-scope" id="ledger-chart-scope"></p>
           <div class="ledger-chart" id="ledger-chart"><svg></svg></div>
           <button class="digest-more" id="ledger-table-toggle" type="button" onclick="toggleLedgerTable()"></button>
           <div class="ledger-table-scroll">

@@ -48,7 +48,12 @@ function calibrationTooltipText(row) {
   return `${row.label}: ${stated}, ${hit}, ${n}`
 }
 
-/** "○ You said · ● Came true" (Design 7.4 item 3): always present, ready or not, so the legend is never itself the signal for whether there is data. */
+/**
+ * "○ You said · ● Came true". UX advisor round 2: only when the chart
+ * itself is drawn, not "always" as Design 7.4 item 3 first had it — a
+ * legend with no chart under it read as a second empty element next to the
+ * not-ready sentence, not as a promise of what the chart will show later.
+ */
 function renderLedgerLegend(el) {
   if (!el) return
   el.innerHTML =
@@ -56,7 +61,16 @@ function renderLedgerLegend(el) {
     `<span class="legend-item"><i class="cal-mark cal-mark--dot"></i>${escHtml(t('ledger.legendHit'))}</span>`
 }
 
-/** Every bucket, shown or not (Design 7.4 item 3: "table view mirrors every value"), reusing chart.js's table-toggle wording since it is the same pattern, not a new one. */
+/**
+ * Every bucket, shown or not (Design 7.4 item 3: "table view mirrors every
+ * value"), reusing chart.js's table-toggle wording since it is the same
+ * pattern, not a new one.
+ *
+ * UI review (390px): five separate columns clipped "Came true" with no
+ * scroll cue. "You said" and "Came true" fold into one column ("74% →
+ * 52%") from the two already-approved headers, not a new string, so four
+ * columns fit instead of five.
+ */
 function renderLedgerTable(el, rows) {
   if (!el) return
   const toggleBtn = document.getElementById('ledger-table-toggle')
@@ -65,19 +79,24 @@ function renderLedgerTable(el, rows) {
   if (caption) caption.textContent = t('ledger.tableCaption')
   const thead = el.querySelector('thead')
   const tbody = el.querySelector('tbody')
+  const statedVsHitHeader = `${t('ledger.tableColStated')} → ${t('ledger.tableColHit')}`
   if (thead) {
-    thead.innerHTML = `<tr><th>${escHtml(t('ledger.tableColBucket'))}</th><th>${escHtml(t('ledger.tableColN'))}</th><th>${escHtml(t('ledger.tableColStated'))}</th><th>${escHtml(t('ledger.tableColHit'))}</th><th>${escHtml(t('ledger.tableColSplit'))}</th></tr>`
+    thead.innerHTML = `<tr><th>${escHtml(t('ledger.tableColBucket'))}</th><th>${escHtml(t('ledger.tableColN'))}</th><th>${escHtml(statedVsHitHeader)}</th><th>${escHtml(t('ledger.tableColSplit'))}</th></tr>`
   }
   if (tbody) {
     tbody.innerHTML = rows
       .map((row) => {
-        const statedCell = row.shown ? `${Math.round(row.meanStated * 100)}%` : t('ledger.notEnoughYet', { n: row.n })
-        const hitCell = row.shown ? `${Math.round(row.hitRate * 100)}%` : ''
+        const statedVsHitCell = row.shown ? `${Math.round(row.meanStated * 100)}% → ${Math.round(row.hitRate * 100)}%` : t('ledger.notEnoughYet', { n: row.n })
         const splitCell = row.shown ? `${row.nStated}/${row.nInferred}` : ''
-        return `<tr><td>${escHtml(row.label)}</td><td class="num">${row.n}</td><td class="num">${escHtml(statedCell)}</td><td class="num">${escHtml(hitCell)}</td><td class="num">${escHtml(splitCell)}</td></tr>`
+        return `<tr><td>${escHtml(row.label)}</td><td class="num">${row.n}</td><td class="num">${escHtml(statedVsHitCell)}</td><td class="num">${escHtml(splitCell)}</td></tr>`
       })
       .join('')
   }
+  // UI review round 2 (MAJOR): the right-edge fade (.has-overflow, board.css)
+  // only makes sense when the table is actually wider than its scroll box —
+  // a table that already fits gets no redundant cue.
+  const scrollEl = el.closest ? el.closest('.ledger-table-scroll') : null
+  if (scrollEl) scrollEl.classList.toggle('has-overflow', scrollEl.scrollWidth > scrollEl.clientWidth)
 }
 
 function toggleLedgerTable() {
@@ -86,6 +105,11 @@ function toggleLedgerTable() {
   if (!table) return
   table.hidden = !table.hidden
   if (btn) btn.textContent = table.hidden ? t('board.chartShowTable') : t('board.chartHideTable')
+  // A hidden table reports scrollWidth/clientWidth as 0/0 (renderLedgerTable
+  // ran while it was still collapsed), so the overflow fade is only knowable
+  // once it is actually visible.
+  const scrollEl = table.closest ? table.closest('.ledger-table-scroll') : null
+  if (scrollEl && !table.hidden) scrollEl.classList.toggle('has-overflow', scrollEl.scrollWidth > scrollEl.clientWidth)
 }
 
 function hideLedgerTip() {
@@ -108,20 +132,28 @@ function showLedgerTip(target, row) {
 
 /**
  * Draws the calibration dot plot into `chartEl` (the `.chart` container,
- * holding an `<svg>` child), its legend and table (siblings under
- * `chartEl.parentElement`, chart.js's own convention). Not ready: clears the
- * chart, still renders the (always-present) legend, and clears the table.
+ * holding an `<svg>` child), its legend, scope note and table (siblings
+ * under `chartEl.parentElement`, chart.js's own convention).
+ *
+ * UX advisor round 2: not ready draws nothing at all here, legend included
+ * (loadLedgerCalibration below hides the whole wrap in that case too, but
+ * this stays correct standalone). The scope note explains why the chart
+ * itself never changes between the Open and Resolved tabs: it is always
+ * every scored decision, since calibration has no state filter of its own.
  */
 function renderCalibrationChart(chartEl, result) {
   const wrap = chartEl && chartEl.parentElement
   const legendEl = wrap && wrap.querySelector('.legend')
+  const scopeEl = wrap && wrap.querySelector('.ledger-chart-scope')
   const tableEl = wrap && wrap.querySelector('.data-table')
-  renderLedgerLegend(legendEl)
+  const ready = !!(result && result.ready)
+  if (legendEl) { if (ready) renderLedgerLegend(legendEl); else legendEl.innerHTML = '' }
+  if (scopeEl) scopeEl.textContent = ready ? t('ledger.chartScopeNote') : ''
 
   if (!chartEl) return
   const svg = chartEl.querySelector('svg')
   const rows = bucketRows(result)
-  if (!result || !result.ready || !svg) {
+  if (!ready || !svg) {
     if (svg) svg.innerHTML = ''
     renderLedgerTable(tableEl, [])
     return
@@ -235,12 +267,12 @@ function updateLedgerFilterTabs() {
 }
 
 /**
- * Both filters re-render the sentence, the chart and the list together
- * (Design 7.4 item 1: "The source filter scopes the sentence, the chart and
- * the list"), through the one loadLedger call below — even though GET
+ * Both filters re-fetch and re-render the sentence, the chart and the list
+ * together (Design 7.4 item 1: "The source filter scopes the sentence, the
+ * chart and the list"), through loadLedger below, even though GET
  * /decisions itself has no source parameter (only /decisions/calibration
- * does), so a state change and a source change read identically to the rest
- * of the sheet rather than one silently leaving stale data on screen.
+ * does). A state change and a source change read identically either way,
+ * rather than one silently leaving stale data on screen.
  */
 function setLedgerSource(source) {
   if (source === ledgerSource) return
@@ -334,39 +366,67 @@ function decisionRow(item) {
     </div>`
 }
 
+/** The Open tab's own empty line (UX advisor round 2), so a brain with resolved decisions but nothing currently open does not read the "no decisions yet" onboarding line meant for a brain with none at all. */
 function renderLedgerList() {
   const el = document.getElementById('ledger-list')
   if (!el) return
   if (!loadedDecisions.length) {
-    el.innerHTML = `<p class="digest-note">${escHtml(t('ledger.empty'))}</p>`
+    const emptyText = ledgerState === 'open' ? t('ledger.emptyOpen') : t('ledger.empty')
+    el.innerHTML = `<p class="digest-note">${escHtml(emptyText)}</p>`
     return
   }
   el.innerHTML = loadedDecisions.map(decisionRow).join('')
 }
 
-/** Fetches the calibration read and the decisions list for the current filters, then renders the sentence, the chart, the topic line and the list together, so no piece is left showing a stale filter's data while another has already moved on. */
-async function loadLedger() {
+/**
+ * The calibration read and chart (UX advisor round 2): rendered only once
+ * its own fetch returns and qualifies. Loading and not-ready both show just
+ * the sentence, with the chart wrap (legend, chart, table) hidden rather
+ * than sitting there blank. A failure here degrades quietly, with no error
+ * text of its own — the list below is a separate fetch (loadLedgerList) and
+ * keeps working even if this one does not.
+ */
+async function loadLedgerCalibration() {
   const sentenceEl = document.getElementById('ledger-sentence')
-  const listEl = document.getElementById('ledger-list')
+  const wrapEl = document.getElementById('ledger-chart-wrap')
   if (sentenceEl) sentenceEl.textContent = t('integrations.loading')
-  if (listEl) listEl.innerHTML = `<p class="digest-note">${escHtml(t('integrations.loading'))}</p>`
+  if (wrapEl) wrapEl.hidden = true
+  renderLedgerTopicLine(null)
+  renderLedgerCaption(null)
   try {
-    const [calRes, listRes] = await Promise.all([
-      fetch(`${WORKER_URL}/decisions/calibration?source=${ledgerSource}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } }),
-      fetch(`${WORKER_URL}/decisions?state=${ledgerState}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } }),
-    ])
-    const calData = await calRes.json()
-    const listData = await listRes.json()
-    if (!calData.ok) throw new Error(calData.error || 'failed')
-    if (!listData.ok) throw new Error(listData.error || 'failed')
-    loadedDecisions = listData.decisions || []
-    renderLedgerSentence(calData)
-    renderCalibrationChart(document.getElementById('ledger-chart'), calData)
-    renderLedgerTopicLine(calData)
-    renderLedgerCaption(calData)
-    renderLedgerList()
+    const res = await fetch(`${WORKER_URL}/decisions/calibration?source=${ledgerSource}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+    const data = await res.json()
+    if (!data.ok) throw new Error(data.error || 'failed')
+    renderLedgerSentence(data)
+    renderLedgerTopicLine(data)
+    renderLedgerCaption(data)
+    if (wrapEl) wrapEl.hidden = !data.ready
+    if (data.ready) renderCalibrationChart(document.getElementById('ledger-chart'), data)
   } catch {
     if (sentenceEl) sentenceEl.textContent = ''
-    if (listEl) listEl.innerHTML = `<p class="digest-note"><i class="ti ti-wifi-off"></i> ${escHtml(t('ledger.loadFailed'))}</p>`
+    if (wrapEl) wrapEl.hidden = true
   }
+}
+
+/** The decisions list for the current state filter: its own fetch, its own loading and error states, independent of the calibration read above. */
+async function loadLedgerList() {
+  const listEl = document.getElementById('ledger-list')
+  if (listEl) listEl.innerHTML = `<p class="digest-note">${escHtml(t('integrations.loading'))}</p>`
+  try {
+    const res = await fetch(`${WORKER_URL}/decisions?state=${ledgerState}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+    const data = await res.json()
+    if (!data.ok) throw new Error(data.error || 'failed')
+    loadedDecisions = data.decisions || []
+    renderLedgerList()
+  } catch {
+    if (listEl) {
+      listEl.innerHTML = `<p class="digest-note"><i class="ti ti-wifi-off"></i> ${escHtml(t('ledger.loadFailed'))}</p>` +
+        `<button type="button" class="digest-more" onclick="loadLedgerList()">${escHtml(t('ledger.tryAgain'))}</button>`
+    }
+  }
+}
+
+/** Both filters re-fetch and re-render the sentence, the chart and the list together (Design 7.4 item 1), through these two independent loads. */
+function loadLedger() {
+  return Promise.all([loadLedgerCalibration(), loadLedgerList()])
 }

@@ -78,7 +78,8 @@ async function loadLoopsQueue({ append = false } = {}) {
     // Deliberately not the empty state: "nothing is open" would tell the user
     // their list is clear at exactly the moment it could not be checked.
     if (!append) {
-      list.innerHTML = `<p class="digest-note"><i class="ti ti-wifi-off"></i> ${escHtml(t('loops.loadFailed'))}</p>`
+      list.innerHTML = `<p class="digest-note"><i class="ti ti-wifi-off"></i> ${escHtml(t('loops.loadFailed'))}</p>` +
+        `<button type="button" class="digest-more" onclick="loadLoopsQueue()">${escHtml(t('loops.tryAgain'))}</button>`
     }
   }
 }

@@ -275,6 +275,20 @@ describe("decision rows in the due sheet (T7-E, Design 7.2)", () => {
     expect((html.match(/Review:/g) || []).length).toBe(1);
   });
 
+  it("UX advisor round 2: a label introduces the four outcome buttons", async () => {
+    const ctx = load([decisionResponse()]);
+
+    await ctx.loadDueQueue();
+
+    const html = ctx.__els.get("due-list").innerHTML;
+    // The label's own text (exactly "How did it go?"), distinct from the note
+    // input's placeholder attribute, which appends "(optional)".
+    const labelMatch = html.match(/>How did it go\?</);
+    expect(labelMatch).not.toBeNull();
+    const buttonsAt = html.indexOf("resolveDecision('d1', 'right'");
+    expect(buttonsAt).toBeGreaterThan(labelMatch!.index!);
+  });
+
   it("an optional note link expands a one-line input, never required", async () => {
     const ctx = load([decisionResponse()]);
     await ctx.loadDueQueue();
@@ -370,7 +384,10 @@ describe("inbound commitment rows in the due sheet (T7-E, Design 5.3, 7.1)", () 
 
     await ctx.loadDueQueue();
 
-    expect(ctx.__els.get("due-list").innerHTML).toContain("Owed to you by Priya");
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toContain("Owed to you");
+    // UX advisor round 2: "from Priya", the same wording loops.js uses, not "by Priya".
+    expect(html).toContain("from Priya");
   });
 
   it("falls back to a plain line when there is no usable counterparty name", async () => {
@@ -382,7 +399,7 @@ describe("inbound commitment rows in the due sheet (T7-E, Design 5.3, 7.1)", () 
 
     const html = ctx.__els.get("due-list").innerHTML;
     expect(html).toContain("Owed to you");
-    expect(html).not.toContain("Owed to you by");
+    expect(html).not.toContain("from ");
   });
 
   it("keeps Done, Snooze and Not a commitment", async () => {

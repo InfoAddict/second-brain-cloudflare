@@ -132,6 +132,18 @@ describe("the open-loops queue", () => {
     expect(html).toContain("Could not load");
   });
 
+  it("UI reviewer round 2: the error state offers a Try again button that retries the fetch", async () => {
+    const ctx = load([new Error("offline"), page(1)]);
+
+    await ctx.loadLoopsQueue();
+    const html = ctx.__els.get("loops-list").innerHTML;
+    expect(html).toContain("Try again");
+    expect(html).toContain("loadLoopsQueue()");
+
+    await ctx.loadLoopsQueue();
+    expect(ctx.__els.get("loops-list").innerHTML).toContain("Follow up on item 0");
+  });
+
   it("pages without repeating or skipping", async () => {
     const ctx = load([page(25, 25)]);
 
