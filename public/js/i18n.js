@@ -359,6 +359,52 @@ const I18N_EN = {
     evHeld: 'Held',
     evReleased: 'Released',
   },
+  // T3/T4 lane S4 (16-t3-t4-trust-spec.md 7.9): the home board's "AI tools
+  // changed N memories" line. DRAFT, per the copywriter (1aa406a6) - not
+  // confirmed against the live entry, since that memory could not be reached.
+  aiChanges: {
+    panelTitle: 'Changed by AI tools',
+    panelSub:
+      'These changes are already in effect, and each one can be undone. Held memories stay out of search until someone releases them.',
+    line: { one: 'AI tools changed {n} memory', other: 'AI tools changed {n} memories' },
+    heldSuffix: { one: '{n} held', other: '{n} held' },
+    review: 'Review',
+    byTool: 'via {tool}',
+    anAiTool: 'an AI tool',
+    evEditedTrusted: 'Edited a trusted memory',
+    evCapsule: 'Changed what your AI tools always see',
+    evTrusted: 'Marked as trusted',
+    evUnconfirmed: 'Marked as unconfirmed',
+    evWrong: 'Marked as wrong',
+    evTrash: 'Moved to the trash',
+    evReverted: 'Undid a change',
+    evReleased: 'Released a held memory',
+    evHeld: 'Held: {reason}',
+    // DRAFT, no deck key for the too_long case specifically - reuses held.tooLongChip's wording.
+    evHeldTooLong: 'Held: too long',
+    group: '{what} · {time}',
+    family: {
+      status: { one: '{n} status change', other: '{n} status changes' },
+      canonical_edit: { one: '{n} edit to trusted memories', other: '{n} edits to trusted memories' },
+      capsule_changed: { one: '{n} change to what AI tools always see', other: '{n} changes to what AI tools always see' },
+      trash: { one: '{n} memory moved to the trash', other: '{n} memories moved to the trash' },
+      revert: { one: '{n} memory put back to an earlier version', other: '{n} memories put back to an earlier version' },
+      released: { one: '{n} held memory released', other: '{n} held memories released' },
+      held: { one: '{n} memory held', other: '{n} memories held' },
+    },
+    undoAll: 'Undo all',
+    releaseAll: 'Release all',
+    confirmUndoAll:
+      'Undo these {n} changes? Each memory goes back to how it was before {time}. Memories changed since then are skipped. You can undo each one again from its history.',
+    confirmReleaseAll: 'Release these {n} memories? They join search, and your AI tools will see them.',
+    partial: {
+      one: 'Undid {done} of {n}. {skipped} had changed again since, so it was left as it is.',
+      other: 'Undid {done} of {n}. {skipped} changed since, so they were left as they are.',
+    },
+    // DRAFT, no deck key: shown instead of Undo/Release on a teammate's row
+    // this viewer cannot act on (assertCanMutateEntry, src/lib/entry-access.ts).
+    teammateNote: 'Only the author or an admin can undo these.',
+  },
   // T3/T4 lane S5 wires lane W's too-long keys (deck 9) into the chip and
   // banner, plus the general hold-reason keys from 16-t3-t4-trust-spec.md 7.9.
   held: {
@@ -1675,6 +1721,46 @@ const I18N_IT = {
     reasonHeldTooLong: 'Trattenuto: troppo lungo per il controllo automatico',
     evHeld: 'Trattenuto',
     evReleased: 'Rilasciato',
+  },
+  aiChanges: {
+    panelTitle: 'Modifiche degli strumenti di IA',
+    panelSub:
+      "Queste modifiche sono già attive e ognuna si può annullare. I ricordi trattenuti restano fuori dalla ricerca finché qualcuno non li rilascia.",
+    line: { one: 'Gli strumenti di IA hanno modificato {n} ricordo', other: 'Gli strumenti di IA hanno modificato {n} ricordi' },
+    heldSuffix: { one: '{n} trattenuto', other: '{n} trattenuti' },
+    review: 'Rivedi',
+    byTool: 'tramite {tool}',
+    anAiTool: 'uno strumento di IA',
+    evEditedTrusted: 'Ricordo affidabile modificato',
+    evCapsule: 'Modificato ciò che i tuoi strumenti di IA vedono sempre',
+    evTrusted: 'Segnato come affidabile',
+    evUnconfirmed: 'Segnato come non confermato',
+    evWrong: 'Segnato come errato',
+    evTrash: 'Spostato nel cestino',
+    evReverted: 'Modifica annullata',
+    evReleased: 'Ricordo trattenuto rilasciato',
+    evHeld: 'Trattenuto: {reason}',
+    evHeldTooLong: 'Trattenuto: troppo lungo',
+    group: '{what} · {time}',
+    family: {
+      status: { one: '{n} cambio di stato', other: '{n} cambi di stato' },
+      canonical_edit: { one: '{n} modifica a ricordi affidabili', other: '{n} modifiche a ricordi affidabili' },
+      capsule_changed: { one: '{n} modifica a ciò che gli strumenti di IA vedono sempre', other: '{n} modifiche a ciò che gli strumenti di IA vedono sempre' },
+      trash: { one: '{n} ricordo spostato nel cestino', other: '{n} ricordi spostati nel cestino' },
+      revert: { one: '{n} ricordo riportato a una versione precedente', other: '{n} ricordi riportati a una versione precedente' },
+      released: { one: '{n} ricordo trattenuto rilasciato', other: '{n} ricordi trattenuti rilasciati' },
+      held: { one: '{n} ricordo trattenuto', other: '{n} ricordi trattenuti' },
+    },
+    undoAll: 'Annulla tutto',
+    releaseAll: 'Rilascia tutto',
+    confirmUndoAll:
+      "Annullare queste {n} modifiche? Ogni ricordo torna com'era prima delle {time}. I ricordi modificati dopo vengono saltati. Puoi annullare di nuovo ogni modifica dalla cronologia del ricordo.",
+    confirmReleaseAll: 'Rilasciare questi {n} ricordi? Entrano nella ricerca e i tuoi strumenti di IA potranno vederli.',
+    partial: {
+      one: "Annullate {done} su {n}. {skipped} era cambiato nel frattempo, quindi è rimasto com'era.",
+      other: "Annullate {done} su {n}. {skipped} erano cambiati nel frattempo, quindi sono rimasti com'erano.",
+    },
+    teammateNote: "Solo l'autore o un amministratore può annullarle.",
   },
   held: {
     // Copywriter ruling (S5): one root, "Trattenuto", everywhere in Italian -

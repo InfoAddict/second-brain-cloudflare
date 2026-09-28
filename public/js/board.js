@@ -213,7 +213,6 @@ function renderDecisionPanel(board, brief) {
       <div class="stop-actions"><button class="attn" type="button" onclick="openDueSheet()"><i class="ti ti-bell"></i>${escHtml(t('brief.attentionDue', { n: attention.due }))}</button></div>
     </article>`)
   }
-
   const panel = boardPanel('decide', { title: t('board.decideTitle'), sub: t('board.decideSub'), span: 4 })
   panel.className += ' decide' // the mockup's 1240px override (full width, not half) keys off this
   panel.body.innerHTML = `<div class="ledger"><div class="thread" aria-hidden="true"></div>${stops.join('')}</div>`
@@ -1073,6 +1072,7 @@ function openCapsuleComposer(slot) {
 // (see board.css's span classes and its 1240/900/700 breakpoints).
 BOARD_PANELS.push(
   renderGrowthPanel,
+  renderAiChangesPanel,
   renderDecisionPanel,
   renderLoopsPanel,
   renderLedgerPanel,
