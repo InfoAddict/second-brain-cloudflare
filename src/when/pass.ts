@@ -54,7 +54,7 @@ import { WHEN_PASS_MAX_TOKENS } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { initializeDatabase } from "../db/init";
 import { zonedMidnightMs } from "./timezone";
-import { OPEN_LOOP_SQL } from "../memory/loops";
+import { openLoopSql } from "../memory/loops";
 import type { ScopeClause } from "../lib/scope";
 
 /** Model calls spent per night, hard ceiling. */
@@ -134,13 +134,14 @@ async function writeWhenCursor(env: Env, cursor: WhenCursor): Promise<void> {
   }
 }
 
-function candidateSql(hasCursor: boolean, scopeClause: string | null): string {
+function candidateSql(hasCursor: boolean, scopeClause: string | null, now: number): string {
   const cursorClause = hasCursor ? `AND (created_at > ? OR (created_at = ? AND id > ?))` : "";
   const sliceClause = scopeClause ? `AND ${scopeClause}` : "";
+  // validity: current: a replaced note is not a when-extraction candidate either (T-0089.2.1)
   // scope-exempt: cron: the nightly pass's own single-workspace slice is folded into `scope` by the caller, same exemption shape as the other nightly passes; a direct/manual caller with no slice walks the whole corpus, same as before v3. GET /extract/dry-run instead passes a real scopeWhere(auth), so that path IS scoped.
   return `SELECT id, content, created_at FROM entries
           WHERE when_at IS NULL AND when_source IS NULL
-            AND (${OPEN_LOOP_SQL} OR tags LIKE '%"volatility:volatile"%')
+            AND (${openLoopSql(now)} OR tags LIKE '%"volatility:volatile"%')
             ${cursorClause}
             ${sliceClause}
           ORDER BY created_at ASC, id ASC
@@ -170,7 +171,7 @@ export async function fetchWhenCandidates(
   const bindings: (string | number)[] = [];
   if (hasPosition) bindings.push(cursor!.createdAt!, cursor!.createdAt!, cursor!.id!);
   if (scope) bindings.push(...scope.bindings);
-  const { results } = await env.DB.prepare(candidateSql(hasPosition, scope?.clause ?? null)).bind(...bindings).all();
+  const { results } = await env.DB.prepare(candidateSql(hasPosition, scope?.clause ?? null, Date.now())).bind(...bindings).all();
   // LIMIT is baked into candidateSql at WHEN_EXTRACT_PER_NIGHT; a caller
   // asking for fewer (GET /extract/dry-run) just reads fewer rows back.
   return (results as unknown as WhenCandidate[]).slice(0, limit);

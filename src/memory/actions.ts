@@ -15,6 +15,7 @@ import { LEDGER_TAG, STANDING_TAG } from "../tags/t7";
 import { OWED_TO_ME_TAG } from "../commitments/direction";
 import { standingTouched, type StandingCacheConfig } from "../standing/cache";
 import { buildOutcomeUpdate, isLedgerDecision, outcomeNoteText, type DecisionOutcomeResult } from "../decisions/outcome";
+import { auditValidity, retractionHook, RETRACTED_SOURCE_TAG, type ValidityHook } from "./validity";
 
 export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true" | "received" | "stop_standing";
 export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number; content?: string } | { ok: false; error: string; status: number };
@@ -44,13 +45,14 @@ export async function resolveEntryAction(
   if (action === "still_true") {
     for (let attempt = 0; attempt < 3; attempt++) {
       const row = await getReadableEntry(env, identity, id, `id, workspace_id, actor_id, tags, COALESCE(updated_at, created_at) AS prior_updated_at, staleness_checked_at`) as (EntryAccessRow & Record<string, any> | null);
-      if (!row) return { ok: false, error: `No entry found with ID: ${id}`, status: 404 };
+      if (!row) return { ok: false, error: `No memory found with ID: ${id}`, status: 404 };
       const denied = assertCanEditContent(identity, row);
       if (denied) return { ok: false, error: denied.message, status: 403 };
       const tags: string[] = JSON.parse(row.tags ?? "[]");
-      if (!hasStaleAsOf(tags)) return { ok: false, error: "Entry is not flagged as out of date", status: 400 };
+      // Keep clears both review markers: out of date, and built on a retracted memory (T-0089.2.4).
+      if (!hasStaleAsOf(tags) && !tags.includes(RETRACTED_SOURCE_TAG)) return { ok: false, error: "Entry is not flagged as out of date", status: 400 };
       const now = Date.now();
-      const nextTags = withoutStaleAsOf(tags);
+      const nextTags = withoutStaleAsOf(tags).filter(t => t !== RETRACTED_SOURCE_TAG);
       // Guarded on tags and workspace_id (buildCasGuard, spec P3, ADV-1/ADV-2): a concurrent edit
       // (a user-edited tag, say) between this read and the write must be kept, not overwritten by a
       // confirm that no longer describes the row as it stands, and a row moved out of this caller's
@@ -83,7 +85,7 @@ export async function resolveEntryAction(
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, content, when_at, when_kind, when_label, when_source") as (EntryAccessRow & Record<string, any> | null);
-    if (!row) return { ok: false, error: `No entry found with ID: ${id}`, status: 404 };
+    if (!row) return { ok: false, error: `No memory found with ID: ${id}`, status: 404 };
     const denied = assertCanEditContent(identity, row);
     if (denied) return { ok: false, error: denied.message, status: 403 };
     const tags = parseTags(row.tags as string);
@@ -286,6 +288,7 @@ export async function applyInsightResolution(
       // versioning: snapshot
       statements.push(env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx} WHERE e.id = ${p.add(row.id)} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values()));
     } else {
+      // validity: retraction-hooked
       const deprecated = withStatus(tags, "deprecated");
       statements.push(snapshotStatement(env, {
         entryId: row.id, reason: "status", change, content: { kind: "unchanged" }, nextTags: deprecated, meta: { insight_action: action }, now,
@@ -302,9 +305,19 @@ export async function applyInsightResolution(
   const resolved: string[] = [];
   const auditRows: AuditEventInput[] = [];
   const vectorsToDrop: OwnedVectors[] = [];
+  let hook: ValidityHook | null = null;
+  let hookOffset = 0;
   if (statements.length) {
     statements.push(pruneManyStatement(env, rows.map(r => r.id), cfg.VERSION_KEEP));
+    // D-RET: a dismissed insight that had replaced an older one hands it back; lands per row once it reads deprecated.
+    if (action === "dismiss") {
+      hook = retractionHook(env, found.filter(r => rows.some(x => x.id === r.id)).map(r => ({ id: r.id as string, workspaceId: (r.workspace_id ?? "") as string })),
+        () => `x.tags LIKE '%"status:deprecated"%'`, change, cfg, now, { cascade: true });
+      hookOffset = statements.length;
+      statements.push(...hook.statements);
+    }
     const results = await env.DB.batch(statements);
+    if (hook) await auditValidity(env, change, hook.read(results, hookOffset));
     for (const r of rows) {
       if (changesOf(results[r.updateAt]) === 0) continue;
       resolved.push(r.id);

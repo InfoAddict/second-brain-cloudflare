@@ -26,7 +26,7 @@ i18nCtx.initI18n("en");
 (globalThis as any).localeTag = i18nCtx.localeTag;
 (globalThis as any).getLocale = i18nCtx.getLocale;
 
-const { parseRecallResult, escHtml, escAttr, toDateStr, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, csvCell, csvDocument, layerChipHtml } = require("../../public/utils.js");
+const { parseRecallResult, escHtml, escAttr, toDateStr, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, csvCell, csvDocument, layerChipHtml, providerName } = require("../../public/utils.js");
 
 // Minimal fake document so the banner DOM glue can be tested in the node
 // environment without jsdom. appendChild registers the element by id so a later
@@ -586,5 +586,33 @@ describe("layerChipHtml", () => {
     expect(html).toContain("&lt;script&gt;");
     // And the title attribute is still a single well-formed attribute.
     expect(html).toContain('title="Visible to the whole team');
+  });
+});
+
+/**
+ * providerName() is the {provider} in a sentence ("by the Notion sync"), a
+ * different job from sourceBadge's lowercase chip label - the two must not
+ * be collapsed into one function just because they both read a source id.
+ */
+describe("providerName", () => {
+  it("names a synced integration by its brand", () => {
+    expect(providerName("notion")).toBe("Notion");
+    expect(providerName("calendar-google")).toBe("Google Calendar");
+    expect(providerName("email-icloud")).toBe("iCloud Mail");
+  });
+
+  it("names a source that is not a synced integration", () => {
+    expect(providerName("github")).toBe("GitHub");
+    expect(providerName("git-hook")).toBe("Git");
+    expect(providerName("obsidian")).toBe("Obsidian");
+  });
+
+  it("passes an unknown id through unchanged, rather than showing nothing", () => {
+    expect(providerName("some-future-provider")).toBe("some-future-provider");
+  });
+
+  it("passes null/empty through unchanged", () => {
+    expect(providerName(null)).toBe(null);
+    expect(providerName("")).toBe("");
   });
 });

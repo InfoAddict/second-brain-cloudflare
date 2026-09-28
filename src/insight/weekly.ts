@@ -179,6 +179,7 @@ export async function runWeeklyInsights(
   try {
     const cfg = await resolveConfig(env);
     await initializeDatabase(env);
+    const now = Date.now();
 
     const sliceIds = opts?.onlyWorkspaceIds ?? [];
     // Chunked against the platform's bound-parameter ceiling, the way every
@@ -225,10 +226,14 @@ export async function runWeeklyInsights(
     // The deprecation check is the same reasoning applied to a candidate whose
     // entries still exist but should no longer be reasoned over: accrual is
     // nightly and this is weekly, so up to seven days can pass between a pair
-    // being accrued and being read here, and a `supersedes` edge deprecates its
-    // target the moment it is created (src/capture/entry.ts). Filtering both
-    // sides here catches that drift regardless of which signal accrued the
-    // candidate or how eligibility was — or was not — checked at accrual time.
+    // being accrued and being read here. Before T-0089.2.1 a supersedes edge
+    // deprecated its target the moment it was created; a contradiction now
+    // closes the target's validity window instead (src/capture/entry.ts,
+    // keeping its status and vectors per D2.1), so the valid_until check below
+    // is what catches that path today, alongside status:deprecated for the
+    // other, still-live deprecation routes. Filtering both sides here catches
+    // that drift regardless of which signal accrued the candidate or how
+    // eligibility was — or was not — checked at accrual time.
     // a.tags/b.tags ride along on the same join this query already makes —
     // D1 (isEligiblePair, ./candidates.ts) has to be applied here too, not
     // only at accrual, or every candidate accrued before D1 existed keeps
@@ -243,6 +248,7 @@ export async function runWeeklyInsights(
       const sliceClause = chunk.length
         ? `AND a.workspace_id IN (${slicePlaceholders}) AND b.workspace_id IN (${slicePlaceholders})`
         : "";
+      // validity: current: a replaced side of a candidate pair is not insight material (5.5)
       const { results: chunkRows } = await env.DB.prepare(
         // scope-exempt: cron: no caller to scope to. Both workspaces are projected, and the loop below compares them BEFORE the pair reaches the model: a candidate whose two entries sit in different workspaces is skipped and settled, never reasoned over and never written anywhere. Accrual refuses to pair across workspaces (candidates.ts), so that only fires for pre-tenancy candidate rows. sliceClause is optionally present and is a list of workspace IDS read from the `workspaces` table (companyWorkspaceIds, below), never from a request — it narrows this cron's slate, it does not scope it to a caller, and there is no caller to scope to on either invocation
         `SELECT c.id, c.score, c.a_id, c.b_id, a.content AS a_content, b.content AS b_content,
@@ -255,6 +261,8 @@ export async function runWeeklyInsights(
          WHERE c.status = 'pending'
            AND a.tags NOT LIKE '%"status:deprecated"%'
            AND b.tags NOT LIKE '%"status:deprecated"%'
+           AND (a.valid_until IS NULL OR a.valid_until > ${now})
+           AND (b.valid_until IS NULL OR b.valid_until > ${now})
            ${sliceClause}
          ORDER BY c.score DESC
          LIMIT ?`,

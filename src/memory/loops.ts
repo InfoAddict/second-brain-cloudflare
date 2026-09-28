@@ -13,13 +13,20 @@
  * number the queue then fails to produce is the defect that predicate exists
  * to prevent, and one predicate is what stops it recurring here.
  */
-export const OPEN_LOOP_SQL = `tags LIKE '%"task"%'
+/**
+ * `now` is interpolated as a literal, not bound (T-0089.2.1): it is always
+ * this process's own Date.now(), never external input, the same choice
+ * dueSql (src/when/input.ts) makes — the sibling predicate this one is
+ * deliberately NOT shared with (see the module comment above).
+ */
+export const openLoopSql = (now: number) => `tags LIKE '%"task"%'
          AND tags NOT LIKE '%"status:deprecated"%'
          AND tags NOT LIKE '%"task:done"%'
          AND tags NOT LIKE '%"claude-response"%'
          AND tags NOT LIKE '%"codex-response"%'
          AND tags NOT LIKE '%"build-log"%'
-         AND tags NOT LIKE '%"resume-playbook"%'`;
+         AND tags NOT LIKE '%"resume-playbook"%'
+         AND (valid_until IS NULL OR valid_until > ${now})`;
 
 export const TASK_DONE_TAG = "task:done";
 

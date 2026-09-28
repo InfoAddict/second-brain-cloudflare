@@ -75,7 +75,13 @@ describe("renderRecallText why line", () => {
     slot: "direct",
     ...over,
   });
-  const m = (over: Partial<RecallMatch> = {}): RecallMatch => ({ id: "e1", content: "Body text", score: 1, createdAt: Date.UTC(2026, 8, 20, 12), updatedAt: Date.UTC(2026, 8, 20, 12), tags: ["status:canonical"], source: "claude", isUpdate: false, hop: 0, ...over });
+  const m = (over: Partial<RecallMatch> = {}): RecallMatch => ({
+    id: "e1", content: "Body text", score: 1, createdAt: Date.UTC(2026, 8, 20, 12), updatedAt: Date.UTC(2026, 8, 20, 12),
+    tags: ["status:canonical"], source: "claude", isUpdate: false, hop: 0,
+    validFrom: Date.UTC(2026, 8, 20, 12), validFromStated: false, validUntil: null, validityState: "current",
+    supersededBy: null, retractedSource: false,
+    ...over,
+  });
 
   it("adds one plain why line after the ID line", () => {
     const out = renderRecallText([m({ why: why() })], "");

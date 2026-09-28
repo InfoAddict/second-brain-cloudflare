@@ -1,4 +1,5 @@
 import { withoutVolatility } from "./volatility";
+import { currentValidityAt, SQL_NOW_MS } from "./validity";
 
 export const STALE_AS_OF = "stale:as-of";
 
@@ -10,10 +11,12 @@ export const STALE_AS_OF = "stale:as-of";
  * JSON member rather than a bare substring, the same way PENDING_INSIGHT_SQL does.
  *
  * Deprecated entries are excluded: deprecation retires a memory from recall, and
- * asking someone to re-verify something already out of circulation is make-work.
+ * asking someone to re-verify something already out of circulation is make-work. So are
+ * replaced and ended ones (T-0089.2.1): a closed window is history, not a claim to re-check.
+ * The fragment has no binding of its own, so "current" is read against the database clock.
  */
 export const STALE_REVIEW_SQL =
-  `tags LIKE '%"${STALE_AS_OF}"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+  `tags LIKE '%"${STALE_AS_OF}"%' AND tags NOT LIKE '%"status:deprecated"%' AND ${currentValidityAt("", SQL_NOW_MS)}`;
 
 export function hasStaleAsOf(tags: string[]): boolean {
   return tags.includes(STALE_AS_OF);

@@ -5,7 +5,7 @@ import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from "../compression/eligibility";
 import { intParam, json } from "../lib/http";
-import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
+import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
 import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere, scopeWhereForIdRead } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
@@ -16,8 +16,8 @@ import { PENDING_WHERE, indexPendingRow, type PendingRow } from "../vectorize/pe
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
-import { OPEN_LOOP_SQL, withTaskDone, withoutTask } from "../memory/loops";
-import { OPEN_OUTBOUND_SQL, OPEN_INBOUND_SQL, directionOf, counterpartyOf, dueKindOf } from "../commitments/direction";
+import { openLoopSql, withTaskDone, withoutTask } from "../memory/loops";
+import { openOutboundSql, openInboundSql, directionOf, counterpartyOf, dueKindOf } from "../commitments/direction";
 import { getStatus, withStatus } from "../memory/status";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { withKind } from "../memory/kind";
@@ -33,7 +33,7 @@ import { resolveEntryAction, applyInsightResolution } from "../memory/actions";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
 import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 import { readWhenCursor, fetchWhenCandidates, judgeCommitment } from "../when/pass";
-import { DUE_WITHIN_MS, DUE_SQL, parseExplicitWhen } from "../when/input";
+import { DUE_WITHIN_MS, dueSql, parseExplicitWhen } from "../when/input";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -944,11 +944,15 @@ export async function handleAdminRoutes(
     // written.
     const latchedAtRaw = await env.OAUTH_KV.get(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY).catch(() => null);
     const latchedAt = latchedAtRaw ? Number(latchedAtRaw) : null;
+    // T-0101.8.5: the KV marker set once history starts being recorded (T-0089.1.1),
+    // read here only — no D1 fallback. Omitted, not null, when it has never been set.
+    const historySinceRaw = await env.OAUTH_KV.get(VERSIONS_SINCE_KV_KEY).catch(() => null);
     return json({
       ok: vectorize.ok,
       version: SB_VERSION,
       vectorize: { ...vectorize, workspaceFilter: { supported, degradedQueries, latchedAt } },
       team,
+      ...(historySinceRaw ? { history_since: Number(historySinceRaw) } : {}),
     });
   }
 
@@ -1182,15 +1186,18 @@ export async function handleAdminRoutes(
     if (direction !== "out" && direction !== "in" && direction !== "all") {
       return json({ ok: false, error: 'direction must be "out", "in" or "all"' }, 400);
     }
-    const directionSql = direction === "out" ? OPEN_OUTBOUND_SQL : direction === "in" ? OPEN_INBOUND_SQL : OPEN_LOOP_SQL;
+    const now = Date.now();
+    const directionSql = direction === "out" ? openOutboundSql(now) : direction === "in" ? openInboundSql(now) : openLoopSql(now);
 
     const scope = scopeWhere(auth);
+    // validity: current: a replaced loop is not open (5.5)
     const [rows, countRow] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, tags, source, created_at FROM entries
          WHERE ${directionSql} AND ${scope.clause}
          ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       ).bind(...scope.bindings, limit, offset).all(),
+      // validity: current: the pager's total must match the same replaced-loop exclusion as the rows above (5.5)
       env.DB.prepare(
         `SELECT COUNT(*) AS n FROM entries WHERE ${directionSql} AND ${scope.clause}`,
       ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
@@ -1274,22 +1281,26 @@ export async function handleAdminRoutes(
       };
     };
 
+    // validity: current: a replaced "dentist Tuesday" must not appear in GET /due (5.5)
     const [overdueRows, overdueCount, upcomingRows, upcomingCount] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
-         WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}
+         WHERE ${dueSql(now)} AND when_at < ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      // validity: current: the overdue pager's total must match the same replaced-fact exclusion as the rows above (5.5)
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${dueSql(now)} AND when_at < ? AND ${scope.clause}`,
       ).bind(now, ...scope.bindings).first() as Promise<Record<string, any> | null>,
+      // validity: current: a replaced "dentist Tuesday" must not appear in the upcoming feed either (5.5)
       env.DB.prepare(
         `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
-         WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}
+         WHERE ${dueSql(now)} AND when_at >= ? AND when_at <= ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, upcomingBefore, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      // validity: current: the upcoming pager's total must match the same replaced-fact exclusion as the rows above (5.5)
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${dueSql(now)} AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
       ).bind(now, upcomingBefore, ...scope.bindings).first() as Promise<Record<string, any> | null>,
     ]);
 
@@ -1446,7 +1457,7 @@ export async function handleAdminRoutes(
     // The single-id form keeps its precise errors, because a client asking about
     // one pattern can act on "not found" and the bulk form cannot.
     if (body.ids === undefined) {
-      if (!found.length) return json({ ok: false, error: `No entry found with ID: ${ids[0]}` }, 404);
+      if (!found.length) return json({ ok: false, error: `No memory found with ID: ${ids[0]}` }, 404);
       if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-insight")) {
         return json({ ok: false, error: "Entry is not a derived insight" }, 400);
       }
@@ -1478,6 +1489,7 @@ export async function handleAdminRoutes(
     // discards at hydration anyway.
     const { results: toProcess } = await env.DB.prepare(
       // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
+      // validity: any: a replaced row keeps its vectors and must stay re-indexable here (5.5)
       `SELECT id, content, tags, source, created_at, workspace_id, actor_id FROM entries
        WHERE ${PENDING_WHERE}
        ORDER BY created_at DESC LIMIT 25`
@@ -1506,6 +1518,7 @@ export async function handleAdminRoutes(
     // row leaves its grace window and this endpoint can actually make progress on it.
     const remaining = await env.DB.prepare(
       // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
+      // validity: any: must match the toProcess selection above, replaced rows included (5.5)
       `SELECT COUNT(*) as count, MIN(created_at) as oldest FROM entries WHERE vector_ids = '[]' AND ${INDEXABLE_SQL}`
     ).first() as Record<string, any> | null;
     const remainingCount = (remaining?.count as number) ?? 0;
@@ -1638,6 +1651,8 @@ export async function handleAdminRoutes(
     // which is how it stayed unscoped while every sibling query was fixed.
     const aScope = scopeWhere(auth, undefined, "a.workspace_id");
     const bScope = scopeWhere(auth, undefined, "b.workspace_id");
+    const dryRunNow = Date.now();
+    // validity: current: a replaced side of a candidate pair is not insight material (5.5)
     const { results } = await env.DB.prepare(
       `SELECT c.id, c.a_id, c.b_id, c.score, a.content AS a_content, b.content AS b_content,
               a.tags AS a_tags, b.tags AS b_tags
@@ -1647,6 +1662,8 @@ export async function handleAdminRoutes(
        WHERE c.status = 'pending'
          AND a.tags NOT LIKE '%"status:deprecated"%'
          AND b.tags NOT LIKE '%"status:deprecated"%'
+         AND (a.valid_until IS NULL OR a.valid_until > ${dryRunNow})
+         AND (b.valid_until IS NULL OR b.valid_until > ${dryRunNow})
          AND ${aScope.clause} AND ${bScope.clause}
        ORDER BY c.score DESC
        LIMIT ?`,

@@ -135,6 +135,14 @@ async function keepStale(id, btn) {
     if (!data.ok) throw new Error(data.error || 'failed')
     notifyMemoryResolved(id)
     refreshAll({ list: false })
+    if (typeof undoToast === 'function') {
+      undoToast(t('undo.keptTrue'), id, {
+        onUndone: () => {
+          if (typeof loadStaleQueue === 'function') loadStaleQueue()
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch (e) {
     showToast(t('stale.keepFailed', { message: e.message }))
     btn.disabled = false

@@ -44,6 +44,8 @@ export const USER_EDITED_TAG = "user-edited";
  * no source is rolled up onto it. Keep in step with public/utils.js.
  */
 export const CONFLICT_HELD_TAG = "conflict-held";
+/** A memory built on one that was later retracted (T-0089.2.4): flagged for a check, never blocked. */
+export const RETRACTED_SOURCE_TAG = "retracted-source";
 
 /** Tags that make a row a system job's output, by job. */
 export const SYSTEM_JOB_TAGS = { digest: "synthesized", insight: "auto-insight" } as const;
@@ -93,6 +95,8 @@ const PIPELINE_TAG_NAMES = new Set([
   CONFLICT_HELD_TAG,
   // The inbound-commitment marker (Track 7); a bare word, not a namespace (P7.3).
   OWED_TO_ME_TAG,
+  // Built on a memory that was later retracted (Track 2 cascade, T-0089.2.4). Cleared by undo or Keep.
+  RETRACTED_SOURCE_TAG,
 ]);
 
 /** True when the tag is the brain's own bookkeeping rather than the user's word. */
@@ -149,7 +153,10 @@ export function stripNewReservedTags(tags: readonly string[]): { kept: string[];
 
 /** One plain line naming what was not saved; empty when nothing was dropped. */
 export function reservedTagsNote(ignored: readonly string[]): string {
-  return ignored.length ? `These tags are reserved and were not saved: ${ignored.join(", ")}.` : "";
+  if (!ignored.length) return "";
+  return ignored.length === 1
+    ? `Left off a tag Second Brain sets itself: ${ignored[0]}.`
+    : `Left off tags Second Brain sets itself: ${ignored.join(", ")}.`;
 }
 
 /**

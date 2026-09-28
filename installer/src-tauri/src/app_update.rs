@@ -54,6 +54,17 @@ async fn prompt_and_install(
     locale: i18n::Locale,
 ) {
     let version = update.version.clone();
+    // `update.body` is the GitHub release body for the `installer-v*` tag,
+    // verbatim and unlocalized (Tauri never picks a per-locale variant, so
+    // whatever ships here is what every reader sees regardless of `locale`).
+    // For 4.0: teammates get this dialog from updating the app alone, but
+    // 4.0's own features (undo, trash, kept history) only arrive once the
+    // brain's OWNER updates the Worker (Rahil's decision, Q8) — so the release
+    // body must say that plainly, not imply the app update is enough on its
+    // own. The drafted en/it text lives in CHANGELOG.md's "Desktop app"
+    // entry for 4.0; copy it into the `installer-v4.0.0` GitHub Release draft
+    // before publishing (the workflow's `releaseBody` is fixed boilerplate
+    // and does not pull from CHANGELOG.md automatically).
     let notes = update
         .body
         .clone()

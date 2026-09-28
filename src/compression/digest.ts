@@ -310,6 +310,7 @@ export async function compressTag(
     const member = workspaceRows
       ? projectFilterSql(workspaceRows)
       : { clause: `tags LIKE ? ${TAG_LIKE_ESCAPE}`, bindings: [tagLikePattern(tag)] };
+    // validity: current: a replaced memory is not digest source material (5.5)
     const { results: rawEntries } = await env.DB.prepare(`
       SELECT id, content, COALESCE(updated_at, created_at) AS row_version FROM entries
       WHERE ${member.clause}
@@ -320,6 +321,7 @@ export async function compressTag(
         AND tags NOT LIKE '%"capsule:%'
         AND tags NOT LIKE '%"capsule-slot:%'
         AND ${compressionEligibilitySql("", cfg)}
+        AND (valid_until IS NULL OR valid_until > ${Date.now()})
         AND workspace_id = ?
       ORDER BY created_at DESC
       LIMIT 50

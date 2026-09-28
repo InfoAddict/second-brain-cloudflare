@@ -79,6 +79,10 @@ const OTHER = Array.from({ length: 9 }, (_, i) => `other-${i}`).sort();
  */
 function seeded(): SqliteD1 {
   const s = makeSqliteD1();
+  // buildEntryFilterQuery's SELECT reads valid_from/valid_until, one of the
+  // columns src/db/init.ts adds by ALTER at runtime rather than in schema.sql.
+  s.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+  s.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   OWN.forEach((id, i) => s.seed({ id, content: `planning note ${i}`, createdAt: 1000 + i, tags: ["q3_planning"], vectorIds: [`v-${id}`] }));
   OTHER.forEach((id, i) => s.seed({ id, content: `planning note ${i}`, createdAt: 2000 + i, tags: ["q3-planning"], vectorIds: [`v-${id}`] }));
   return s;

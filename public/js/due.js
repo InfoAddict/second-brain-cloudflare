@@ -67,10 +67,14 @@ function dueWhenLine(item) {
  */
 function dueRow(item, expanded) {
   const isTask = (item.tags || []).includes('task')
+  // Track 7 lane B stores a decision row's bare label; the "Review:" cue that
+  // used to be baked into the text is now the sheet's own, localized badge.
+  const isDecision = (item.tags || []).includes('ledger:decision')
+  const reviewCue = isDecision ? `<span class="due-review-cue">${escHtml(t('due.reviewCue'))}</span> ` : ''
   const tagsLine = expanded && item.tags && item.tags.length
     ? `<div class="card-tags due-tags">${item.tags.map((tag) => `<span class="tag-chip">${escHtml(tag)}</span>`).join('')}</div>`
     : ''
-  const body = expanded ? escHtml(item.content) : escHtml(titleLine(item.label, 120))
+  const body = reviewCue + (expanded ? escHtml(item.content) : escHtml(titleLine(item.label, 120)))
   // Content full-width, then tags/date, then a wrapping actions row (up to
   // four buttons) — .due-row stacks rather than sitting content and actions
   // side by side the way loops.js's shared .task layout does, which left the
@@ -119,7 +123,8 @@ function dropFromDueQueue(id) {
 async function resolveDue(id, action, isTask, btn) {
   if (btn) btn.disabled = true
   try {
-    const res = action === 'done' && isTask
+    const wentToLoops = action === 'done' && isTask
+    const res = wentToLoops
       ? await fetch(`${WORKER_URL}/loops/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
@@ -133,6 +138,14 @@ async function resolveDue(id, action, isTask, btn) {
     const data = await res.json()
     if (!data.ok) throw new Error(data.error || 'failed')
     dropFromDueQueue(id)
+    if (typeof undoToast === 'function') {
+      undoToast(t(wentToLoops ? 'undo.done' : 'undo.dateRemoved'), id, {
+        onUndone: () => {
+          if (typeof loadDueQueue === 'function') loadDueQueue(id)
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch (e) {
     if (btn) btn.disabled = false
     showToast(action === 'done' ? t('due.doneFailed', { message: e.message }) : t('due.clearFailed', { message: e.message }))
@@ -148,14 +161,24 @@ function snoozeUntilDate(choice) {
 async function snoozeDue(id, choice, btn) {
   if (btn) btn.disabled = true
   try {
+    const until = snoozeUntilDate(choice)
     const res = await fetch(`${WORKER_URL}/due/snooze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: JSON.stringify({ id, until: snoozeUntilDate(choice) }),
+      body: JSON.stringify({ id, until }),
     })
     const data = await res.json()
     if (!data.ok) throw new Error(data.error || 'failed')
     dropFromDueQueue(id)
+    if (typeof undoToast === 'function') {
+      const date = formatDateUI(new Date(until + 'T00:00:00').getTime(), { year: 'numeric', month: 'short', day: 'numeric' })
+      undoToast(t('undo.snoozed', { date }), id, {
+        onUndone: () => {
+          if (typeof loadDueQueue === 'function') loadDueQueue(id)
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch (e) {
     if (btn) btn.disabled = false
     showToast(t('due.snoozeFailed', { message: e.message }))

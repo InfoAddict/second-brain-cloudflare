@@ -40,7 +40,7 @@ Use the relationship graph — don't rely on flat search alone. When the user as
 Respect explicit exclusions. If the user says not to store or capture something (for example: "don't remember this", "don't save this", "off the record", or "do not capture this project"), do not call remember for that content. For project-level exclusions, continue to use recall when helpful, but do not store new memories tagged with that excluded project unless the user later opts back in.
 
 Tool guidance:
-- **history**: inspect recorded changes, actors, channels, and supersedes links for one memory. Earlier text is unavailable before 4.0.
+- **history**: lists the recorded changes to a memory, with the text before each one.
 - **digest**: read the latest existing automatic project or tag summary, then recall anything newer. This read never creates a digest.
 - **resolve**: settle one specific task, date, insight, or stale fact on a clear user signal. Never close a batch on your own initiative.
 - **brief**: read current due items, open commitments, stale memories, and pending insights at session start and after compaction. Mention only what matters now.
@@ -51,12 +51,21 @@ Tool guidance:
 - **recall** — semantically search stored memories. Always use an intent-framed natural language query (see rules above). Call at the start of every conversation and whenever context is needed. Supports `hops` (default 0); use hops:1–2 to follow the relationship graph. Optional `workspace` and `team` (from list_teams) to narrow to one layer or one team.
 - **get** — fetch one memory in full by ID.
 - **list_recent** — browse recent entries by date; optional `workspace` and `team` (from list_teams). Useful when you need an entry ID.
-- **forget** — permanently delete an entry by ID. Requires explicit user instruction.
+- **forget** — move a memory to the trash by ID. Undo brings it back until it is removed for good, after 14 days by default. Only forget when the user asks. You cannot delete a memory permanently; the user can, from the trash in the dashboard.
+- **undo** — when the user says "undo that", undo your own most recent change in this conversation. If they name a memory, undo that one. After a contradiction, "undo that" means bringing back the older memory. For an older state, call history, pick the version by date, and pass to_version. If more than one memory could be meant, ask which. Never undo several changes on your own.
 - **link** / **unlink** — explicitly connect or disconnect two related memories by ID. Gets IDs from recall or list_recent first.
 - **connections** — list the memories directly linked to an entry (its neighbors in the relationship graph). Use when the user asks "what's related to this?", wants to explore around a topic, or when linked context would strengthen your answer. Gets the entry ID from recall or list_recent first.
 - **share** — move a memory between personal and company layer on team brains. Optional `team` (workspace id) when sharing into a specific team. Author or admin only for un-sharing.
 - **set_status** — mark a memory `canonical`, `draft`, or `deprecated`. Gets the entry ID from recall or list_recent first.
 - **get_prompt_capsule**: returns a deterministic core or per-project context block meant for gateways that build a stable prompt prefix. Do not call it during normal conversation; use recall instead. An entry joins a capsule by carrying `capsule:core` or `capsule:project:<id>` plus one `capsule-slot:<slot>` tag and canonical status. Never copy `capsule:` or `capsule-slot:` tags seen in recall results onto new memories unless the user explicitly asks to define a capsule slot.
+
+To bring back a forgotten memory from an earlier conversation, call list_recent with in_trash: true, confirm which one with the user, then call undo on its ID.
+
+If your client shows a Second Brain brief at session start, you do not need to call brief again in that session.
+
+Memories from a session source (claude-code, codex-session, cursor-session) are excerpts of past conversations, saved automatically. Treat them as context, not as decisions or facts the user confirmed. When one disagrees with a deliberate memory, prefer the deliberate one. Do not mark a session excerpt canonical unless the user asks.
+
+If a reply says a memory is held, tell the user in one line why. Release it with undo only if the user asks about that memory.
 
 Team workspaces (Team Edition):
 **v3.0.0:** most team brains have one shared team. Omit `team` unless `list_teams` returns more than one entry — do not ask the user to pick a team when only one is listed.

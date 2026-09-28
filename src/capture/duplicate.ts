@@ -96,6 +96,30 @@ export async function checkDuplicateAndContradiction(
   }
   const neighbors = [...neighborScores.entries()].map(([id, score]) => ({ id, score }));
 
+  // Superseded rows are history (T-0089.2.1): never a duplicate to block on, a merge target or a
+  // contradiction candidate, or "I moved back to Denver" would collide with the old Denver row
+  // instead of replacing Austin. One read of the candidate rows, the same statement the candidate
+  // path below always issued; it now runs before the duplicate verdict too.
+  const writerWorkspaceId = workspaceId ?? "";
+  const readThreshold = Math.min(CANDIDATE_SCORE_THRESHOLD, config.DUPLICATE_FLAG_THRESHOLD, config.DUPLICATE_BLOCK_THRESHOLD);
+  const readIds = [...new Set(matches.filter(m => m.score >= readThreshold).map(m => (m.metadata as any)?.parentId ?? m.id))] as string[];
+  let candidateRows: { id: string; content: string }[] = [];
+  const superseded = new Set<string>();
+  if (readIds.length) {
+    const now = Date.now();
+    const placeholders = readIds.map(() => "?").join(", ");
+    // Scoped, not by-id-exempt: see the comment on the candidate prompt below.
+    // validity: current: superseded rows are dropped in JS below, from the candidates and from the duplicate verdict
+    const { results } = await env.DB.prepare(
+      `SELECT id, content, valid_until FROM entries WHERE id IN (${placeholders}) AND +workspace_id = ?`
+    ).bind(...readIds, writerWorkspaceId).all() as { results: { id: string; content: string; valid_until: number | null }[] };
+    for (const r of results ?? []) {
+      if (r.valid_until !== null && r.valid_until !== undefined && r.valid_until <= now) superseded.add(r.id);
+      else candidateRows.push({ id: r.id, content: r.content });
+    }
+  }
+  if (superseded.size) matches = matches.filter(m => !superseded.has((m.metadata as any)?.parentId ?? m.id));
+
   let duplicate: DuplicateResult = { status: "unique" };
   if (matches.length) {
     const top = matches[0];
@@ -110,9 +134,7 @@ export async function checkDuplicateAndContradiction(
   if (duplicate.status !== "blocked") {
     const candidates = matches.filter(m => m.score >= CANDIDATE_SCORE_THRESHOLD);
     if (candidates.length) {
-      const parentIds = [...new Set(
-        candidates.map(m => (m.metadata as any)?.parentId ?? m.id)
-      )] as string[];
+      const parentIds = new Set(candidates.map(m => (m.metadata as any)?.parentId ?? m.id));
 
       // Scoped, not by-id-exempt. src/lib/scope.ts licenses an unscoped by-id
       // lookup when the ids came from an already-scoped read; these came from a
@@ -129,11 +151,9 @@ export async function checkDuplicateAndContradiction(
       // statement: capture is the hot path and this adds no subrequest. `?? ""`
       // is the pre-tenancy workspace, which is where an entry written without a
       // WriteContext lives, so a solo brain compares exactly the rows it did.
-      const writerWorkspaceId = workspaceId ?? "";
-      const placeholders = parentIds.map(() => "?").join(", ");
-      const { results: rows } = await env.DB.prepare(
-        `SELECT id, content FROM entries WHERE id IN (${placeholders}) AND +workspace_id = ?`
-      ).bind(...parentIds, writerWorkspaceId).all() as { results: { id: string; content: string }[] };
+      // The rows were read above, before the duplicate verdict; the candidates are the
+      // current ones among them, in the order the read returned them.
+      const rows = candidateRows.filter(r => parentIds.has(r.id));
 
       if (rows.length) {
         // The ids the model is allowed to name back. `parentIds` is the raw

@@ -5,11 +5,26 @@ function resetAppendSaveBtn() {
   btn.textContent = t('memories.appendSave')
 }
 
+function showAppendError(message) {
+  const el = document.getElementById('append-error')
+  if (!el) return
+  el.textContent = message
+  el.hidden = false
+}
+
+function clearAppendError() {
+  const el = document.getElementById('append-error')
+  if (!el) return
+  el.hidden = true
+  el.textContent = ''
+}
+
 function openAppend(id, preview) {
   pendingAppendId = id
   document.getElementById('append-context-preview').textContent = preview + '...'
   document.getElementById('append-textarea').value = ''
   resetAppendSaveBtn()
+  clearAppendError()
   document.getElementById('append-sheet').classList.add('open')
   setTimeout(() => document.getElementById('append-textarea').focus(), 100)
 }
@@ -29,19 +44,48 @@ function closeAppend() {
   document.getElementById('append-sheet').classList.remove('open')
   pendingAppendId = null
   resetAppendSaveBtn()
+  clearAppendError()
 }
+
 async function saveAppend() {
   const addition = document.getElementById('append-textarea').value.trim()
   if (!addition || !pendingAppendId) return
   const btn = document.getElementById('append-save-btn')
+  clearAppendError()
   btn.disabled = true
   btn.textContent = t('memories.saving')
   try {
     const appendedId = pendingAppendId
-    await apiMcp('append', { id: appendedId, addition })
+    // REST, not the MCP tool: MCP's channel reads as "via an AI tool" on the
+    // history timeline, which is false for a person's own dashboard append.
+    const res = await fetch(`${WORKER_URL}/append`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: appendedId, addition }),
+    })
+    if (!res.ok) {
+      let data = {}
+      try {
+        data = await res.json()
+      } catch {}
+      // Shown in place, text left in append-textarea exactly as typed -
+      // nothing here ever clears it on failure, so "your text is still
+      // here" holds. Same 413/too_large REST contract saveEdit checks
+      // (src/lib/content-size.ts), not a message-text match.
+      if (res.status === 413 && data.error === 'too_large') {
+        showAppendError(t('home.tooLong'))
+        return
+      }
+      throw new Error(t('auth.serverError', { status: res.status }))
+    }
+    const data = await res.json()
+    if (!data.ok) throw new Error(data.error || '')
     closeAppend()
     notifyMemoryResolved(appendedId)
     refreshAll()
+    if (typeof undoToast === 'function') {
+      undoToast(t('undo.added'), appendedId, { onUndone: () => notifyMemoryRestored(appendedId) })
+    }
   } catch (e) {
     showToast(t('memories.appendFailed', { message: e.message }))
   } finally {
@@ -73,6 +117,7 @@ function openEdit(id, content, tags) {
   const ta = document.getElementById('edit-textarea')
   ta.value = content
   resetEditSaveBtn()
+  clearEditError()
   document.getElementById('edit-sheet').classList.add('open')
   setTimeout(() => {
     ta.focus()
@@ -105,12 +150,28 @@ function closeEdit() {
   pendingEditId = null
   pendingEditTags = []
   resetEditSaveBtn()
+  clearEditError()
+}
+
+function showEditError(message) {
+  const el = document.getElementById('edit-error')
+  if (!el) return
+  el.textContent = message
+  el.hidden = false
+}
+
+function clearEditError() {
+  const el = document.getElementById('edit-error')
+  if (!el) return
+  el.hidden = true
+  el.textContent = ''
 }
 
 async function saveEdit() {
   const newContent = document.getElementById('edit-textarea').value.trim()
   if (!newContent || !pendingEditId) return
   const btn = document.getElementById('edit-save-btn')
+  clearEditError()
   btn.disabled = true
   btn.textContent = t('memories.saving')
   try {
@@ -121,11 +182,27 @@ async function saveEdit() {
       // src/tags/system.ts — so an edit cannot delete a conclusion the brain reached.
       body: JSON.stringify({ id: pendingEditId, content: newContent, tags: pendingEditTags }),
     })
-    if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
+    if (!res.ok) {
+      let data = {}
+      try {
+        data = await res.json()
+      } catch {}
+      // Shown in place, not as a toast, and the textarea is left exactly as
+      // typed - the composer's own promise ("your text is still here") holds
+      // here too, since nothing here ever clears edit-textarea on failure.
+      if (res.status === 413 && data.error === 'too_large') {
+        showEditError(t('home.tooLong'))
+        return
+      }
+      throw new Error(t('auth.serverError', { status: res.status }))
+    }
     const editedId = pendingEditId
     closeEdit()
     notifyMemoryResolved(editedId)
     refreshAll()
+    if (typeof undoToast === 'function') {
+      undoToast(t('undo.saved'), editedId, { onUndone: () => notifyMemoryRestored(editedId) })
+    }
   } catch (e) {
     showToast(t('memories.editFailed', { message: e.message }))
   } finally {
@@ -183,12 +260,17 @@ function notifyMemoryResolved(id) {
   if (typeof dropFromStaleQueue === 'function') dropFromStaleQueue(id)
 }
 
+/** notifyMemoryResolved's sibling: a row an undo brought back reappears in the lists that dropped it. */
+function notifyMemoryRestored(id) {
+  if (typeof refreshAll === 'function') refreshAll()
+}
+
 /**
  * Delete forever (T-0089.4.7): `{id, permanent: true, confirm: id, nonce}` on one trash row. The
  * nonce is that row's own (from the trash list), so a stale view never deletes a different row
  * under a reused id. Lives in the trash view only (Q11); not offered to agents.
  */
-function openDeleteForeverConfirm(id, nonce, cardElement) {
+function openDeleteForeverConfirm(id, cardElement, { onDone, onConflict, nonce } = {}) {
   openDangerConfirm({
     title: t('memories.deleteForeverTitle'),
     body: t('memories.deleteForeverConfirm'),
@@ -203,10 +285,23 @@ function openDeleteForeverConfirm(id, nonce, cardElement) {
         const res = await fetch(`${WORKER_URL}/forget`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+          // Required, not optional: the merged /forget route 400s without it
+          // (src/routes/entries.ts) -- delete forever only ever acts on a
+          // trash row.
           body: JSON.stringify({ id, permanent: true, confirm: id, nonce }),
         })
         const data = await res.json()
-        if (!res.ok || !data.ok) throw new Error(data.error || t('memories.deleteForeverFailed'))
+        if (!res.ok || !data.ok) {
+          // A stale nonce (the row moved under the reader, e.g. someone else
+          // already restored or deleted it) is the caller's to explain, not
+          // a generic failure toast - trash.js's onConflict refreshes its list.
+          if ((res.status === 404 || res.status === 409) && typeof onConflict === 'function') {
+            done()
+            onConflict()
+            return
+          }
+          throw new Error(data.error || t('memories.deleteForeverFailed'))
+        }
         done()
         if (cardElement) {
           cardElement.style.transition = 'none'
@@ -216,6 +311,7 @@ function openDeleteForeverConfirm(id, nonce, cardElement) {
         allEntries = allEntries.filter((e) => e.id !== id)
         notifyMemoryResolved(id)
         refreshAll({ list: false })
+        if (typeof onDone === 'function') onDone(id)
       } catch (e) {
         showToast(t('memories.deleteForeverFailed', { message: e.message }))
         done()
@@ -268,7 +364,13 @@ async function confirmForget(_checked, done) {
     // above have already handled — reloading it here would swap the element out
     // from under its own exit animation.
     refreshAll({ list: false })
-    if (data.trash === false) showToast(t('memories.forgetHardDeleted'))
+    if (data.trash === false) {
+      // Tier 3: too large for the trash, hard-deleted. There is no version to
+      // undo to, the same reason Delete forever never gets a toast either.
+      showToast(t('memories.forgetHardDeleted'))
+    } else if (typeof undoToast === 'function') {
+      undoToast(t('undo.trashed'), idToForget, { onUndone: () => notifyMemoryRestored(idToForget) })
+    }
   } catch (e) {
     showToast(t('memories.forgetFailed', { message: e.message }))
   } finally {
@@ -297,7 +399,8 @@ function viewKindLabel(kind) {
 function viewStatusLabel(status) {
   if (status === 'canonical') return t('memories.statusTrusted')
   if (status === 'draft') return t('memories.statusUnconfirmed')
-  if (status === 'deprecated') return t('memories.statusSuperseded')
+  // SH-3: "Wrong" everywhere the sheet shows status, replacing "Superseded".
+  if (status === 'deprecated') return t('status.wrong')
   return status
 }
 
@@ -334,6 +437,31 @@ function renderViewMeta(entry) {
     parts.push(`<span class="view-meta-item" title="${escAttr(new Date(updated).toLocaleString(localeTag()))}">${escHtml(t('memories.metaEdited', { relative: relativeTime(updated) }))}</span>`)
   }
   el.innerHTML = parts.join('')
+}
+
+/** claude-code, codex-session, cursor-session: an AI coding session's own capture, not the user typing. */
+const AUTO_SAVE_SESSION_SOURCES = {
+  'claude-code': 'Claude Code',
+  'codex-session': 'Codex',
+  'cursor-session': 'Cursor',
+}
+
+/**
+ * A quiet note, sheet only (never the list card): a memory an AI coding
+ * session saved on its own reads differently from one the user wrote, and the
+ * tool name is not translated — only the sentence around it is.
+ */
+function renderViewAutoSaveNote(entry) {
+  const el = document.getElementById('view-auto-save-note')
+  if (!el) return
+  const tool = AUTO_SAVE_SESSION_SOURCES[String(entry.source || '').toLowerCase()]
+  if (!tool) {
+    el.style.display = 'none'
+    el.textContent = ''
+    return
+  }
+  el.textContent = t('memories.sessionSaved', { tool })
+  el.style.display = ''
 }
 
 function renderViewBrain(entry) {
@@ -389,6 +517,105 @@ function renderViewBrain(entry) {
   el.innerHTML = `<div class="view-brain-label">${escHtml(t('memories.brainLabel'))}</div>${rows.join('')}`
 }
 
+const STATUS_HELP_KEYS = {
+  canonical: 'status.trustedHelp',
+  draft: 'status.unconfirmedHelp',
+  deprecated: 'status.wrongHelp',
+}
+
+/**
+ * SH-3: POST /status immediately (no confirm), toast with Undo, re-hydrate.
+ * `wasStatus` is read fresh rather than trusted from closure, since a slow
+ * click racing a re-render should not fire on a status the sheet no longer
+ * shows.
+ */
+async function selectViewStatus(status, entry) {
+  const group = document.getElementById('view-status')
+  const buttons = Array.from(group.querySelectorAll('.status-option'))
+  const wasStatus = tagValue(entry.tags || [], 'status:') || 'canonical'
+  if (status === wasStatus) return
+  buttons.forEach((b) => (b.disabled = true))
+  try {
+    const res = await fetch(`${WORKER_URL}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: entry.id, status }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || '')
+    let message = t('undo.marked', { status: viewStatusLabel(status).toLowerCase() })
+    // undo.marked is a plain "toast after an action" (no period, per the copy
+    // guide), but appending a full sentence after it makes this one a "toast
+    // with a consequence", which does take one.
+    if (data.indexed === false) message += '. ' + t('status.keywordOnly')
+    undoToast(message, entry.id, {
+      onUndone: () => {
+        if (typeof hydrateView === 'function') hydrateView(entry.id)
+      },
+    })
+    if (typeof hydrateView === 'function') hydrateView(entry.id)
+  } catch (e) {
+    showToast(t('status.failed', { message: e.message || '' }))
+    buttons.forEach((b) => (b.disabled = false))
+  }
+}
+
+/** Roving arrow keys over the three options, per the WAI-ARIA radiogroup pattern: moving also selects. */
+function wireViewStatusButton(btn, entry) {
+  btn.onclick = () => {
+    if (!btn.disabled) return selectViewStatus(btn.dataset.status, entry)
+  }
+  btn.onkeydown = (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return
+    e.preventDefault()
+    const opts = Array.from(document.querySelectorAll('#view-status .status-option'))
+    const idx = opts.indexOf(btn)
+    const dir = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1
+    const next = opts[(idx + dir + opts.length) % opts.length]
+    if (next && !next.disabled) {
+      next.focus()
+      selectViewStatus(next.dataset.status, entry)
+    }
+  }
+}
+
+/**
+ * UI review: the lock note explaining why Append, Edit, Forget and Status
+ * are disabled lives here, next to the control it explains, and only here —
+ * it used to also render at the end of History, which read as two different
+ * explanations for the same thing. `locked` is strictly `=== false` plus a
+ * resolved actor_name: an entry that has not answered can_edit yet, or has
+ * answered it without a name, must not print a note attributed to nobody.
+ */
+function renderViewStatusLockNote(entry) {
+  const el = document.getElementById('view-status-lock-note')
+  if (!el) return
+  const locked = entry.can_edit === false && !!entry.actor_name
+  if (!locked) {
+    el.style.display = 'none'
+    el.textContent = ''
+    return
+  }
+  el.style.display = ''
+  el.textContent = t('memories.authorLocked', { name: entry.actor_name })
+}
+
+function renderViewStatus(entry) {
+  const group = document.getElementById('view-status')
+  const caption = document.getElementById('view-status-caption')
+  if (!group || !caption) return
+  const status = tagValue(entry.tags || [], 'status:') || 'canonical'
+  const options = Array.from(group.querySelectorAll('.status-option'))
+  options.forEach((btn) => {
+    const checked = btn.dataset.status === status
+    btn.setAttribute('aria-checked', String(checked))
+    btn.tabIndex = checked ? 0 : -1
+    wireViewStatusButton(btn, entry)
+  })
+  caption.textContent = t(STATUS_HELP_KEYS[status] || '')
+  renderViewStatusLockNote(entry)
+}
+
 /**
  * Fill in what the caller could not know.
  *
@@ -405,12 +632,30 @@ async function hydrateView(id) {
     if (!data.ok || !data.entry) return
     if (viewOpenId !== id) return // the sheet moved on while this was in flight
     renderViewMeta(data.entry)
+    renderViewAutoSaveNote(data.entry)
     renderViewBrain(data.entry)
+    renderViewStatus(data.entry)
     renderViewTimeline(data.entry)
     // openView rendered from whatever the caller happened to hold; /entry is
     // the only source that knows whether this is the reader's to change.
     applyAuthorLock(data.entry)
+    syncViewScrollBottomPadding()
   } catch {}
+}
+
+/**
+ * UI review: .view-scroll's bottom padding used to be a flat 4px, nowhere
+ * near the fixed action row's real height, so scrolling to the very end of a
+ * long history still left its last row (and "Show all") flush against the
+ * footer rather than clear of it. Measuring the action row directly keeps
+ * this correct at any width, button wrap, or safe-area inset, rather than a
+ * guessed constant that drifts the next time the row's own height changes.
+ */
+function syncViewScrollBottomPadding() {
+  const scroll = document.querySelector('#view-sheet .view-scroll')
+  const actions = document.querySelector('#view-sheet .view-actions')
+  if (!scroll || !actions || typeof actions.getBoundingClientRect !== 'function') return
+  scroll.style.paddingBottom = `${Math.ceil(actions.getBoundingClientRect().height)}px`
 }
 
 /**
@@ -438,14 +683,17 @@ function timelineEventLabel(event) {
 }
 
 function renderViewTimeline(entry) {
+  // SH-1: a Worker that sends `history` (contract 4.1) gets the rich list
+  // with Undo and Restore this version. A Worker that predates it falls back
+  // to the plain event list below, unchanged.
+  if (entry.history) {
+    renderHistory(entry)
+    return
+  }
   const el = document.getElementById('view-timeline')
   if (!el) return
   const items = entry.timeline || []
-  // A shared memory nobody has edited or appended yet still has a reason two
-  // buttons are greyed out, and that reason lives in this section, so an
-  // empty timeline hides History only when there is also no lock note to show.
-  const locked = entry.can_edit === false && !!entry.actor_name
-  if (!items.length && !locked) {
+  if (!items.length) {
     el.style.display = 'none'
     el.innerHTML = ''
     return
@@ -459,11 +707,6 @@ function renderViewTimeline(entry) {
       ? formatDateUI(item.created_at, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
       : ''
     lines.push(`<div class="view-timeline-item">${escHtml(item.actor_name || '')} · ${escHtml(timelineEventLabel(item.event))}${when ? ` · ${escHtml(when)}` : ''}</div>`)
-  }
-  // Two greyed-out buttons with no explanation read as a broken screen, so the
-  // reason sits at the end of the history that establishes it.
-  if (locked) {
-    lines.push(`<div class="view-timeline-note">${escHtml(t('memories.authorLocked', { name: entry.actor_name }))}</div>`)
   }
   el.style.display = ''
   el.innerHTML = `<div class="view-timeline-label">${escHtml(t('memories.timelineLabel'))}</div>${lines.join('')}`
@@ -485,6 +728,7 @@ function renderViewTimeline(entry) {
  */
 function applyAuthorLock(entry) {
   lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
+  lockAuthoredControls(entry, Array.from(document.querySelectorAll('#view-status .status-option')), 'status-option--locked')
 }
 
 /**
@@ -537,7 +781,9 @@ function openView(entry, cardElement) {
   viewOpenId = entry.id || null
   document.getElementById('view-content-text').textContent = normalizeForDisplay(entry.content)
   renderViewMeta(entry)
+  renderViewAutoSaveNote(entry)
   renderViewBrain(entry)
+  renderViewStatus(entry)
   if (entry.id) hydrateView(entry.id)
   const tagsContainer = document.getElementById('view-tags-container')
   tagsContainer.innerHTML = ''
@@ -588,6 +834,7 @@ function openView(entry, cardElement) {
   }
   applyAuthorLock(entry)
   document.getElementById('view-sheet').classList.add('open')
+  syncViewScrollBottomPadding()
 }
 function closeView() {
   document.getElementById('view-sheet').classList.remove('open')

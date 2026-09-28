@@ -139,27 +139,29 @@ describe("versioning: capture merge and replace", () => {
 });
 
 describe("versioning: contradiction", () => {
-  it("the contradiction branch versions the deprecated row (a person's capture)", async () => {
+  it("the contradiction branch versions the superseded row (a person's capture)", async () => {
     await setup(0.72, contradicts());
     sqlite.seed({ id: "old", content: "We decided X", tags: ["decisions"], source: "api", vectorIds: ["old"], createdAt: 1000 });
     const r = await captureEntry("Actually Y", [], "api", env, ctx, undefined, person, undefined, { channel: "rest" });
     expect(r.status).toBe("contradiction");
     const [v] = await versions("old");
-    expect(v).toMatchObject({ reason: "status", channel: "rest", actor_id: "u1" });
+    // T-0089.2.1: a validity version; the row keeps its tags (no deprecation) and its window closes.
+    expect(v).toMatchObject({ reason: "validity", channel: "rest", actor_id: "u1" });
     expect(JSON.parse(v.tags)).toEqual(["decisions"]);
-    expect(JSON.parse(v.meta)).toMatchObject({ cause: "contradiction", newEntryId: (r as any).id });
-    expect(JSON.parse((await row("old")).tags)).toContain("status:deprecated");
+    expect(JSON.parse(v.meta)).toEqual({ cause: "supersede", by: (r as any).id });
+    expect(JSON.parse((await row("old")).tags)).not.toContain("status:deprecated");
+    expect((await row("old")).valid_until).not.toBeNull();
   });
 
-  it("the system compare-and-set deprecation versions its row with the same guard, and a lost guard writes no version", async () => {
+  it("the system compare-and-set supersede versions its row with the same guard, and a lost guard writes no version", async () => {
     await setup(0.72, contradicts());
     sqlite.seed({ id: "old", content: "Digest v1", tags: ["synthesized"], source: "system", vectorIds: ["old"], createdAt: 1000 });
     const r = await captureEntry("Digest contradicting", ["synthesized"], "system", env, ctx, undefined, system, undefined, { systemWrite: "digest", channel: "system:digest" });
     expect(r.status).toBe("contradiction");
     const [v] = await versions("old");
-    expect(v).toMatchObject({ reason: "status", channel: "system:digest", actor_id: "" });
-    expect(JSON.parse(v.meta).cause).toBe("contradiction");
-    expect(deleteByIds).toHaveBeenCalledWith(["old"]);
+    expect(v).toMatchObject({ reason: "validity", channel: "system:digest", actor_id: "" });
+    expect(JSON.parse(v.meta).cause).toBe("supersede");
+    expect(deleteByIds).not.toHaveBeenCalled();
 
     // Lost race: a person edits the row between the read and the batch.
     sqlite.close();

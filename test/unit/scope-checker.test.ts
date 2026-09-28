@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (202 queries, 103 exceptions, 19 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (227 queries, 115 exceptions, 29 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1463,21 +1463,12 @@ describe("the checker over the real source tree", () => {
     // MOVED (T-0089.1.1, merge of release/v4 ebc8010d): recomputed from a real check:scope run on the merged
     // tree, not by adding two independently-tracked totals: Track 1's 196/102/17 plus release/v4's own queries
     // (Track 7's calibration and standing-cache reads, lanes Q/R/D, BE-2) land at 198/102/18/1.
-    // Deliberate: +1 query (198 -> 199) for Track 7 Task 7 (src/capture/entry.ts, the standing memory
-    // cap check inside captureEntry): one COUNT(*) of the workspace's live standing:active rows, run
-    // only for a standing capture, scoped by `workspace_id = ?`.
-    // Deliberate: +1 query (199 -> 200) for Track 7 Task 9 (src/brief/compute.ts): the full MCP
-    // brief's calibration read (calibrationQuery), scoped by workspace and the actionable clause.
-    // Deliberate: +1 query and +1 scope-exempt (200/102 -> 201/103) for Track 7 Task 10
-    // (src/decisions/queries.ts, decisionsListQuery): the decision log's edited_since_recorded
-    // EXISTS is correlated to entries.id, same shape as memory/versions.ts's NEWEST_SEQ.
-    // Deliberate: +1 query and +1 scope-checked (201/103/18 -> 202/103/19) for the cross-vendor
-    // review's MINOR 3 fix (src/decisions/queries.ts, decisionsCountQuery): the true total is a
-    // second statement, scoped the same way as decisionsListQuery's own bounded scope clause.
-    // Deliberate: +2 queries (202 -> 204) for the budget auditor's R1-R3 fixes (src/brief/compute.ts,
-    // dueSplit and loopsSplit): each split is now an items read plus a separate totals aggregate,
-    // both scoped the same way the one combined statement they replace was.
-    ).toEqual({ queries: 204, exempt: 103, checked: 19, outerJoin: 1 });
+    // MOVED 202/103/19/1 + 221/114/28/1 -> real --inventory output (merge of release/v4 d3b5b25c into
+    // v4/t7-c): this branch's own Track 7 deltas and release/v4's own independently-tracked deltas
+    // (T5 recall_log + T2 validity/supersede/retraction work, see history above) are
+    // independently-tracked deltas from the same base — recomputed against the real scanner output
+    // after combining rather than hand-reconciling the two.
+    ).toEqual({ queries: 227, exempt: 115, checked: 29, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

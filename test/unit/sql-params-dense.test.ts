@@ -30,6 +30,20 @@ describe("every generated statement numbers its placeholders densely", () => {
     }
   }
 
+  for (const nextTags of [["a"], "unchanged"] as const) {
+    for (const withGuard of [false, true]) {
+      it(`validity snapshot tags=${JSON.stringify(nextTags)} guard=${withGuard}`, () => {
+        const b = buildSnapshot({
+          ...base, reason: "validity", nextTags: nextTags === "unchanged" ? "unchanged" : [...nextTags],
+          nextState: { valid_until: null, valid_from: 7 },
+          guard: withGuard ? p => `e.valid_until IS ${p.add(null)} AND e.workspace_id = ${p.add("w")}` : undefined,
+          meta: { cause: "supersede", by: "x" },
+        });
+        expect(denseProblem(b.sql, b.bindings)).toBeNull();
+      });
+    }
+  }
+
   it("the many-row forms bind one parameter for the ids", () => {
     const ids = Array.from({ length: 101 }, (_, i) => `e${i}`);
     for (const b of [buildSnapshotMany({ entryIds: ids, reason: "status", change, content: { kind: "unchanged" }, now: 1 }),
@@ -127,5 +141,25 @@ describe("trash.ts builders are dense (T-0089.1.2, T-0089.4.7, T-0089.4.9)", () 
     const trashed = { nonce: "n1", id: "a", workspace_id: "", actor_id: "", content: "c", row_json: JSON.stringify({ tags: '["status:deprecated"]' }), edges_json: "[]", vector_ids: "[]", deleted_at: 1, reason: "forget" as const };
     await restoreEntry(env, trashed, change, DEFAULTS);
     for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+  });
+});
+
+// ── Track 2 validity builders (src/memory/validity.ts, T-0089.2.1) ──
+import { planSupersede, supersedeStatements, type Window } from "../../src/memory/validity";
+
+describe("validity.ts builders are dense (T-0089.2.1)", () => {
+  const change = { actorId: "u", channel: "rest" as const };
+  const w = (id: string, from: number, until: number | null): Window => ({ id, from, until, workspaceId: "ws", status: null });
+
+  it("supersedeStatements: close-older and close-newer, with and without a system guard", () => {
+    const pairs: [Window, Window][] = [[w("o", 1, null), w("n", 2, null)], [w("o", 5, null), w("n", 2, 9)], [w("o", 1, 8), w("n", 2, null)]];
+    for (const [older, newer] of pairs) {
+      for (const guard of [undefined, (p: Params) => `COALESCE(e.actor_id, '') = ${p.add("")} AND e.tags = ${p.add("[]")}`]) {
+        const { env, calls } = captureEnv();
+        const stmts = supersedeStatements(env, planSupersede(older, newer), older, newer, change, DEFAULTS, guard);
+        expect(stmts).toHaveLength(4);
+        for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+      }
+    }
   });
 });

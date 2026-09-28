@@ -1,5 +1,5 @@
 /**
- * The row a contradicting capture deprecates gets its own audit event.
+ * The row a contradicting capture supersedes gets its own audit event (T-0089.2.1: superseded).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { captureEntry } from "../../src/capture/entry";
@@ -54,19 +54,17 @@ describe("contradiction audit", () => {
       { entry_id: string; actor_id: string; event: string; payload: string }[];
   };
 
-  it("writes status_changed for the deprecated row, naming the new row", async () => {
+  it("writes superseded for the closed row, naming the new row", async () => {
     const result = await captureEntry("I moved to LA", [], "api", env, ctx, undefined, { workspaceId: "", actorId: "u1" }, undefined, { channel: "rest" });
     expect(result.status).toBe("contradiction");
     if (result.status !== "contradiction") return;
     const trail = await events();
     expect(trail).toHaveLength(1);
-    expect(trail[0]).toMatchObject({ entry_id: "old", actor_id: "u1", event: "status_changed" });
-    expect(JSON.parse(trail[0].payload)).toEqual({
-      status: "deprecated", reason: "contradiction", newEntryId: result.id, channel: "rest",
-    });
+    expect(trail[0]).toMatchObject({ entry_id: "old", actor_id: "u1", event: "superseded" });
+    expect(JSON.parse(trail[0].payload)).toEqual({ by: result.id, until: result.supersede!.at, channel: "rest" });
   });
 
-  it("systemWrite: a system capture contradicting a user memory deprecates nothing and lands as a draft", async () => {
+  it("systemWrite: a system capture contradicting a user memory supersedes nothing and lands as a draft", async () => {
     const before = await env.DB.prepare(`SELECT tags, vector_ids FROM entries WHERE id = 'old'`).first();
     const result = await captureEntry("I moved to LA", ["auto-insight"], "system", env, ctx, undefined, { workspaceId: "", actorId: "" }, undefined, { systemWrite: "insight", channel: "system:insight" });
     expect(result.status).toBe("contradiction_protected");

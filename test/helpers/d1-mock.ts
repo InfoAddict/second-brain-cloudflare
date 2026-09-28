@@ -40,16 +40,17 @@ const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../..
 const SCHEMA_PROBE_RESULTS = [
   ...["entries", "edges", "insight_candidates", "workspaces", "users", "memberships",
     "entry_events", "admin_events", "maintenance_cursor", "prompt_capsule_revisions", "projects",
-    "push_subscriptions", "entry_versions", "entries_trash", "entries_fts", "entry_counts"]
+    "push_subscriptions", "recall_log", "entry_versions", "entries_trash", "entries_fts", "entry_counts"]
     .map(name => ({ kind: "table", name })),
   ...["idx_entries_created_at", "idx_entries_source", "idx_entries_workspace_created", "idx_entries_capsule",
     "idx_edges_source", "idx_edges_target", "idx_edges_weight", "idx_insight_candidates_queue",
     "idx_workspaces_kind", "idx_users_token_hash", "idx_users_email", "idx_memberships_workspace",
     "idx_entry_events_entry", "idx_entry_events_created", "idx_admin_events_created",
     "idx_projects_workspace", "idx_entries_project", "idx_entries_conflict_held", "idx_push_subscriptions_workspace",
+    "idx_recall_log_ws",
     "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
     "idx_entries_ledger", "idx_entries_standing",
-    "idx_entry_versions_entry", "idx_entries_trash_deleted"]
+    "idx_entry_versions_entry", "idx_entries_trash_deleted", "idx_entries_trash_workspace_deleted"]
     .map(name => ({ kind: "index", name })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
     "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete",
@@ -58,7 +59,7 @@ const SCHEMA_PROBE_RESULTS = [
     .map(name => ({ kind: "trigger", name, definition: TRIGGER_DDL.get(name) })),
   ...["id", "content", "tags", "source", "created_at", "vector_ids", "recall_count",
     "importance_score", "contradiction_wins", "contradiction_losses", "updated_at",
-    "staleness_checked_at", "when_at", "when_kind", "when_source", "when_label"].map(name => ({ kind: "column", name })),
+    "staleness_checked_at", "when_at", "when_kind", "when_source", "when_label", "valid_from", "valid_until"].map(name => ({ kind: "column", name })),
   ...["workspace_id", "actor_id"].map(name => ({ kind: "column", name })),
   // edges.workspace_id arrives by ALTER on upgraded brains and lives in the base
   // CREATE on fresh ones — either way a migrated brain reports it.
@@ -556,6 +557,52 @@ export class D1Mock {
           }
           return { meta: { changes: row ? 1 : 0 } };
         }
+        // Track 2 (T-0089.2.4): the retraction hooks are set-based SQL this double does not model; they
+        // change nothing here (real SQLite covers them: test/integration/retraction-restore.test.ts).
+        if (/'cause', '(?:un)?retraction'/.test(s) || /^UPDATE entries AS e SET valid_until = \(SELECT/.test(s) || (s.startsWith("INSERT INTO edges") && s.includes("z.id, y.id"))) {
+          return { results: [], meta: { changes: 0 } };
+        }
+        if (s.startsWith("DELETE FROM entry_versions WHERE entry_id IN ( SELECT v.entry_id")) return { meta: { changes: 0 } };
+        // Track 2 (T-0089.2.1): the supersede batch's statements, numbered placeholders throughout.
+        const numbered = (n: string) => args[Number(n) - 1];
+        const windowClosed = /AND EXISTS \(SELECT 1 FROM entries x WHERE x\.id = \?(\d+) AND x\.valid_until = \?(\d+)\)/.exec(s);
+        const closedNow = () => !windowClosed || db.entries.some((e: any) => e.id === numbered(windowClosed[1]) && (e.valid_until ?? null) === numbered(windowClosed[2]));
+        if (/^UPDATE entries SET contradiction_(wins|losses) = contradiction_\1 \+ 1 WHERE id = \?1 AND EXISTS/.test(s)) {
+          const column = s.includes("contradiction_wins") ? "contradiction_wins" : "contradiction_losses";
+          const row = db.entries.find((e: any) => e.id === args[0]);
+          if (!row || !closedNow()) return { meta: { changes: 0 } };
+          row[column] = (row[column] ?? 0) + 1;
+          return { meta: { changes: 1 } };
+        }
+        if (/^UPDATE entries AS e SET valid_until = \?\d+ WHERE e\.id = \?\d+/.test(s)) {
+          const [, untilN, idN] = /SET valid_until = \?(\d+) WHERE e\.id = \?(\d+)/.exec(s)!;
+          const row = db.entries.find((e: any) => e.id === numbered(idN));
+          if (!row) return { meta: { changes: 0 } };
+          const where = s.slice(s.indexOf(" WHERE ") + 7);
+          const value = (col: string) => col === "COALESCE(e.updated_at, e.created_at)" ? row.updated_at ?? row.created_at
+            : col === "COALESCE(e.actor_id, '')" ? row.actor_id ?? ""
+            : col === "e.workspace_id" ? row.workspace_id ?? "" : row[col.replace(/^e\./, "")] ?? null;
+          const holds = [...where.matchAll(/(COALESCE\(e\.\w+, [^)]+\)|e\.\w+) (=|IS|NOT LIKE) (\?\d+|'[^']*')/g)].every(([, col, op, rhs]) => {
+            const want = rhs.startsWith("?") ? numbered(rhs.slice(1)) : rhs.slice(1, -1);
+            if (op === "NOT LIKE") return !String(value(col)).includes(String(want).replace(/%/g, ""));
+            return op === "IS" ? (value(col) ?? null) === (want ?? null) : value(col) === want;
+          });
+          if (!holds) return { meta: { changes: 0 } };
+          row.valid_until = numbered(untilN);
+          return { meta: { changes: 1 } };
+        }
+        if (s.startsWith("INSERT INTO edges") && /AND EXISTS \(SELECT 1 FROM entries x WHERE x\.id = \?\d+ AND x\.valid_until/.test(s)) {
+          // Params reuses a number for a repeated value, so read the SELECT list's own placeholders.
+          const list = /SELECT ((?:\?\d+(?:, )?)+) WHERE/.exec(s)![1].split(", ").map(t => numbered(t.slice(1)));
+          const [id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id] = list;
+          const readable = JSON.parse(String(numbered(/json_each\(\?(\d+)\)/.exec(s)![1]))) as string[];
+          const inWs = (eid: unknown) => db.entries.some((e: any) => e.id === eid && readable.includes(e.workspace_id ?? ""));
+          if (!inWs(source_id) || !inWs(target_id) || !closedNow()) return { meta: { changes: 0 } };
+          const existing = db.edges.find((e: any) => e.source_id === source_id && e.target_id === target_id && e.type === type);
+          if (existing) existing.updated_at = updated_at;
+          else db.edges.push({ id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id });
+          return { meta: { changes: 1 } };
+        }
         if (s.startsWith("UPDATE entries SET contradiction_wins = contradiction_wins + 1")) {
           const [id] = args;
           const row = db.entries.find((e: any) => e.id === id);
@@ -746,6 +793,11 @@ export class D1Mock {
             personalWorkspaceId,
             companyWorkspaces: companyWorkspaces || null,
           };
+        }
+        // captureEntry's conflict read (T-0089.2.1): the row version alias and the validity window.
+        if (s.includes("AS row_version, valid_from, valid_until FROM entries WHERE id = ? AND workspace_id = ?")) {
+          const row = db.entries.find((e: any) => e.id === args[0] && (e.workspace_id ?? "") === args[1]);
+          return row ? { ...row, row_version: row.updated_at ?? row.created_at, valid_from: row.valid_from ?? null, valid_until: row.valid_until ?? null } : null;
         }
         // GET /entry. Models the COALESCE alias: a row written before the
         // updated_at column exists carries no value, and the route must see
@@ -1061,24 +1113,25 @@ export class D1Mock {
                 importance_score: e.importance_score ?? 0, created_at: e.created_at,
                 workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "",
                 source: e.source ?? "", actor_display_name: author?.name ?? null,
+                valid_until: e.valid_until ?? null,
               };
             });
           return { results };
         }
-        if (s.includes("SELECT id, tags FROM entries WHERE id IN")) {
-          // expandGraph deprecation check.
+        if (s.includes("SELECT id, tags, valid_until FROM entries WHERE id IN")) {
+          // expandGraph deprecation and validity check (T-0089.2.1).
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, tags: e.tags }));
+            .map((e: any) => ({ id: e.id, tags: e.tags, valid_until: e.valid_until ?? null }));
           return { results };
         }
-        if (s.includes("SELECT id, content, tags, source, created_at FROM entries WHERE id IN") && !s.includes("tags NOT LIKE")) {
+        if (s.includes("SELECT id, content, tags, source, created_at, valid_until FROM entries WHERE id IN") && !s.includes("tags NOT LIKE")) {
           // Graph node hydration (/connections, /graph). The `tags NOT LIKE` guard
           // keeps this from shadowing recall's hydration query (same columns, but it
           // applies the auto-pattern/deprecated/kind filters itself further down).
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
+            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at, valid_until: e.valid_until ?? null }));
           return { results };
         }
         if (s.includes("recall_count, importance_score") && s.includes("WHERE id IN")) {
@@ -1242,10 +1295,10 @@ export class D1Mock {
             .map((e: any) => ({ id: e.id, content: e.content, row_version: e.updated_at ?? e.created_at }));
           return { results };
         }
-        if (s.includes("SELECT id, content FROM entries WHERE id IN")) {
+        if (s.includes("SELECT id, content FROM entries WHERE id IN") || s.includes("SELECT id, content, valid_until FROM entries WHERE id IN")) {
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, content: e.content }));
+            .map((e: any) => ({ id: e.id, content: e.content, valid_until: e.valid_until ?? null }));
           return { results };
         }
         if (s.includes("json_each(entries.tags)") && s.includes("HAVING count > 10")) {
@@ -1314,7 +1367,7 @@ export class D1Mock {
             .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results: rows };
         }
-        if (s.startsWith("SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries") && s.includes("ORDER BY created_at ASC") && !s.includes("WHERE id = ?")) {
+        if (s.startsWith("SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses") && s.includes(" FROM entries") && s.includes("ORDER BY created_at ASC") && !s.includes("WHERE id = ?")) {
           // GET /export: the caller's readable set, oldest first, no LIMIT. The
           // route appends `WHERE workspace_id IN (?, ?)` (bound to args), so
           // rows outside those workspaces are withheld here too. `last_updated`

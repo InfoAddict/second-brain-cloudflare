@@ -6,6 +6,13 @@ import {
 } from "../../src/standing/cache";
 import { decodeVector, encodeVector, type StandingCacheV1 } from "../../src/standing/codec";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+
+/** The validity columns are runtime ALTERs (src/db/init.ts), not in schema.sql; the cache build reads valid_until. */
+function withValidityColumns(d: SqliteD1): SqliteD1 {
+  d.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+  d.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
+  return d;
+}
 import { makeTestEnv } from "../helpers/make-env";
 
 const cfg: StandingCacheConfig = { STANDING_MAX: 3, EMBEDDING_MODEL: "m", EMBEDDING_DIM: 2 };
@@ -63,7 +70,7 @@ const vecOf = (item: StandingCacheV1["items"][number] | undefined, i = 0) => (it
 
 describe("buildStandingCache", () => {
   let sqlite: SqliteD1;
-  beforeEach(() => { sqlite = makeSqliteD1(); resetStandingIsolateState(); });
+  beforeEach(() => { sqlite = withValidityColumns(makeSqliteD1()); resetStandingIsolateState(); });
 
   it("keeps the oldest STANDING_MAX, dropping newer over-cap rows", async () => {
     for (let i = 0; i < 5; i++) insertEntry(sqlite, { id: `m${i}`, createdAt: i, vectorIds: [`m${i}`] });
@@ -257,7 +264,7 @@ describe("buildStandingCache", () => {
 describe("readStandingCaches", () => {
   let sqlite: SqliteD1;
   const waitUntil = vi.fn((p: Promise<unknown>) => { p.catch(() => {}); });
-  beforeEach(() => { sqlite = makeSqliteD1(); resetStandingIsolateState(); waitUntil.mockClear(); });
+  beforeEach(() => { sqlite = withValidityColumns(makeSqliteD1()); resetStandingIsolateState(); waitUntil.mockClear(); });
 
   const cacheAt = (builtAt: number, retryAt?: number): StandingCacheV1 =>
     ({ v: 1, model: cfg.EMBEDDING_MODEL, dim: cfg.EMBEDDING_DIM, builtAt, ...(retryAt !== undefined && { retryAt }), items: [] });
@@ -332,7 +339,7 @@ describe("readStandingCaches", () => {
 
 describe("standingTouched", () => {
   let sqlite: SqliteD1;
-  beforeEach(() => { sqlite = makeSqliteD1(); resetStandingIsolateState(); });
+  beforeEach(() => { sqlite = withValidityColumns(makeSqliteD1()); resetStandingIsolateState(); });
 
   it("schedules a build per workspace, passing known vectors through", async () => {
     insertEntry(sqlite, { id: "m", createdAt: 1, vectorIds: ["m"] });

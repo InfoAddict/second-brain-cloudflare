@@ -5,6 +5,10 @@
  * the container held nothing but bubbles. Home, the brief and the board moved
  * in with them, and the wipe took all three, permanently, because the desktop
  * app runs this page in a window with no address bar and no reload.
+ *
+ * The welcome hero (once a fourth piece of furniture here) was dead markup -
+ * display:none forever, nothing ever cleared it - and was removed along with
+ * its unused strings; RECALL_FURNITURE dropped it too.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -13,14 +17,13 @@ import { describe, it, expect } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
-/** A container holding home, the board, the brief, the hero, and one exchange after them. */
+/** A container holding home, the board, the brief, and one exchange after them. */
 function load() {
   const children = [
     { id: "home", style: { display: "none" } },
     { id: "board-tiles", style: {} },
     { id: "board", style: {} },
     { id: "brief", style: {} },
-    { id: "recall-welcome", style: {} },
     { id: "", style: {} }, // the question bubble
     { id: "", style: {} }, // the answer
   ];
@@ -61,10 +64,10 @@ describe("clearing the conversation", () => {
     expect(ctx.children.filter((c: any) => !c.id)).toHaveLength(0);
   });
 
-  it("keeps home, the board, the brief and the hero", () => {
+  it("keeps home, the board and the brief", () => {
     const ctx = load();
     ctx.clearRecall();
-    expect(ctx.children.map((c: any) => c.id)).toEqual(["home", "board-tiles", "board", "brief", "recall-welcome"]);
+    expect(ctx.children.map((c: any) => c.id)).toEqual(["home", "board-tiles", "board", "brief"]);
   });
 
   it("returns to home rather than to an empty column", () => {
