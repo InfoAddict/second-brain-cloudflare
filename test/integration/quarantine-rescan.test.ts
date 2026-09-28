@@ -106,6 +106,32 @@ describe("rescan compare-and-set includes vector_ids", () => {
   });
 });
 
+describe("rescan marker clear is pinned to the scored content", () => {
+  it("does not clear the marker after a same-tag content replacement", async () => {
+    sq = await migrated();
+    sq.seed({ id: "changed-middle", content: "a".repeat(40_000), createdAt: 1000, tags: [NEEDS_RESCAN_TAG] });
+    const base = envFor(sq);
+    let injected = false;
+    const env = { ...base, DB: {
+      ...base.DB,
+      prepare: (sql: string) => {
+        if (!injected && sql.startsWith("UPDATE entries SET tags =")) {
+          injected = true;
+          sq!.db.prepare(`UPDATE entries SET content = ? WHERE id = ?`).bind(contentWithMiddleInjection(), "changed-middle").run();
+        }
+        return base.DB.prepare(sql);
+      },
+    } as D1Database } as Env;
+
+    await runQuarantineRescan(env, { waitUntil: () => {} }, DEFAULTS);
+
+    const row = sq.rows().find(r => r.id === "changed-middle") as Record<string, any>;
+    const tags: string[] = JSON.parse(row.tags as string);
+    expect(injected).toBe(true);
+    expect(isHeld(tags) || tags.includes(NEEDS_RESCAN_TAG)).toBe(true);
+  });
+});
+
 describe("long-note write boundary", () => {
   it("does not expose an unscanned middle injection before the nightly pass", async () => {
     sq = await migrated();
