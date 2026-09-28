@@ -72,6 +72,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
+  // Sampled recall log (T-0089.5.2 Part A).
+  "recall_log", "idx_recall_log_ws",
   "entries_fts",
   "entry_counts",
   ...PROMPT_CAPSULE_TRIGGERS,
@@ -265,7 +267,8 @@ describe("initializeDatabase updated_at migration", () => {
       // dedicated batch mirroring entries_fts's ownership rule.
       // MOVED 61 -> 62 (T-0089.4.4) by idx_entries_conflict_held, the partial index behind the digest's held-draft check.
       // MOVED 62 -> 66 (T-0089.6.1) by the four partial indexes behind the agent brief.
-      expect(migrated).toBe(66); // 27 base objects + 18 ALTERs + 15 post-column objects + the email-index CREATE
+      // MOVED 66 -> 68 (T-0089.5.2) by the recall_log table and idx_recall_log_ws.
+      expect(migrated).toBe(68); // 29 base objects + 18 ALTERs + 15 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -600,7 +603,8 @@ describe("initializeDatabase against real SQLite", () => {
     // GROUP BY seed, created together in ONE batch — same +1, not +5.
     // MOVED 55 -> 56 (T-0089.4.4) by idx_entries_conflict_held.
     // MOVED 56 -> 60 (T-0089.6.1) by the four partial indexes behind the agent brief.
-    expect(cold).toBe(60); // one probe, then the 59 statements a new brain needs
+    // MOVED 60 -> 62 (T-0089.5.2) by the recall_log table and idx_recall_log_ws.
+    expect(cold).toBe(62); // one probe, then the 61 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
