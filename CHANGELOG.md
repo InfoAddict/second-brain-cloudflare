@@ -19,8 +19,38 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Saving**
 
-- Nine tag prefixes are now reserved for the brain's own use: `quarantine:`, `edited-canonical:`, `standing:`, `ledger:`, `confidence:`, `confidence-source:`, `outcome:`, `review-rearms:`, `counterparty:`, plus the bare `owed-to-me` marker. A tag in one of these that a person or an AI tool tries to set directly on `remember` or `update` is not saved, and the reply says so. A tag you already had that merely looks like one of these (an `outcome:won` or `confidence:high` from before this change) keeps showing normally; nothing stored is rewritten. The features that use these prefixes land in a later release.
+- Nine tag prefixes are reserved for the brain's own use: `quarantine:`, `edited-canonical:`, `standing:`, `ledger:`, `confidence:`, `confidence-source:`, `outcome:`, `review-rearms:`, `counterparty:`, plus the bare `owed-to-me` marker. A tag in one of these that a person or an AI tool tries to set directly on `remember` or `update` is not saved, and the reply says so. A tag you already had that merely looks like one of these (an `outcome:won` or `confidence:high` from before this change) keeps showing normally; nothing stored is rewritten. The features that use these prefixes (standing instructions, decisions, commitments and self-protecting quarantine) are described below.
 - The nightly digest and the weekly insight pass never merge into or replace a memory you or an assistant wrote. If one of them writes something that looks like an existing memory, it saves a new memory flagged as a possible duplicate and leaves yours untouched (a digest merges only into an earlier digest, and an insight only into an earlier insight, and never into one you have edited). If what they write contradicts one of your memories, they save it as a draft and leave your memory as it was, instead of marking yours deprecated. A digest that contradicts one of your memories is saved as a held draft instead, and that topic is not digested again while the draft stays as it is. Edit it, confirm it, delete it or mark it deprecated and the next nightly run digests the topic normally.
+- A single memory is now capped at about 20,000 words (128 KB). Saving, appending or updating past that cap saves nothing and tells you to split it into smaller memories.
+- A memory too long for the automatic hidden-instruction check (well past the 128 KB cap's own text) is held rather than scanned. It never reaches an AI prompt; read it in the dashboard and release it, or save it shorter next time.
+
+**Trash and undo**
+
+- Forgetting a memory now moves it to the trash instead of deleting it right away. It stays there for 14 days by default (7, 14, 30 or 90 in Advanced Settings), and drops out of recall and search immediately. Restore it from the trash, or say "undo that" to bring it straight back.
+- Every change to a memory is kept: up to 20 versions by default (10, 20 or 50 in Advanced Settings). Say "undo that" to reverse your most recent change, ask for an older version by date, or use the dashboard's history view. Undoing a burst of related changes (a big cleanup, several contradictions in a row) can be reversed in one step, both from chat and from the dashboard's "Changed by AI tools" panel.
+- A memory that was permanently deleted before this release, or a version written before the brain was updated, cannot be brought back. Everything since update day can.
+
+**Time and validity**
+
+- Say when something became true or stopped being true, and recall keeps both the current fact and its history straight: "I moved to Austin in June" records the date; "I lived in Boston until 2020" records that it ended. When you ask your AI about a memory, it can tell you whether it is current, replaced by a newer one (and by which one, and when), or ended outright; the same status is in the REST and MCP response for anyone building on the API. The dashboard does not show this status visually yet.
+- A new fact that contradicts an older one no longer marks the older one "wrong": it closes the older fact's own validity window and keeps it as history, so asking what was true on a past date still gets the right answer. Marking a memory "wrong" is now reserved for something that was never true, or a plan that was cancelled, and doing so makes any memory it had replaced current again.
+- Ask "what was true on such-and-such a date" and recall answers as of that date, including facts later corrected, each labelled as a belief that was later retracted rather than shown as the answer.
+- The nightly pass that flags a memory as possibly out of date now waits longer for a fact that rarely changes (90 days) and less long for one that changes often (14 days), and flags a memory immediately once a date you gave it has passed. The "may be out of date" review lists why: not confirmed in a while, its date has passed, or it was built on a memory that was later marked wrong.
+- If a memory you built on gets marked wrong later, anything built on it is flagged for a second look, not deleted or blocked.
+
+**Self-protecting quarantine**
+
+- A memory that looks like an instruction to an AI, contains hidden text, changes what your AI tools always see, arrives as part of an unusually large burst of writes, or is too long to check automatically, is held out of recall automatically. The AI tool that wrote it is told immediately, in plain language, and the user can release it with "undo" once they have read it. Nothing is ever released automatically.
+
+**Standing instructions, decisions and commitments**
+
+- Ask your AI to remember something "whenever a topic comes up" and it becomes a standing instruction: it fires inside relevant searches from then on, without you repeating it. The dashboard lists every standing instruction and whether it is currently firing.
+- A decision you make, with how confident you were, can be brought back up for review later and its outcome recorded (right, wrong, mixed, or too early to tell). Over time the dashboard shows how well your stated confidence has tracked what actually happened.
+- Something someone owes you, or something you owe someone else, is tracked as an open commitment with a due date, and shows up in your due items and in the dashboard's commitments list until it is marked done.
+
+**Recall log and implicit feedback**
+
+- Recall can log the searches it runs and which of the results you opened afterward, entirely for improving future search quality. It is off everywhere by default; turning it on is an admin setting, and even then it samples at most about 200 searches a day and keeps them for 30 days.
 
 **Search**
 
@@ -34,12 +64,28 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Agents can read the latest existing project or tag digest without starting a new summary or model call.
 - Agents can inspect who changed a memory, through which channel, and its supersedes links.
 - The session-start brief reads only the rows of its own queues, so it stays cheap on a large brain, and it lists only items you can act on. History for a shared memory starts at the moment it was shared unless you wrote it.
+- Every AI tool's session-start message now names what changed since last time: how many memories were edited, by which tool, and when, with a burst of related changes counted together. You can say "undo all" to reverse a burst, from chat or from the dashboard.
+
+**Dashboard**
+
+- A new "Changed by AI tools" panel on the home screen lists recent edits, groups a burst of related ones together, and lets you undo one change, undo a whole group, or release a held one, without leaving the panel.
+- Standing instructions have their own list, showing whether each one is currently firing or held back, and why.
+- Decisions you logged have their own review queue, with your stated confidence next to how things actually turned out over time.
+- Commitments (something owed to you, or by you) show up alongside due items until they are marked done.
+- A held memory shows a banner explaining why in plain language, and a way to release it once you have read it. Nothing is held silently.
 
 **Desktop app**
 
 - The Worker update screen now shows what changed for a major version. For 4.0: "Every edit to a memory is now kept, so any change can be undone, by you or by asking your AI. Forgotten memories wait in the trash for 14 days before they are removed for good. Edits made before this update were not recorded, so undo starts from today." Shown to the brain's owner only, and the Done screen adds a line reading the brain's actual trash retention once the update has finished.
 - Advanced Settings has a new "History and trash" section: how long forgotten memories wait in the trash (7, 14, 30 or 90 days) and how many changes are kept per memory (10, 20 or 50). Owners and admins can change these; members see them read-only, with a line saying who can change them.
 - The app's self-update dialog now says plainly that 4.0's features depend on the brain being updated, not the app alone. English: "New in 4.0 once your Second Brain is updated: every change to a memory is now kept, so you can undo it, yourself or by asking your AI. Forgotten memories wait in the trash for 14 days by default before they're removed for good. This app update alone doesn't bring those. Ask whoever owns your Second Brain whether it's been updated yet." Italian: "Novità della versione 4.0, una volta aggiornato il tuo Second Brain: ogni modifica a un ricordo viene ora conservata, così puoi annullarla, da te o chiedendolo alla tua IA. I ricordi dimenticati restano nel cestino per 14 giorni per impostazione predefinita prima di essere eliminati per sempre. Questo aggiornamento dell'app da solo non porta queste novità. Chiedi al proprietario del tuo Second Brain se lo ha già aggiornato."
+
+**Upgrading from 3.7**
+
+- The database schema updates itself automatically the first time 4.0 runs: no manual migration step, and no existing memory is rewritten or rescored.
+- The recall log is off by default on every brain, new or upgraded; turning it on is an explicit admin choice.
+- A batch of new admin config keys ships with this release, for trash and history retention, staleness thresholds, quarantine sensitivity, standing instructions and decision review. Every one keeps its shipped default until you change it, so an upgrade changes nothing on its own.
+- Rolling back to 3.7 after using 4.0: 3.7 does not know the `quarantine:` or `edited-canonical:` tags. A held memory would be readable again in 3.7, but only by keyword search, since a held memory is never given search vectors.
 
 ## [3.7.0] — Search that puts the right answer first
 
