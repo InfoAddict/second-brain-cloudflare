@@ -44,7 +44,7 @@ import { resolveClientLabel, type McpClientExtra, type McpClientProps } from "./
 import { heldReason, holdReasonPhrase, isHeld } from "../quarantine/tags";
 import { contentByteLength, isOverContentLimit, tooLargeMcpMessage, MAX_CONTENT_BYTES } from "../lib/content-size";
 import {
-  currentValidityAt, parseValidityInput, supersedeReply, updateEntryValidity, updateValidityReply, validityReplySuffix, VALIDITY_WITH_CONTENT_ERROR,
+  currentValidityAt, parseValidityInput, supersededBySql, supersedeReply, updateEntryValidity, updateValidityReply, validityReplySuffix, VALIDITY_WITH_CONTENT_ERROR,
 } from "../memory/validity";
 
 // Asking the calling model for this is the whole point: it has already read the content
@@ -1231,13 +1231,7 @@ export function buildMcpServer(
         // scope-exempt: identity-less branch: production MCP always resolves an identity (src/mcp/handler.ts); this arm is unit fixtures only
         // validity: any: get is a single-memory fetch, not a current-facts answer (5.9)
         `SELECT id, content, tags, source, created_at, workspace_id, actor_id, valid_from, valid_until,
-                (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
-                   FROM edges g JOIN entries s ON s.id = g.source_id
-                  WHERE g.target_id = entries.id AND g.type = 'supersedes'
-                    AND s.tags NOT LIKE '%"status:deprecated"%'
-                    AND s.workspace_id = entries.workspace_id
-                    AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
-                  ORDER BY s.created_at DESC LIMIT 1) AS superseded_by_json
+                ${supersededBySql("entries")} AS superseded_by_json
          FROM entries WHERE id = ?${scope ? ` AND ${scope.clause}` : ""}`
       ).bind(...(scope ? [id, ...scope.bindings] : [id])).first() as Record<string, any> | null;
       if (!row) {

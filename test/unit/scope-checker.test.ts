@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (218 queries, 114 exceptions, 27 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (221 queries, 114 exceptions, 28 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1469,7 +1469,10 @@ describe("the checker over the real source tree", () => {
     // T-0089.2.1 lane A's supersede/retraction/cascade/updateEntryValidity scope-checked and scope-exempt
     // sites) are independently-tracked deltas from the same base — recomputed against the real scanner
     // output after combining rather than hand-reconciling the two.
-    ).toEqual({ queries: 220, exempt: 114, checked: 28, outerJoin: 1 });
+    // Deliberate: +1 query (220 -> 221) for R16 (T-0089.2.1): the superseded_by lookup is one shared
+    // fragment (src/memory/validity.ts supersededBySql), its own literal, pinned to the outer row's
+    // workspace; the four readers that spelled it out now interpolate it.
+    ).toEqual({ queries: 221, exempt: 114, checked: 28, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

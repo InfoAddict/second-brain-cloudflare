@@ -50,6 +50,25 @@ export function currentValiditySql(p: Params, alias: string, now: number): strin
   return currentValidityAt(alias, p.add(now));
 }
 
+/**
+ * "Replaced by" for the outer row `outer` (spec 14 5.9): the newest live, non-deprecated row that
+ * superseded it at the moment its window closed, as {id, preview} JSON, or NULL. The one definition
+ * every reader interpolates (R16): it walks idx_edges_target from the outer row and fetches each
+ * closer by primary key (CROSS JOIN fixes that order; a join SQLite may reorder drove it from
+ * idx_entries_workspace_created and read the whole workspace per returned row), and an open row
+ * (valid_until NULL, nearly every row) skips it entirely.
+ */
+export function supersededBySql(outer: string): string {
+  // scope-checked: the closer s is pinned to the outer row's own workspace, which the embedding statement scopes
+  return `CASE WHEN ${outer}.valid_until IS NULL THEN NULL ELSE (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
+       FROM edges g CROSS JOIN entries s ON s.id = g.source_id
+      WHERE g.target_id = ${outer}.id AND g.type = 'supersedes'
+        AND s.tags NOT LIKE '%"status:deprecated"%'
+        AND s.workspace_id = ${outer}.workspace_id
+        AND COALESCE(s.valid_from, s.created_at) = ${outer}.valid_until
+      ORDER BY s.created_at DESC LIMIT 1) END`;
+}
+
 /** Actually true at T: starts at or before T and ends after T. */
 export function validAtSql(p: Params, alias: string, t: number): string {
   const at = p.add(t);

@@ -45,6 +45,7 @@ import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./ke
 import { vectorSortKey } from "../vectorize/ids";
 import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
 import { applyOccupancyCap, CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates, liftFor } from "./source-trust";
+import { supersededBySql } from "../memory/validity";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -940,13 +941,7 @@ export async function recallEntries(
       // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by d1Filters above — so it can never cross a workspace boundary
       // validity: current: d1Filters carries the predicate (5.5)
       `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id, valid_from, valid_until,
-              (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
-                 FROM edges g JOIN entries s ON s.id = g.source_id
-                WHERE g.target_id = entries.id AND g.type = 'supersedes'
-                  AND s.tags NOT LIKE '%"status:deprecated"%'
-                  AND s.workspace_id = entries.workspace_id
-                  AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
-                ORDER BY s.created_at DESC LIMIT 1) AS superseded_by_json
+              ${supersededBySql("entries")} AS superseded_by_json
          FROM entries WHERE id IN (${placeholders})${d1Filters}`
     ).bind(...batch, ...filterBindings).all() as { results: Record<string, any>[] };
     d1Rows.push(...results);
