@@ -11,6 +11,7 @@ import type { ChangeContext } from "../lib/audit";
 import type { Config } from "../config";
 import type { MemoryStatus } from "./status";
 import { zonedTimeMs } from "../when/timezone";
+import { edgeEndpointsReadableSql } from "../graph/edges";
 import { Params, pruneStatement, snapshotStatement } from "./versions";
 
 /**
@@ -72,7 +73,7 @@ export function planSupersede(older: Window, newer: Window): SupersedePlan {
  */
 export function supersedeStatements(
   env: Env, plan: SupersedePlan, older: Window, newer: Window, change: ChangeContext,
-  cfg: Pick<Config, "VERSION_KEEP">, guard?: (p: Params) => string,
+  cfg: Readonly<Config>, guard?: (p: Params) => string,
 ): D1PreparedStatement[] {
   if (plan.action === "none") return [];
   const [target, closer] = plan.action === "close-older" ? [older, newer] : [newer, older];
@@ -91,12 +92,12 @@ export function supersedeStatements(
 
   const ep = new Params();
   const edgeValues = [crypto.randomUUID(), closer.id, target.id, "supersedes", 1.0, "system", "{}", Date.now(), Date.now(), target.workspaceId].map(v => ep.add(v));
+  const sameWorkspace = JSON.stringify([target.workspaceId]);
   const edgeSql =
     // scope-exempt: by-id: both endpoints pinned to the closed row's workspace; lands only if the window closed
     `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
      SELECT ${edgeValues.join(", ")}
-      WHERE EXISTS (SELECT 1 FROM entries x WHERE x.id = ${ep.add(target.id)} AND x.workspace_id = ${ep.add(target.workspaceId)} AND x.valid_until = ${ep.add(at)})
-        AND EXISTS (SELECT 1 FROM entries y WHERE y.id = ${ep.add(closer.id)} AND y.workspace_id = ${ep.add(target.workspaceId)})
+      WHERE ${edgeEndpointsReadableSql(ep.add(closer.id), ep.add(target.id), ep.add(sameWorkspace))} AND ${windowClosedSql(ep, target.id, at)}
      ON CONFLICT(source_id, target_id, type) DO UPDATE SET weight = max(weight, excluded.weight), updated_at = excluded.updated_at`;
 
   return [
@@ -108,6 +109,12 @@ export function supersedeStatements(
     pruneStatement(env, target.id, cfg.VERSION_KEEP),
     env.DB.prepare(edgeSql).bind(...ep.values()),
   ];
+}
+
+/** True once `id`'s window is closed at `at`: a hook statement's "the write it rides on landed" guard. */
+function windowClosedSql(p: Params, id: string, at: number): string {
+  // scope-exempt: by-id: the row this batch's own guarded UPDATE just wrote
+  return `EXISTS (SELECT 1 FROM entries x WHERE x.id = ${p.add(id)} AND x.valid_until = ${p.add(at)})`;
 }
 
 // ── Date grammar ─────────────────────────────────────────────────────────────
