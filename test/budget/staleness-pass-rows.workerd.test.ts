@@ -60,6 +60,9 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("runStalenessPass rows_read/wri
       try {
         resetDatabaseInit();
         const kv = makeMemoryKV();
+        const boot = { DB: d1.db, OAUTH_KV: kv } as any;
+        await initializeDatabase(boot);
+        setDbReady(true);
         const now = Date.now();
         // Half volatile, half state, all aged well past both the 14- and 90-day defaults, and
         // never yet checked: a realistic full candidate pool, not an empty table.
@@ -74,9 +77,6 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("runStalenessPass rows_read/wri
         }
 
         const tally = { rowsRead: 0, rowsWritten: 0, calls: 0 };
-        const boot = { DB: d1.db, OAUTH_KV: kv } as any;
-        await initializeDatabase(boot);
-        setDbReady(true);
         const env = { DB: metered(d1.db, tally) as any, OAUTH_KV: kv } as any;
 
         const { flagged } = await runStalenessPass(env, {} as ExecutionContext);
