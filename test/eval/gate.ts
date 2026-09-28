@@ -20,6 +20,11 @@ export interface GateThresholds {
   rowsReadSlack: number;
   maxAddedNeuronsPerRecall: number;
   maxAddedAiCalls: number;
+  /** Per-(category, subset:<name>) regression floor (T-0089.2.6, 14-t2-time-spec.md 6.4): applies where the round-4
+   * category-level rule could not see a subset collapse behind other subsets' gains. */
+  subsetToleranceFloor: number;
+  minSubsetQueries: number;
+  minSubsetClusters: number;
 }
 
 // Provisional: Rahil approves; Task 11 checks them against the measured MDE.
@@ -44,13 +49,26 @@ export const DEFAULT_GATE: Readonly<GateThresholds> = Object.freeze({
   rowsReadSlack: 50,
   maxAddedNeuronsPerRecall: 25,
   maxAddedAiCalls: 1,
+  // Approved in the T-0089.2.6 spec (14-t2-time-spec.md 6.4): a subset needs its own power floor, lower than a
+  // category's (10 clusters, as target-gaps and target-categories already use), because a subset is usually a
+  // fraction of its category.
+  subsetToleranceFloor: 0.05,
+  minSubsetQueries: 20,
+  minSubsetClusters: 10,
 });
 
 export type RuleStatus = "pass" | "fail" | "inconclusive" | "skipped";
 export type Verdict = "PASS" | "FAIL" | "INCONCLUSIVE";
 export interface RuleResult { rule: string; status: RuleStatus; detail: string }
 export interface MetricDelta { scope: string; metric: MetricName; base: number; candidate: number; ci: BootstrapCI }
-export interface GateResult { verdict: Verdict; rules: RuleResult[]; deltas: MetricDelta[]; mde: Partial<Record<MetricName, number>> }
+export interface CorpusFloor { scope: string; metric: MetricName; min: number }
+export interface GateResult {
+  verdict: Verdict; rules: RuleResult[]; deltas: MetricDelta[]; mde: Partial<Record<MetricName, number>>;
+  /** Named `(category, subset:<name>)` regressions the "subset-regression" rule failed on (T-0089.2.6). */
+  subsetRegressions: string[];
+  /** Named corpus floors (CorpusSpec.floors) the "corpus-floors" rule failed on. */
+  floorFailures: string[];
+}
 export interface GateOptions {
   thresholds?: Partial<GateThresholds>;
   /** Categories the variant claims to help; enables the targeted-gain path. */
@@ -58,16 +76,21 @@ export interface GateOptions {
   allowUnmeasuredRowsRead?: boolean;
   /** Known gaps (ids like "T-0072") the variant claims to fix. Their queries rejoin the rules and get their own improvement path. */
   targetGaps?: readonly string[];
+  /** "category:subsetname" pairs the variant claims to fix, like targetGaps but for a subset within a category
+   * (T-0089.2.6): needed because a subset win inside a large category cannot reach the category margin. */
+  targetSubsets?: readonly string[];
+  /** Absolute bars from CorpusSpec.floors, checked against the candidate's mean for that exact scope. */
+  floors?: readonly CorpusFloor[];
   /** Bootstrap iterations, seed and alpha. Only tests that assert a rule's status, not an interval's width, lower these. */
   bootstrap?: BootstrapOptions;
 }
 
 interface Pair { b: QueryResult; c: QueryResult }
 
-function finish(rules: RuleResult[], deltas: MetricDelta[], mde: GateResult["mde"] = {}): GateResult {
+function finish(rules: RuleResult[], deltas: MetricDelta[], mde: GateResult["mde"] = {}, subsetRegressions: string[] = [], floorFailures: string[] = []): GateResult {
   const verdict: Verdict = rules.some(r => r.status === "fail") ? "FAIL"
     : rules.some(r => r.status === "inconclusive") ? "INCONCLUSIVE" : "PASS";
-  return { verdict, rules, deltas, mde };
+  return { verdict, rules, deltas, mde, subsetRegressions, floorFailures };
 }
 
 /** Every gap marker on a query, sorted, so a second or swapped gap id is drift too. */
@@ -226,20 +249,50 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
       if (row.ci.mean < -tolerance - 1e-9 || row.ci.hi < 0) regressions.push(`${category} ${metric} ${row.ci.mean.toFixed(4)}`);
     }
   }
-  // Report-only: a category split by a `subset:<name>` tag (a second construction of the same kind of query) shows each
-  // part, and the untagged remainder, as its own row. No rule reads these rows.
+  // A category split by a `subset:<name>` tag (a second construction of the same kind of query) shows each part,
+  // and the untagged remainder, as its own row. A round-4 failure was a category-level pass hiding a subset
+  // collapse (backdated-past 0.514 to 0.291) behind other subsets' gains, so a named subset with enough power now
+  // gets its own regression floor (T-0089.2.6, 14-t2-time-spec.md 6.4, P14: every corpus, not only temporal). The
+  // "[rest]" complement stays report-only, as before.
   const subsetOf = (p: Pair) => (p.c.tags ?? []).find(tag => tag.startsWith("subset:"));
+  const subsetRegressions: string[] = [];
+  const skippedSubsets: string[] = [];
   for (const category of ALL_QUERY_CATEGORIES) {
     const inCategory = regressionPairs.filter(p => p.c.category === category);
     const names = [...new Set(inCategory.map(subsetOf).filter((name): name is string => !!name))].sort();
     for (const name of names) {
-      for (const [label, part] of [[`${category} [${name}]`, inCategory.filter(p => subsetOf(p) === name)], [`${category} [rest]`, inCategory.filter(p => subsetOf(p) !== name)]] as const) {
-        if (part.length) for (const metric of ["recall10", "mrr10"] as const) delta(label, part, metric);
+      const scope = `${category} [${name}]`;
+      const part = inCategory.filter(p => subsetOf(p) === name);
+      const rest = inCategory.filter(p => subsetOf(p) !== name);
+      if (part.length) {
+        const partClusters = new Set(part.map(p => p.c.clusterKey)).size;
+        const powered = part.length >= t.minSubsetQueries && partClusters >= t.minSubsetClusters;
+        for (const metric of ["recall10", "mrr10"] as const) {
+          const row = delta(scope, part, metric);
+          if (!powered) continue;
+          const tolerance = Math.max(t.subsetToleranceFloor, 1 / part.length);
+          if (row.ci.mean < -tolerance - 1e-9 || row.ci.hi < 0) subsetRegressions.push(`${scope} ${metric} ${row.ci.mean.toFixed(4)}`);
+        }
+        if (!powered) skippedSubsets.push(`${scope} (n=${part.length}, ${partClusters} clusters)`);
       }
+      if (rest.length) for (const metric of ["recall10", "mrr10"] as const) delta(`${category} [rest]`, rest, metric);
     }
   }
   add("regression", regressions.length ? "fail" : "pass",
     regressions.length ? regressions.join("; ") : `no headline or category regression${skipped.length ? `; skipped underpowered: ${skipped.join(", ")}` : ""}`);
+  add("subset-regression", subsetRegressions.length ? "fail" : "pass",
+    subsetRegressions.length ? subsetRegressions.join("; ") : `no subset regression${skippedSubsets.length ? `; skipped underpowered: ${skippedSubsets.join(", ")}` : ""}`);
+
+  // Corpus floors (CorpusSpec.floors): an absolute bar on the candidate's mean for a declared scope, which a
+  // delta-based rule alone cannot express (T-0089.2.5's month-day-control acceptance is the first of these).
+  const floorFailures: string[] = [];
+  for (const floor of opts.floors ?? []) {
+    const row = deltas.find(d => d.scope === floor.scope && d.metric === floor.metric);
+    if (!row) { floorFailures.push(`floor scope "${floor.scope}" ${floor.metric} matches no computed row`); continue; }
+    if (row.candidate < floor.min) floorFailures.push(`${floor.scope} ${floor.metric} ${row.candidate.toFixed(4)} is below the floor ${floor.min}`);
+  }
+  add("corpus-floors", floorFailures.length ? "fail" : opts.floors?.length ? "pass" : "skipped",
+    floorFailures.length ? floorFailures.join("; ") : opts.floors?.length ? `${opts.floors.length} floor(s) met` : "no floors declared");
 
   // Improvement: proven gain overall, or a proven targeted gain in a declared category.
   const wins: string[] = [];
@@ -275,6 +328,23 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
     }
     if (!powered) {
       underpowered.push(`gap:${id} has ${subset.length} queries in ${gapClusters} clusters, below the ${t.minCategoryQueries}-query / ${t.minCategoryClusters}-cluster floor; a fix cannot be proven at this gate`);
+    }
+  }
+  // Declared target subsets ("category:subsetname", T-0089.2.6): like target gaps, but for a subset within a
+  // category, needed when a subset's win cannot reach the category-level improvement margin on its own.
+  for (const spec of opts.targetSubsets ?? []) {
+    const [category, name] = spec.split(":");
+    const subset = pairs.filter(p => p.c.category === category && subsetOf(p) === `subset:${name}`);
+    if (!subset.length) { add("target-subsets", "inconclusive", `declared target subset ${spec} matches no query`); continue; }
+    const subsetClusters = new Set(subset.map(p => p.c.clusterKey)).size;
+    const powered = subset.length >= t.minCategoryQueries && subsetClusters >= t.minCategoryClusters;
+    for (const metric of ["recall10", "mrr10"] as const) {
+      const row = delta(`${category} [subset:${name}] (target)`, subset, metric);
+      if (!powered) continue;
+      if (row.ci.mean >= t.targetMargin && row.ci.lo > 0) wins.push(`${spec} ${metric} +${row.ci.mean.toFixed(4)} (n=${subset.length} queries, ${subsetClusters} clusters)`);
+    }
+    if (!powered) {
+      underpowered.push(`${spec} has ${subset.length} queries in ${subsetClusters} clusters, below the ${t.minCategoryQueries}-query / ${t.minCategoryClusters}-cluster floor; a fix cannot be proven at this gate`);
     }
   }
   // No gain shown and the comparison could not have seen one of the margin's size: unproven, not disproven.
@@ -314,15 +384,17 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   } else {
     add("cost", problemsCost.length ? "fail" : "inconclusive",
       problemsCost.length ? problemsCost.join("; ") : unmeasuredRowsRead(base, cand));
-    return finish(rules, deltas, mde);
+    return finish(rules, deltas, mde, subsetRegressions, floorFailures);
   }
   add("cost", problemsCost.length ? "fail" : "pass", problemsCost.length ? problemsCost.join("; ") : `within budget${rowsNote}`);
-  return finish(rules, deltas, mde);
+  return finish(rules, deltas, mde, subsetRegressions, floorFailures);
 }
 
 export function formatGate(result: GateResult): string {
   const lines = [`GATE: ${result.verdict}`];
   for (const r of result.rules) lines.push(`  [${r.status.toUpperCase().padEnd(12)}] ${r.rule}: ${r.detail}`);
+  if (result.subsetRegressions.length) lines.push(`  subset regressions: ${result.subsetRegressions.join("; ")}`);
+  if (result.floorFailures.length) lines.push(`  floor failures: ${result.floorFailures.join("; ")}`);
   const mdeText = Object.entries(result.mde).map(([m, v]) => `${m} ${v!.toFixed(4)}`).join("  ");
   if (mdeText) lines.push(`  minimum detectable effect (80% power): ${mdeText}`);
   lines.push("  deltas (candidate - baseline, 95% bootstrap CI):");
