@@ -40,6 +40,7 @@ import { readEntryHistory } from "../memory/history";
 import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
 import { heldReason, holdReasonPhrase, isHeld } from "../quarantine/tags";
 import { contentByteLength, isOverContentLimit, tooLargeMcpMessage, MAX_CONTENT_BYTES } from "../lib/content-size";
+import { supersedeReply } from "../memory/validity";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -594,7 +595,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: `Duplicate detected (${(result.score * 100).toFixed(0)}% match) — not stored. Existing entry ID: ${result.matchId}` }] };
       }
       if (result.status === "contradiction") {
-        return { content: [{ type: "text", text: `Stored. ID: ${result.id} — resolved contradiction with entry ${result.resolvedConflict}${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
+        const text = result.supersede
+          ? supersedeReply(result.id, result.resolvedConflict, result.supersede, (await resolveConfig(env)).TIMEZONE)
+          : `Stored. ID: ${result.id}. It replaces entry ${result.resolvedConflict}.`;
+        return { content: [{ type: "text", text: `${text}${noteSuffix}` }] };
       }
       if (result.status === "contradiction_protected") {
         const disposition = result.entryStatus

@@ -144,7 +144,10 @@ export async function handleCaptureRoutes(
       });
     }
     if (result.status === "contradiction") {
-      return json(withReservedNote({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason }, ignoredReservedTags));
+      const supersede = result.supersede
+        ? { closed_id: result.supersede.closedId, at: result.supersede.at, direction: result.supersede.direction }
+        : null;
+      return json(withReservedNote({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason, supersede }, ignoredReservedTags));
     }
     if (result.status === "contradiction_protected") {
       return json(withReservedNote({

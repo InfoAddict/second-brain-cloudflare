@@ -40,7 +40,7 @@ export function retractionSites(file: string, text: string): RetractionSite[] {
   });
 }
 
-const PENDING = new Set(["src/capture/entry.ts", "src/capture/lifecycle.ts", "src/memory/actions.ts", "src/memory/trash.ts"]);
+const PENDING = new Set(["src/capture/lifecycle.ts", "src/memory/actions.ts", "src/memory/trash.ts"]);
 
 function scan(): RetractionSite[] {
   const out: RetractionSite[] = [];
@@ -69,7 +69,7 @@ describe("retraction marker rule", () => {
 
   it("every site in src/ is marked", () => {
     const unmarked = scan().filter(s => s.kind === null).map(s => s.file);
-    // Task A3 removes the contradiction deprecate and Task A5 hooks the rest; both empty this list.
+    // Task A5 hooks these and empties the list (A3 removed the contradiction deprecate).
     expect(unmarked.filter(f => !PENDING.has(f))).toEqual([]);
   });
 });

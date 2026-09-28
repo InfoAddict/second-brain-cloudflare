@@ -1,11 +1,10 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
-import { createEdge, inferEdgesOnWrite, sameWorkspaceEdge } from "../graph/edges";
+import { inferEdgesOnWrite } from "../graph/edges";
 import { getStatus, withStatus, type MemoryStatus } from "../memory/status";
 import { extractHashtags } from "../text/hashtags";
 import { classifyThenInfer, scheduleClassifyAndTag } from "./classify";
 import { checkDuplicateAndContradiction } from "./duplicate";
-import { deprecateEntry } from "./lifecycle";
 import { auditEvent, type AuditChannel, type ChangeContext } from "../lib/audit";
 import { deleteStaleVectors, embedContextForRow, reembedOrThrow, discardUpload, storeEntry } from "./store";
 import { tagsAfterWrite } from "../memory/stale";
@@ -18,7 +17,7 @@ import { CONFLICT_HELD_TAG, isCapsuleTag, stripNewReservedTags, SYSTEM_JOB_TAGS,
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES, VERSION_ROW_BUDGET_BYTES } from "../constants";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
-import { deleteEntryVectors } from "../vectorize/batch";
+import { planSupersede, statedWindow, supersedeStatements, windowClosedSql, type SupersedePlan, type Window } from "../memory/validity";
 import type { WhenKind, WhenSource } from "../when/input";
 import { extractUnambiguousDate } from "../when/heuristic";
 
@@ -73,7 +72,11 @@ export type CaptureResult =
   | { status: "blocked"; matchId: string; score: number }
   | { status: "stored"; id: string; tags: string[] }
   | { status: "flagged"; id: string; matchId: string; score: number }
-  | { status: "contradiction"; id: string; resolvedConflict: string; reason?: string }
+  | {
+    status: "contradiction"; id: string; resolvedConflict: string; reason?: string;
+    /** Which window closed (T-0089.2.1): the conflicting row ("older"), or the late-told newcomer ("newer"). */
+    supersede?: { closedId: string; at: number; direction: "older" | "newer"; conflictPreview: string };
+  }
   | { status: "contradiction_protected"; id: string; canonicalId: string; entryStatus: MemoryStatus | null; reason?: string }
   | { status: "merged"; id: string }
   | { status: "replaced"; id: string };
@@ -109,6 +112,12 @@ export interface CaptureOptions {
    * no such event is written.
    */
   channel?: AuditChannel;
+  /**
+   * What the caller stated about when this became and stopped being true (T-0089.2.1), already
+   * parsed and checked (parseValidityDate). Written at creation; a contradiction then supersedes by
+   * interval with it.
+   */
+  validity?: { from?: number | null; until?: number | null };
   /** Test seam: the byte budget a merge's version row may use before it drops the incoming text. */
   versionRowBudgetBytes?: number;
 }
@@ -326,37 +335,57 @@ export async function captureEntry(
     }
   }
 
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const window = statedWindow(opts.validity, now);
+  if ("error" in window) throw new Error(window.error);
+
   // 公開可否をINSERT前に確定し、同時に読むgatewayへ矛盾したprefixを見せない。
+  // The supersede is planned by interval before the INSERT (T-0089.2.1, P4): a late-told or disjoint
+  // newcomer never rules on the conflicting row, so only a close-older plan is subject to protection.
   let protectConflict = false;
   let conflictSnapshot: Record<string, any> | null = null;
+  let plan: SupersedePlan | null = null;
+  let older: Window | null = null;
+  let newer: Window | null = null;
   if (contradiction.detected && contradiction.conflicting_id) {
     const conflictRow = await env.DB.prepare(
       // Pinned to the WRITER's workspace, like the merge read above: a row moved since the scoped
-      // read comes back null, which a system job treats as "not mine to deprecate".
-      `SELECT content, tags, source, actor_id, workspace_id, vector_ids FROM entries WHERE id = ? AND workspace_id = ?`
+      // read comes back null, which a system job treats as "not mine to supersede".
+      `SELECT content, tags, source, actor_id, workspace_id, vector_ids, created_at, COALESCE(updated_at, created_at) AS row_version, valid_from, valid_until FROM entries WHERE id = ? AND workspace_id = ?`
     ).bind(contradiction.conflicting_id, writeCtx.workspaceId).first() as Record<string, any> | null;
     conflictSnapshot = conflictRow;
     const conflictTags: string[] = conflictRow ? JSON.parse(conflictRow.tags ?? "[]") : [];
     const conflictStatus = conflictRow ? getStatus(conflictTags) : null;
     const conflictSource = conflictRow ? String(conflictRow.source ?? "") : "";
+    if (conflictRow) {
+      older = {
+        id: contradiction.conflicting_id, from: (conflictRow.valid_from ?? conflictRow.created_at) as number,
+        until: (conflictRow.valid_until ?? null) as number | null, workspaceId: writeCtx.workspaceId, status: conflictStatus,
+      };
+      newer = { id, from: window.valid_from ?? now, until: window.valid_until, workspaceId: writeCtx.workspaceId, status: getStatus(t) };
+      plan = planSupersede(older, newer);
+    }
     // Canonical memories were always protected here. A transcript gets the same
     // treatment against any memory of another source: the newcomer becomes a
-    // draft and nothing is deprecated, because "we decided X… actually Y" in a
-    // session log is not evidence that the memory of X is wrong.
+    // draft and nothing is superseded, because "we decided X… actually Y" in a
+    // session log is not evidence that the memory of X is no longer true.
     protectConflict =
       // The row is no longer in the writer's workspace (moved, shared or forgotten since the scoped
       // read): whoever wrote it has decided where it lives, and this write may not rule on it.
       !conflictRow
-      || conflictStatus === "canonical"
-      || (TRANSCRIPT_SOURCES.has(source) && conflictSource !== source)
-      // A system job never rewrites a row it did not write, deprecation included.
-      || (opts.systemWrite !== undefined && !isSystemRow({ tags: conflictTags, actor_id: conflictRow?.actor_id, source: conflictSource }, opts.systemWrite));
-
+      || (plan?.action === "close-older" && (
+        conflictStatus === "canonical"
+        || (TRANSCRIPT_SOURCES.has(source) && conflictSource !== source)
+        // A system job never rewrites a row it did not write, supersede included.
+        || (opts.systemWrite !== undefined && !isSystemRow({ tags: conflictTags, actor_id: conflictRow?.actor_id, source: conflictSource }, opts.systemWrite))
+      ));
   }
 
-  const id = crypto.randomUUID();
-  const now = Date.now();
-  const baseTags = contradiction.detected ? [...t, "contradiction-resolved"] : t;
+  // A contradiction whose windows do not overlap (disjoint, already closed, or a closed episode inside
+  // the older window) changes nothing elsewhere: the newcomer is an ordinary memory.
+  const supersedes = contradiction.detected && !!contradiction.conflicting_id && (protectConflict || (plan !== null && plan.action !== "none"));
+  const baseTags = supersedes ? [...t, "contradiction-resolved"] : t;
   const duplicateTags = dup.status === "flagged" ? [...baseTags, "duplicate-candidate"] : baseTags;
   const finalTags = protectConflict
     ? withStatus(duplicateTags.filter(tag => tag !== "contradiction-resolved"), "draft")
@@ -373,10 +402,11 @@ export async function captureEntry(
 
   // versioning: exempt: creation — a new row has no prior state to keep
   await env.DB.prepare(
-    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source, valid_from, valid_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, c, JSON.stringify(finalTags), source, now, now, "[]", writeCtx.workspaceId, writeCtx.actorId,
     resolvedWhen?.at ?? null, resolvedWhen?.kind ?? null, resolvedWhen?.source ?? null,
+    window.valid_from, window.valid_until,
   ).run();
 
   // Indexed once the outcome is known, with the tags the row will actually keep: a system capture can
@@ -398,8 +428,8 @@ export async function captureEntry(
   // spends an inference slot restating the duplicate-candidate tag.
   const suppressId = dup.status === "flagged" ? dup.matchId : undefined;
 
-  if (contradiction.detected && contradiction.conflicting_id) {
-    const conflictId = contradiction.conflicting_id;
+  if (supersedes) {
+    const conflictId = contradiction.conflicting_id!;
 
     const keepAsDraft = async (): Promise<CaptureResult> => {
       const draftTags = finalTags.filter(t => t !== "contradiction-resolved");
@@ -437,68 +467,37 @@ export async function captureEntry(
 
     if (protectConflict) return keepAsDraft();
 
-    // A system job deprecates only a row that is STILL the system row it read: same workspace,
-    // actor, source, tags and content. A person's edit or a share/unshare since then wins.
-    let deprecatedBySystem = false;
-    if (opts.systemWrite !== undefined && conflictSnapshot) {
-      const snap = conflictSnapshot;
-      const snapTags: string = snap.tags ?? "[]";
-      const deprecatedTags = withStatus(JSON.parse(snapTags), "deprecated");
-      const conflictCasColumns = { tags: snapTags, content: snap.content, workspace_id: writeCtx.workspaceId, vector_ids: snap.vector_ids ?? null };
-      const results = await env.DB.batch([
-        snapshotStatement(env, {
-          entryId: conflictId, reason: "status", change, content: { kind: "unchanged" }, nextTags: deprecatedTags,
-          meta: { cause: "contradiction", newEntryId: id }, now,
-          guard: p => `${buildCasGuard(p, conflictCasColumns)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(snap.source)}`,
-        }),
-        (() => {
-          const p = new Params();
-          const tagsIdx = p.add(JSON.stringify(deprecatedTags));
-          const idIdx = p.add(conflictId);
-          // versioning: snapshot
-          // scope-exempt: by-id: compare-and-set on the row read above; workspace_id = the WRITER's workspace is in the predicate
-          return env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}, vector_ids = '[]' WHERE e.id = ${idIdx} AND ${buildCasGuard(p, conflictCasColumns)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(snap.source)}`)
-            .bind(...p.values());
-        })(),
-        pruneStatement(env, conflictId, cfg.VERSION_KEEP),
-      ]);
-      if (changesOf(results[1]) === 0) return keepAsDraft();
-      deprecatedBySystem = true;
-      try {
-        const oldVectorIds: string[] = JSON.parse(snap.vector_ids ?? "[]");
-        if (oldVectorIds.length) await deleteEntryVectors(env, [{ entryId: conflictId, vectorIds: oldVectorIds }]);
-      } catch (e) { console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e); }
-      if (opts.channel) {
-        auditEvent(env, ctx, {
-          entryId: conflictId,
-          actorId: writeCtx.actorId,
-          event: "status_changed",
-          payload: { status: "deprecated", reason: "contradiction", newEntryId: id, channel: opts.channel },
-        });
-      }
-    }
+    // Supersede (T-0089.2.1): one batch closes a window, versions it, links the two rows and moves the
+    // counters. The older row keeps its status and its vectors; it is history, not wrong (D2.1).
+    // Closing the conflicting row compare-and-sets what was read: a system job the whole system row
+    // (as before), a person's write its tags (status included) and its row version (any content edit).
+    // Closing the newcomer (late-told) rules only on this write's own row.
+    const snap = conflictSnapshot!;
+    const closesOlder = plan!.action === "close-older";
+    const guard = !closesOlder ? undefined
+      : opts.systemWrite !== undefined
+        ? (p: Params) => `${buildCasGuard(p, { tags: snap.tags ?? "[]", content: snap.content, vector_ids: snap.vector_ids ?? null })} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(snap.source)}`
+        : (p: Params) => `${buildCasGuard(p, { tags: snap.tags ?? "[]" })} AND COALESCE(e.updated_at, e.created_at) = ${p.add(snap.row_version)}`;
+    const at = (plan as Extract<SupersedePlan, { at: number }>).at;
+    const [closedId, closerId] = closesOlder ? [conflictId, id] : [id, conflictId];
+    const counter = (column: "contradiction_wins" | "contradiction_losses", rowId: string) => {
+      const p = new Params();
+      // versioning: exempt: counters, not undoable content
+      const sql = `UPDATE entries SET ${column} = ${column} + 1 WHERE id = ${p.add(rowId)} AND ${windowClosedSql(p, closedId, at)}`;
+      return env.DB.prepare(sql).bind(...p.values());
+    };
+    const results = await env.DB.batch([
+      ...supersedeStatements(env, plan!, older!, newer!, change, cfg, guard),
+      counter("contradiction_wins", closerId),
+      counter("contradiction_losses", closedId),
+    ]);
 
-    // The user path deprecates by id, pinned to the writer's workspace; if the row is no longer
-    // there this was not a contradiction this write may rule on: keep the newcomer, no counters, no edge.
-    let deprecated = deprecatedBySystem;
-    if (!deprecatedBySystem) {
-      try {
-        deprecated = await deprecateEntry(conflictId, env, change, cfg, writeCtx.workspaceId, { meta: { cause: "contradiction", newEntryId: id } });
-        if (deprecated && opts.channel) {
-          auditEvent(env, ctx, {
-            entryId: conflictId,
-            actorId: writeCtx.actorId,
-            event: "status_changed",
-            payload: { status: "deprecated", reason: "contradiction", newEntryId: id, channel: opts.channel },
-          });
-        }
-      } catch (e) {
-        console.error("Contradiction deprecation failed (non-fatal):", e);
-      }
-    }
-    if (!deprecated) {
-      // Nothing was superseded, so the newcomer is an ordinary memory: `contradiction-resolved` would
-      // wrongly claim otherwise and permanently exclude it from insight candidates.
+    if (changesOf(results[1]) === 0) {
+      // A system job's lost race holds its newcomer, as before.
+      if (opts.systemWrite !== undefined) return keepAsDraft();
+      // A person's: the row changed since it was read, so this was not a contradiction this write may
+      // rule on. Nothing was superseded, so the newcomer is an ordinary memory: `contradiction-resolved`
+      // would wrongly claim otherwise and permanently exclude it from insight candidates.
       const keptTags = finalTags.filter(tag => tag !== "contradiction-resolved");
       // versioning: exempt: protects the newcomer's own uncommitted row before its version chain exists
       await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(keptTags), id).run();
@@ -507,32 +506,23 @@ export async function captureEntry(
         inferEdgesOnWrite(id, neighbors, env, { suppressId, newKind: kind }));
       return { status: "stored", id, tags: keptTags };
     }
+
+    if (opts.channel) {
+      auditEvent(env, ctx, {
+        entryId: closedId,
+        actorId: writeCtx.actorId,
+        event: "superseded",
+        payload: { by: closerId, until: at, channel: opts.channel },
+      });
+    }
     scheduleIndex(finalTags);
-    try {
-      // versioning: exempt: counters, not undoable content
-      await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(id).run();
-      // versioning: exempt: counters, not undoable content
-      await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(conflictId).run();
-    } catch (e) {
-      console.error("Contradiction count update failed (non-fatal):", e);
-    }
-    try {
-      // Stamped with the workspace this capture was written to, for the same
-      // reason POST /link and the MCP link tool stamp theirs: edges.workspace_id
-      // has no default worth having — it falls back to "", the legacy/system
-      // space, which readableWorkspaces grants to ADMINS ONLY. An edge left
-      // there is one the member whose capture drew it can never see in their own
-      // graph. writeCtx is already the resolved answer to "which workspace did
-      // this entry land in", so no second lookup is needed.
-      await createEdge(id, conflictId, "supersedes", { provenance: "system", weight: 1.0, ...sameWorkspaceEdge(writeCtx.workspaceId) }, env);
-    } catch (e) {
-      console.error("Supersedes edge creation failed (non-fatal):", e);
-    }
     classifyThenInfer(id, c, env, ctx, cfg, kind =>
       inferEdgesOnWrite(id, neighbors.filter(n => n.id !== conflictId), env, { suppressId, newKind: kind }));
-    return { status: "contradiction", id, resolvedConflict: conflictId, reason: contradiction.reason };
+    return {
+      status: "contradiction", id, resolvedConflict: conflictId, reason: contradiction.reason,
+      supersede: { closedId, at, direction: closesOlder ? "older" : "newer", conflictPreview: String(snap.content ?? "").slice(0, 60) },
+    };
   }
-
   scheduleIndex(finalTags);
   classifyThenInfer(id, c, env, ctx, cfg, kind =>
     inferEdgesOnWrite(id, neighbors, env, { suppressId, newKind: kind }));

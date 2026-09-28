@@ -36,6 +36,37 @@ export function validAtSql(p: Params, alias: string, t: number): string {
   return `(${EFFECTIVE_FROM(alias)} <= ${at} AND (${alias}.valid_until IS NULL OR ${alias}.valid_until > ${at}))`;
 }
 
+/**
+ * The window a new memory is stored with, from what the caller stated. A fact told only with its end,
+ * or with an end before the moment it is recorded and no start, starts at UNKNOWN_START.
+ */
+export function statedWindow(
+  v: { from?: number | null; until?: number | null } | undefined, createdAt: number,
+): { valid_from: number | null; valid_until: number | null } | { error: string } {
+  const from = v?.from ?? null;
+  const until = v?.until ?? null;
+  if (until === null) return { valid_from: from, valid_until: null };
+  if (from === null) return { valid_from: until < createdAt ? UNKNOWN_START : null, valid_until: until };
+  if (until < from) return { error: "valid_until is before valid_from." };
+  return { valid_from: from, valid_until: until };
+}
+
+/** A validity date in replies: "Jun 1, 2026", in the brain's TIMEZONE. */
+export function formatValidityDate(ms: number, timezone: string): string {
+  return new Date(ms).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: timezone });
+}
+
+/** The `remember` reply for a supersede (spec 14 5.4). `closed` is CaptureResult.supersede. */
+export function supersedeReply(
+  id: string, conflictId: string,
+  closed: { at: number; direction: "older" | "newer"; conflictPreview: string }, timezone: string,
+): string {
+  const date = formatValidityDate(closed.at, timezone);
+  return closed.direction === "older"
+    ? `Stored. ID: ${id}. It replaces entry ${conflictId} ("${closed.conflictPreview}"), which is kept as history: true until ${date}. If that was wrong, undo(${conflictId}) makes ${conflictId} current again.`
+    : `Stored. ID: ${id} as history: it was true until ${date}, when entry ${conflictId} began.`;
+}
+
 export interface Window { id: string; from: number; until: number | null; workspaceId: string; status: MemoryStatus | null }
 
 export type SupersedePlan =
@@ -112,7 +143,7 @@ export function supersedeStatements(
 }
 
 /** True once `id`'s window is closed at `at`: a hook statement's "the write it rides on landed" guard. */
-function windowClosedSql(p: Params, id: string, at: number): string {
+export function windowClosedSql(p: Params, id: string, at: number): string {
   // scope-exempt: by-id: the row this batch's own guarded UPDATE just wrote
   return `EXISTS (SELECT 1 FROM entries x WHERE x.id = ${p.add(id)} AND x.valid_until = ${p.add(at)})`;
 }

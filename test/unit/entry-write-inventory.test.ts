@@ -76,16 +76,18 @@ function scanInventory(): Site[] {
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 250, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 289, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 376, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 413, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 420, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 422, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 460, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 504, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 513, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 515, kind: 'exempt' },
+  // T-0089.2.1 (Track 2 A3): the contradiction branch supersedes instead of deprecating. The system
+  // path's inline deprecate UPDATE (was 460) is gone: both paths close a window through
+  // supersedeStatements (src/memory/validity.ts). The two post-deprecate counter updates (were 513,
+  // 515) are one guarded counter builder (486) riding in the supersede batch. The rest shifted.
+  { file: 'src/capture/entry.ts', line: 259, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 298, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 405, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 443, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 450, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 452, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 486, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 503, kind: 'exempt' },
   { file: 'src/capture/lifecycle.ts', line: 128, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 196, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
@@ -123,7 +125,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/undo.ts', line: 336, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 372, kind: 'exempt' },
   // NEW (T-0089.2.1): the supersede UPDATE (validity window closed; its validity snapshot rides in the same batch).
-  { file: 'src/memory/validity.ts', line: 90, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 111, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
@@ -155,7 +157,7 @@ const HYGIENE_EXEMPT = new Set([
   "src/capture/classify.ts:78", "src/routes/admin.ts:1531", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
-  "src/capture/entry.ts:413", "src/capture/entry.ts:504",
+  "src/capture/entry.ts:443", "src/capture/entry.ts:503",
 ]);
 
 const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");
