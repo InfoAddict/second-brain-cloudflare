@@ -76,16 +76,19 @@ function scanInventory(): Site[] {
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 250, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 289, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 376, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 413, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 420, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 422, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 460, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 504, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 513, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 515, kind: 'exempt' },
+  // MOVED (Task 7, T-0089.7.1/.2/.3): Design 2.1/4.1/5.1's standing/decision/commitment
+  // cross-validation and tag composition landed ahead of the duplicate check, shifting every
+  // site below it down by the same amount; none of these sites themselves changed shape.
+  { file: 'src/capture/entry.ts', line: 315, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 359, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 455, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 493, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 500, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 502, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 541, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 585, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 594, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 596, kind: 'exempt' },
   { file: 'src/capture/lifecycle.ts', line: 128, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 196, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
@@ -151,7 +154,7 @@ const HYGIENE_EXEMPT = new Set([
   "src/capture/classify.ts:78", "src/routes/admin.ts:1531", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
-  "src/capture/entry.ts:413", "src/capture/entry.ts:504",
+  "src/capture/entry.ts:493", "src/capture/entry.ts:585",
 ]);
 
 describe("write-path inventory guard", () => {

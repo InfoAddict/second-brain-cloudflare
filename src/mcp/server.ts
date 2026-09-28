@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Env } from "../env";
 import { RECALL_MAX_TOP_K, SEMANTIC_UNAVAILABLE_DETAIL, VECTORIZE_FIX_HINT } from "../constants";
 import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
+import { partitionIgnoredTags, t7ReplyText, validateT7Capture, type T7CaptureInput } from "../capture/t7-capture";
 import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
 import { getTrashedEntry } from "../memory/trash";
@@ -157,7 +158,9 @@ const REMEMBER_DESCRIPTION =
   + `PROJECTS. ${FOUR_AXES} Call list_projects to discover projects; pass project on remember when the `
   + "conversation is about one, and prefer project over a bare topic tag. A project slug that does not exist "
   + "yet is created automatically in the workspace the memory lands in, so use the slug the user already uses "
-  + "(lowercase letters, digits, - and _).";
+  + "(lowercase letters, digits, - and _).\n\n"
+  + "See standing, decision and owed_by/owed_to below for reminders that fire on topic, tracked decisions, "
+  + "and two-way commitments.";
 
 const APPEND_DESCRIPTION =
   "Append new information to an existing memory. The original content is preserved and your addition is "
@@ -529,21 +532,42 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         team: z.string().optional().describe("When workspace is company, which team workspace — id from list_teams. Omit for your primary team."),
         when: whenParam,
         when_kind: whenKindParam,
+        standing: z.boolean().optional().describe("Set true when the user asks to be reminded of something whenever a topic comes up. Write content as \"When <situation>, <what to do or remember>.\""),
+        decision: z.boolean().optional().describe("Set true when the user commits to a meaningful choice, so it can be reviewed later and its calibration tracked."),
+        confidence: z.number().optional().describe("0 to 1 (e.g. 0.7 for 70%). Pass only with decision: true, and only if the user stated it or clearly implied it — never ask for it."),
+        confidence_source: z.enum(["stated", "inferred"]).optional().describe("\"stated\" if the user gave a number or a clear phrase like \"pretty sure\"; \"inferred\" otherwise (the default). Requires decision: true."),
+        review_by: z.string().optional().describe("When to bring this decision up again; defaults to 90 days out. Requires decision: true; use when instead for anything else."),
+        owed_by: z.string().max(64).optional().describe("Someone promised the user something: their name. Use when for the promised date."),
+        owed_to: z.string().max(64).optional().describe("The user promised someone something: their name. Use when for the promised date."),
       },
     },
-    async ({ content, tags, project, source, volatility, workspace, team, when, when_kind }) => {
+    async ({ content, tags, project, source, volatility, workspace, team, when, when_kind, standing, decision, confidence, confidence_source, review_by, owed_by, owed_to }) => {
       // Same grammar checks, same messages, as POST /capture. Bad input fails before any write.
       const badProjectTag = tags === undefined ? null : projectTagError(tags);
       if (badProjectTag) return { content: [{ type: "text", text: badProjectTag }] };
       // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note.
       if (isOverContentLimit(content)) return { content: [{ type: "text", text: tooLargeMcpMessage() }] };
+
+      const t7Input: T7CaptureInput = { standing, decision, confidence, confidence_source, review_by, owed_by, owed_to, when, when_kind };
+      const t7Validation = validateT7Capture(t7Input);
+      if (t7Validation) return { content: [{ type: "text", text: t7Validation.error }] };
+
+      // A decision's review date comes from review_by/when, resolved inside captureEntry
+      // (Design 4.1) — the generic when/when_kind parsing below is skipped for it, so a
+      // decision's own rules are the only ones that see this string. A commitment's promised
+      // date is an ordinary `when`, just defaulting when_kind to "due" instead of "wake"
+      // (Design 5.1) when the caller left it out.
       let whenInput: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
-      if (when !== undefined) {
-        const parsed = parseExplicitWhen(when, when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
-        if (parsed.error) return { content: [{ type: "text", text: parsed.error }] };
-        whenInput = parsed.value;
-      } else if (when_kind !== undefined) {
-        return { content: [{ type: "text", text: "when_kind requires when" }] };
+      if (!decision) {
+        const hasCommitment = owed_by !== undefined || owed_to !== undefined;
+        const effectiveKind = when_kind ?? (hasCommitment ? "due" : undefined);
+        if (when !== undefined) {
+          const parsed = parseExplicitWhen(when, effectiveKind, undefined, (await resolveConfig(env)).TIMEZONE);
+          if (parsed.error) return { content: [{ type: "text", text: parsed.error }] };
+          whenInput = parsed.value;
+        } else if (when_kind !== undefined) {
+          return { content: [{ type: "text", text: "when_kind requires when" }] };
+        }
       }
       const projectSlug = project?.trim() || undefined;
       const badSlug = projectSlug ? projectSlugError(projectSlug) : null;
@@ -561,7 +585,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       // their own (never-reserved) ones — captureEntry strips these again on its own
       // path (normalizeCaptureInput), this is purely for telling the caller honestly.
       const { ignored: ignoredReservedTags } = stripNewReservedTags(baseTags);
-      const noteSuffix = ignoredReservedTags.length ? ` ${reservedTagsNote(ignoredReservedTags)}` : "";
+      // Design 1.3: a caller tag in a T7 namespace gets its own specific note ("use
+      // standing: true") instead of the generic reserved-tag one.
+      const { t7Notes, otherIgnored } = partitionIgnoredTags(baseTags, ignoredReservedTags);
+      const notes = [...t7Notes, ...(otherIgnored.length ? [reservedTagsNote(otherIgnored)] : [])];
+      const noteSuffix = notes.length ? ` ${notes.join(" ")}` : "";
       const withVerdictOnly = volatility ? withVolatility(baseTags, volatility as Volatility) : baseTags;
       const withVerdict = projectSlug ? withProjectTag(withVerdictOnly, projectSlug) : withVerdictOnly;
       const orgDefault = (await resolveConfig(env)).TEAM_DEFAULT_WORKSPACE;
@@ -577,12 +605,12 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           actorId: identity.userId,
         };
       }
-      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput, identity ? { channel: "mcp" } : {});
+      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput, { ...(identity ? { channel: "mcp" as const } : {}), t7: t7Input });
       // Silent, after the write: a lost registry row never fails the memory.
-      if (identity && projectSlug && result.status !== "blocked") {
+      if (identity && projectSlug && result.status !== "blocked" && result.status !== "t7_refused") {
         await autoCreateProject(env, ctx, { workspaceId: targetCtx.workspaceId, actorId: identity.userId, slug: projectSlug });
       }
-      if (identity && result.status !== "blocked") {
+      if (identity && result.status !== "blocked" && result.status !== "t7_refused") {
         auditEvent(env, ctx, {
           entryId: result.id,
           actorId: identity.userId,
@@ -590,26 +618,44 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           payload: { captureStatus: result.status, channel: "mcp" },
         });
       }
+      if (result.status === "t7_refused") {
+        return { content: [{ type: "text", text: result.error }] };
+      }
       if (result.status === "blocked") {
         return { content: [{ type: "text", text: `Duplicate detected (${(result.score * 100).toFixed(0)}% match) — not stored. Existing entry ID: ${result.matchId}` }] };
       }
-      if (result.status === "contradiction") {
-        return { content: [{ type: "text", text: `Stored. ID: ${result.id} — resolved contradiction with entry ${result.resolvedConflict}${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
-      }
-      if (result.status === "contradiction_protected") {
+      if (result.status === "contradiction" || result.status === "contradiction_protected") {
+        const timezone = (await resolveConfig(env)).TIMEZONE;
+        const t7Note = result.t7 ? ` ${t7ReplyText(result.id, result.t7, { timezone, hasProject: !!projectSlug, commitmentWhenAt: whenInput?.at })}` : "";
+        if (result.status === "contradiction") {
+          return { content: [{ type: "text", text: `Stored. ID: ${result.id} — resolved contradiction with entry ${result.resolvedConflict}${result.reason ? `: ${result.reason}` : ""}.${t7Note}${noteSuffix}` }] };
+        }
         const disposition = result.entryStatus
           ? `Stored as ${result.entryStatus}`
           : "Stored without a status pending classification";
-        return { content: [{ type: "text", text: `${disposition} (ID: ${result.id}) — conflicts with a canonical memory (${result.canonicalId}), which was kept${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
+        return { content: [{ type: "text", text: `${disposition} (ID: ${result.id}) — conflicts with a canonical memory (${result.canonicalId}), which was kept${result.reason ? `: ${result.reason}` : ""}.${t7Note}${noteSuffix}` }] };
       }
+      // A standing capture that merged into an existing row (Design 2.1 point 4a) still notes
+      // it, but keeps the merge/replace message: the row is not new, so the "Saved as a
+      // standing instruction" opening would misdescribe what happened.
+      const standingMergeNote = result.t7?.kind === "standing" && result.t7.applied
+        ? " It is now a standing instruction." : "";
       if (result.status === "replaced") {
-        return { content: [{ type: "text", text: `Memory updated — new content replaced outdated entry (ID: ${result.id}).${noteSuffix}` }] };
+        return { content: [{ type: "text", text: `Memory updated — new content replaced outdated entry (ID: ${result.id}).${standingMergeNote}${noteSuffix}` }] };
       }
       if (result.status === "merged") {
-        return { content: [{ type: "text", text: `Memories merged — combined into existing entry (ID: ${result.id}).${noteSuffix}` }] };
+        return { content: [{ type: "text", text: `Memories merged — combined into existing entry (ID: ${result.id}).${standingMergeNote}${noteSuffix}` }] };
       }
       if (result.status === "flagged") {
+        if (result.t7) {
+          const timezone = (await resolveConfig(env)).TIMEZONE;
+          return { content: [{ type: "text", text: `${t7ReplyText(result.id, result.t7, { timezone, hasProject: !!projectSlug, commitmentWhenAt: whenInput?.at })}${noteSuffix}` }] };
+        }
         return { content: [{ type: "text", text: `Stored with ID: ${result.id} — note: similar entry exists (${(result.score * 100).toFixed(0)}% match, ID: ${result.matchId}). Tagged as duplicate-candidate.${noteSuffix}` }] };
+      }
+      if (result.t7) {
+        const timezone = (await resolveConfig(env)).TIMEZONE;
+        return { content: [{ type: "text", text: `${t7ReplyText(result.id, result.t7, { timezone, hasProject: !!projectSlug, commitmentWhenAt: whenInput?.at })}${noteSuffix}` }] };
       }
       return { content: [{ type: "text", text: `Stored. ID: ${result.id}${noteSuffix}` }] };
     }

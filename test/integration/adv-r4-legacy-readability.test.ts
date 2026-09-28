@@ -74,7 +74,7 @@ const timelineOf = async (id: string, token?: string) => {
 describe("R4-L1 (MAJOR): the owner reads a member's private-era history of a 3.7 system row", () => {
   // Root cause: src/memory/history.ts:65 sets treatAbsentFromAsReadable for ANY actor-"" row the owner reads, and
   // src/memory/history-visibility.ts:31 then `continue`s past every move event lacking fromWorkspaceId. actor ""
-  // is also every digest/auto-insight (isSystemRow, src/capture/entry.ts:119), written into the MEMBER's
+  // is also every digest/auto-insight (isSystemRow, src/capture/entry.ts:136), written into the MEMBER's
   // workspace, and 3.7 move events never carried fromWorkspaceId — so "absent" does not mean "only the owner
   // existed". Bob's pre-share (private) events on his own digest leak to the owner, a company teammate.
 
