@@ -5,7 +5,7 @@ import { KIND_PREFIX } from "../../src/memory/kind";
 import { VOLATILITY_PREFIX } from "../../src/memory/volatility";
 import { STALE_AS_OF } from "../../src/memory/stale";
 import { CAPSULE_SLOT_TAG_PREFIX, CAPSULE_TAG_PREFIX, PROJECT_TAG_PREFIX } from "../../src/tags/system";
-import { OWED_TO_ME_TAG, T7_TAG_PREFIXES } from "../../src/tags/t7";
+import { OWED_TO_ME_TAG, STANDING_TAG, T7_TAG_PREFIXES } from "../../src/tags/t7";
 
 describe("compressionEligibilitySql", () => {
   it("includes the importance, recall+age, and contradiction-win clauses", () => {
@@ -35,6 +35,18 @@ describe("compressionEligibilitySql", () => {
   it("defaults to no prefix", () => {
     const sql = compressionEligibilitySql();
     expect(sql).not.toContain("entries.");
+  });
+
+  // A standing instruction rolled into a digest would stop firing (its own row is gone,
+  // folded into the digest's synthesized text) with nothing to say why — a silent loss the
+  // per-row eligibility check must refuse before importance/recall/age ever gets a say.
+  it("excludes standing:active rows from compression eligibility", () => {
+    expect(compressionEligibilitySql()).toContain(`tags NOT LIKE '%"${STANDING_TAG}"%'`);
+  });
+
+  it("prefixes the standing exclusion's tags column too", () => {
+    const sql = compressionEligibilitySql("entries.");
+    expect(sql).toContain(`entries.tags NOT LIKE '%"${STANDING_TAG}"%'`);
   });
 });
 

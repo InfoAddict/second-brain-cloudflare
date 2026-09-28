@@ -109,14 +109,13 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/capture/store.ts', line: 383, kind: 'snapshot', standing: 'exempt: lane W (T7-capture) in progress; deferred until lane W merges, per director' },
   { file: 'src/capture/store.ts', line: 547, kind: 'snapshot', standing: 'exempt: lane W (T7-capture) in progress; deferred until lane W merges, per director' },
   { file: 'src/capture/store.ts', line: 632, kind: 'snapshot', standing: 'exempt: lane W (T7-capture) in progress; deferred until lane W merges, per director' },
-  // KNOWN GAP (Task 12, not fixed here — out of the touch-writer table's spec, not silently
-  // ignored): compressionEligibilitySql (src/compression/eligibility.ts) checks importance_score,
-  // recall_count and contradiction_wins only, never the row's own tags, so a low-importance,
-  // never-recalled standing:active row is not structurally excluded from being rolled into a
-  // digest under some OTHER tag it also carries. Design 2.6's table does not name digest.ts, and
-  // fixing it is a compression-eligibility question, not a standing-invalidation one; flagged for
-  // the director rather than fixed in scope here.
-  { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot', standing: 'exempt: see KNOWN GAP above' },
+  // FIXED (director's follow-up): compressionEligibilitySql (src/compression/eligibility.ts) now
+  // excludes standing:active rows from the per-row eligibility check, not just from the topic-tag
+  // candidate list — a standing row can no longer be rolled into a digest under some other tag it
+  // also carries. This writer never touches tags itself (a rollup only touches the SOURCE rows it
+  // absorbs, digest.ts:322's own INSERT for the synthesized digest is a new, ordinary row); the
+  // exclusion lives in the eligibility check compressTag's caller applies before this UPDATE runs.
+  { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot', standing: 'exempt: rollup marker on the source row, unaffected by compressionEligibilitySql\'s own exclusion' },
   // MOVED 26 -> 30 -> 35 (T-0089.1.1 round 2, then Task 12's ctx/resolveConfig imports above it).
   { file: 'src/entries/import.ts', line: 35, kind: 'exempt', standing: 'touch' },
   { file: 'src/integrations/mirror.ts', line: 96, kind: 'exempt', standing: 'exempt: mirrors cannot carry standing:active — 1.3 strips it via stripT7CallerTags before mirror tags are built' },

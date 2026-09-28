@@ -9,7 +9,7 @@ import { STALE_AS_OF } from "../memory/stale";
 import { RETRACTED_SOURCE_TAG } from "../tags/system";
 import { CAPSULE_SLOT_TAG_PREFIX, CAPSULE_TAG_PREFIX, PROJECT_TAG_PREFIX } from "../tags/system";
 import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX } from "../quarantine/tags";
-import { T7_TAG_PREFIXES, OWED_TO_ME_TAG } from "../tags/t7";
+import { T7_TAG_PREFIXES, OWED_TO_ME_TAG, STANDING_TAG } from "../tags/t7";
 
 export const COMPRESSION_IMPORTANCE_THRESHOLD = 4;   // importance >= this → protected
 export const COMPRESSION_MIN_RECALL = 2;             // recalled >= this many times → protected
@@ -93,6 +93,13 @@ export function isTopicTagSql(column = "value"): string {
 // Returns a SQL boolean fragment for "this entry is eligible for compression".
 // Contains exactly one `?` placeholder — bind `Date.now() - COMPRESSION_MIN_AGE_MS`.
 // columnPrefix: "" for bare columns (compressTag), "entries." for json_each-joined queries.
+//
+// standing:active is excluded here, not just from the topic-tag candidate list above: a
+// standing instruction that is low-importance and never recalled would otherwise be a
+// perfectly ordinary rollup candidate under some OTHER topic tag it also carries, folding
+// its own row into the digest's synthesized text and silently ending its firing (spec 15
+// Track 7 lane D). isTopicTagSql alone only stops standing:active from being CHOSEN as the
+// tag to compress; it says nothing about a standing row being SWEPT UP by a different one.
 export function compressionEligibilitySql(
   columnPrefix = "",
   config: Readonly<Config> = DEFAULTS,
@@ -100,5 +107,6 @@ export function compressionEligibilitySql(
   const p = columnPrefix;
   return `(${p}importance_score IS NULL OR ${p}importance_score < ${config.COMPRESSION_IMPORTANCE_THRESHOLD})
       AND (${p}recall_count = 0 OR (${p}recall_count < ${config.COMPRESSION_MIN_RECALL} AND ${p}created_at < ?))
-      AND (${p}contradiction_wins IS NULL OR ${p}contradiction_wins = 0)`;
+      AND (${p}contradiction_wins IS NULL OR ${p}contradiction_wins = 0)
+      AND ${p}tags NOT LIKE '%"${STANDING_TAG}"%'`;
 }
