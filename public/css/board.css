@@ -1048,6 +1048,14 @@
   margin: -4px 0 8px;
 }
 
+/* UI reviewer final pass: .legend-item's shared 13px (chart.js's own growth-
+   chart legend also uses it) reads noticeably larger next to this sheet's
+   12px .digest-note paragraphs on either side. Scoped here rather than
+   changed on the shared class, which chart.js's legend still wants. */
+#ledger-legend .legend-item {
+  font-size: 12px;
+}
+
 /*
  * UI review round 2 (MAJOR): four columns (range, n, you said to came true,
  * stated/estimated) still do not always fit 390px next to each other at a

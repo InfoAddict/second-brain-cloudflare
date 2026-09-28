@@ -293,20 +293,28 @@ function setLedgerState(state) {
  * structured fields (18-copy-deck.md section 8.6, T7-C's real contract):
  * not-ready gets its own localized line; the ready line is `kind`'s template
  * ("rate", "in_line" or "no_range"; `stated`/`hit` are percentages, set only
- * when kind is "rate"), with an inferred-count tail appended when nInferred
- * is above zero; the server's own English sentence when `kind` is absent (an
- * older Worker) - pure, so a test can cover every shape without a fetch.
+ * when kind is "rate"); the server's own English sentence when `kind` is
+ * absent (an older Worker) - pure, so a test can cover every shape without a
+ * fetch.
+ *
+ * The "rate" kind's {n} and its inferred-count tail cite the HEADLINE
+ * BUCKET's own n/nInferred (src/decisions/calibration.ts's mainLine), never
+ * the overall n/nInferred above - a rate built from 5 decisions in one
+ * bucket must not be captioned with the total across every bucket. Looked up
+ * from `buckets` by `headlineBucket`'s name, since the structured fields
+ * only carry the overall counts and the bucket-level percentages (stated/hit).
  */
 function calibrationSentence(result) {
   if (!result) return ''
   if (result.ready === false) return t('ledger.lineNotReady', { needed: result.needed, n: result.n })
-  const { kind, stated, hit, n, nInferred } = result
-  let line
-  if (kind === 'rate' && stated != null && hit != null && n != null) line = t('ledger.lineRate', { stated, hit, n })
-  else if (kind === 'in_line' && n != null) line = t('ledger.lineInLine', { n })
-  else if (kind === 'no_range' && n != null) line = t('ledger.lineNoRange', { n })
-  else return result.line || ''
-  if (nInferred > 0) line += ' ' + tPlural('ledger.lineEstimated', nInferred, { k: nInferred })
+  const { kind, stated, hit, n } = result
+  if (kind === 'in_line' && n != null) return t('ledger.lineInLine', { n })
+  if (kind === 'no_range' && n != null) return t('ledger.lineNoRange', { n })
+  if (kind !== 'rate' || stated == null || hit == null) return result.line || ''
+  const headline = (result.buckets || []).find((b) => b.bucket === result.headlineBucket)
+  if (!headline) return result.line || ''
+  let line = t('ledger.lineRate', { stated, hit, n: headline.n })
+  if (headline.nInferred > 0) line += ' ' + tPlural('ledger.lineEstimated', headline.nInferred, { k: headline.nInferred })
   return line
 }
 

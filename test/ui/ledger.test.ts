@@ -45,10 +45,14 @@ const readyResult = () => ({
 const notReadyResult = () => ({ ready: false, n: 4, needed: 10, line: "You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 4 so far." });
 
 describe("ledger math (pure, no DOM)", () => {
-  it("round 4 (T7-C's real fields): calibrationSentence localizes the rate kind", () => {
+  it("round 4 (T7-C's real fields): calibrationSentence localizes the rate kind, from the headline bucket's own n", () => {
     const { calibrationSentence } = load();
 
-    const withFields = calibrationSentence({ line: "So far, your 74% calls came true 52% of the time, based on 14 decisions.", kind: "rate", stated: 74, hit: 52, n: 14 });
+    const withFields = calibrationSentence({
+      line: "So far, your 74% calls came true 52% of the time, based on 14 decisions.",
+      kind: "rate", stated: 74, hit: 52, n: 20, headlineBucket: "70-79",
+      buckets: [{ bucket: "70-79", n: 14, nInferred: 0 }],
+    });
 
     expect(withFields).toBe("So far, when you were about 74% sure, you were right 52% of the time, based on 14 decisions.");
   });
@@ -86,20 +90,36 @@ describe("ledger math (pure, no DOM)", () => {
     expect(line).toBe("You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 4 so far.");
   });
 
-  it("round 5: calibrationSentence appends the inferred-count tail when nInferred is above zero", () => {
+  it("round 5: calibrationSentence appends the inferred-count tail from the headline bucket's own nInferred, not the overall one", () => {
     const { calibrationSentence } = load();
 
-    const line = calibrationSentence({ kind: "rate", stated: 74, hit: 52, n: 14, nInferred: 3 });
+    const line = calibrationSentence({
+      kind: "rate", stated: 74, hit: 52, n: 20, nInferred: 8, headlineBucket: "70-79",
+      buckets: [{ bucket: "70-79", n: 14, nInferred: 3 }],
+    });
 
     expect(line).toBe("So far, when you were about 74% sure, you were right 52% of the time, based on 14 decisions. For 3 of them, that figure was estimated from your wording.");
   });
 
-  it("round 5: calibrationSentence omits the inferred-count tail when nInferred is zero", () => {
+  it("round 5: calibrationSentence omits the inferred-count tail when the headline bucket's own nInferred is zero", () => {
     const { calibrationSentence } = load();
 
-    const line = calibrationSentence({ kind: "rate", stated: 74, hit: 52, n: 14, nInferred: 0 });
+    const line = calibrationSentence({
+      kind: "rate", stated: 74, hit: 52, n: 14, nInferred: 3, headlineBucket: "70-79",
+      buckets: [{ bucket: "70-79", n: 14, nInferred: 0 }],
+    });
 
     expect(line).toBe("So far, when you were about 74% sure, you were right 52% of the time, based on 14 decisions.");
+  });
+
+  it("round 6 (UI reviewer): calibrationSentence falls back to the server's line when the headline bucket is missing from buckets", () => {
+    const { calibrationSentence } = load();
+
+    const line = calibrationSentence({
+      line: "server fallback sentence", kind: "rate", stated: 74, hit: 52, n: 14, headlineBucket: "70-79", buckets: [],
+    });
+
+    expect(line).toBe("server fallback sentence");
   });
 
   it("round 5: topicLineOf localizes the over and under directions", () => {

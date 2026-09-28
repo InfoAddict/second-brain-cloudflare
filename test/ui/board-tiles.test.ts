@@ -1014,7 +1014,11 @@ describe("decision log panel (T7-E, Design 7.4)", () => {
   it("renders the same sentence the ledger sheet builds, via the shared calibrationSentence", () => {
     const ctx = ctxFor();
     const board = ctx.document.createElement("div");
-    const calibration = { ready: true, kind: "rate", stated: 74, hit: 52, n: 14, nInferred: 0, line: "So far, your 74% calls came true 52% of the time, based on 14 decisions." };
+    const calibration = {
+      ready: true, kind: "rate", stated: 74, hit: 52, n: 14, nInferred: 0, headlineBucket: "70-79",
+      buckets: [{ bucket: "70-79", n: 14, nInferred: 0 }],
+      line: "So far, your 74% calls came true 52% of the time, based on 14 decisions.",
+    };
 
     ctx.renderLedgerPanel(board, { calibration });
 
