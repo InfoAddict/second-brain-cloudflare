@@ -11,10 +11,17 @@ import { withStatus, getStatus } from "./status";
 import { withKind } from "./kind";
 import { deleteEntryVectors, type OwnedVectors } from "../vectorize/batch";
 import { buildCasGuard, changesOf, Params, pruneManyStatement, pruneStatement, snapshotStatement, type WhenChange } from "./versions";
+import { LEDGER_TAG, STANDING_TAG } from "../tags/t7";
+import { OWED_TO_ME_TAG } from "../commitments/direction";
+import { standingTouched, type StandingCacheConfig } from "../standing/cache";
+import { buildOutcomeUpdate, isLedgerDecision, outcomeNoteText, type DecisionOutcomeResult } from "../decisions/outcome";
 import { auditValidity, retractionHook, RETRACTED_SOURCE_TAG, type ValidityHook } from "./validity";
 
-export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true";
-export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number } | { ok: false; error: string; status: number };
+export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true" | "received" | "stop_standing";
+export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number; content?: string } | { ok: false; error: string; status: number };
+export type OutcomeActionResult =
+  { ok: true; id: string; reply: string; reviewAt: number | null; reviewsDone: boolean }
+  | { ok: false; error: string; status: number };
 
 type AuditContext = { waitUntil(promise: Promise<unknown>): void };
 /** BE-5/BE-6 (T-0101.5.1/T-0101.5.2): every audit event this file writes carries the same
@@ -84,6 +91,18 @@ export async function resolveEntryAction(
     const denied = assertCanEditContent(identity, row);
     if (denied) return { ok: false, error: denied.message, status: 403 };
     const tags = parseTags(row.tags as string);
+    // C13: a decision without a task tag is a review, not a commitment — Done would silently
+    // close it with no outcome recorded. Checked every retry: a concurrent edit could add or
+    // remove either tag between attempts.
+    if (action === "done" && tags.includes(LEDGER_TAG) && !tags.includes("task")) {
+      return { ok: false, error: "This is a decision. Record how it went with outcome, or snooze the review.", status: 400 };
+    }
+    if (action === "received" && !tags.includes(OWED_TO_ME_TAG)) {
+      return { ok: false, error: "received is for things owed to you; use done.", status: 400 };
+    }
+    if (action === "stop_standing" && !tags.includes(STANDING_TAG)) {
+      return { ok: false, error: `${id} is not a standing instruction.`, status: 400 };
+    }
     const priorWhen = { when_at: row.when_at ?? null, when_kind: row.when_kind ?? null, when_label: row.when_label ?? null, when_source: row.when_source ?? null };
     const now = Date.now();
     let statement: D1PreparedStatement;
@@ -96,18 +115,35 @@ export async function resolveEntryAction(
     // to write into must miss the CAS, not just miss unnoticed — the retry above then re-reads
     // through getReadableEntry, which returns not_found or forbidden once the row is truly gone
     // from this caller's reach, rather than committing into wherever it ended up.
-    if (action === "done" || action === "not_a_task") {
-      const nextTags = action === "done" ? withTaskDone(tags) : withoutTask(tags);
+    if (action === "done" || action === "not_a_task" || action === "received") {
+      // received is an alias of done (Design 5.4): same task:done write, guarded above to only
+      // ever apply to an owed-to-me row.
+      const nextTags = action === "not_a_task" ? withoutTask(tags) : withTaskDone(tags);
+      const loopAction = action === "not_a_task" ? "not-task" : action === "received" ? "received" : "done";
       const casColumns = { tags: row.tags, content: row.content, workspace_id: row.workspace_id };
       snapshot = snapshotStatement(env, {
-        entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { loop_action: action === "done" ? "done" : "not-task" }, now,
+        entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { loop_action: loopAction }, now,
         guard: p => buildCasGuard(p, casColumns),
       });
       const p = new Params();
       const nextTagsIdx = p.add(JSON.stringify(nextTags));
       // versioning: snapshot
       statement = env.DB.prepare(`UPDATE entries AS e SET tags = ${nextTagsIdx} WHERE e.id = ${p.add(id)} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values());
-      payload = { loop_action: action === "done" ? "done" : "not-task", prior: { tags } };
+      payload = { loop_action: loopAction, prior: { tags } };
+    } else if (action === "stop_standing") {
+      // Design 2.2: removes only standing:active, versioned and CAS-guarded like done, so undo
+      // restores it. standingTouched fires below, once the write actually lands.
+      const nextTags = tags.filter(t => t !== STANDING_TAG);
+      const casColumns = { tags: row.tags, content: row.content, workspace_id: row.workspace_id };
+      snapshot = snapshotStatement(env, {
+        entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { standing_action: "stop" }, now,
+        guard: p => buildCasGuard(p, casColumns),
+      });
+      const p = new Params();
+      const nextTagsIdx = p.add(JSON.stringify(nextTags));
+      // versioning: snapshot
+      statement = env.DB.prepare(`UPDATE entries AS e SET tags = ${nextTagsIdx} WHERE e.id = ${p.add(id)} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values());
+      payload = { standing_action: "stop", prior: { tags } };
     } else if (action === "snooze") {
       const nextWhen: WhenChange = { when_at: until };
       const casColumns = { tags: row.tags, content: row.content, workspace_id: row.workspace_id, ...priorWhen };
@@ -136,11 +172,91 @@ export async function resolveEntryAction(
     const results = await env.DB.batch([snapshot, statement, pruneStatement(env, id, cfg.VERSION_KEEP)]);
     if (changesOf(results[1]) > 0) {
       auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { ...payload, ...channelPayload(change) } });
-      return { ok: true, id, action, ...(action === "snooze" ? { when_at: until } : {}) };
+      if (action === "stop_standing") {
+        standingTouched(env, ctx, cfg as StandingCacheConfig, [row.workspace_id as string]);
+      }
+      return {
+        ok: true, id, action,
+        ...(action === "snooze" ? { when_at: until } : {}),
+        ...(action === "received" ? { content: row.content as string } : {}),
+      };
     }
   }
   const verb = action === "snooze" ? "snooze" : action === "clear_date" ? "clear" : "resolve";
   return { ok: false, error: `Could not ${verb} — try again`, status: 409 };
+}
+
+/** "\n\n[Update Sep 28, 2026]: Outcome (2026-09-28): right. Shipped early." — same dated-suffix
+ * shape src/capture/store.ts's appendToEntry uses for every other append, so an outcome note
+ * reads like any other addition to the memory. */
+function outcomeNoteSuffix(result: DecisionOutcomeResult, note: string, now: number): string {
+  const timestamp = new Date(now).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  return `\n\n[Update ${timestamp}]: ${outcomeNoteText(result, note, now)}`;
+}
+
+/**
+ * `resolve(id, "outcome", result, note?)` and `POST /decisions/outcome` (Design 4.2). A note
+ * lands in the SAME CAS batch as the tag/when_* change — one version, so one undo reverts the
+ * whole action (a review found that a separate append version let an undo strip only the note
+ * and leave the outcome tag in place, while the reply still promised "Undo is available.").
+ *
+ * The row's vector is deliberately NOT re-embedded for the note: a background re-embed here
+ * raced this same function's own undo path (its CAS write landing between the caller's read and
+ * revertEntry's own guard check reported a spurious "stale", not a real conflict) and re-fetching
+ * the row inside the batch's own transaction is not available through the batch() API. The
+ * decision's own content, which is what the calibration and recall paths actually care about,
+ * is unaffected; only the appended note text is unindexed until the row is next edited by
+ * something else.
+ */
+export async function resolveDecisionOutcome(
+  env: Env, ctx: AuditContext, identity: Identity, id: string,
+  result: DecisionOutcomeResult, note: string | undefined, change: ChangeContext,
+): Promise<OutcomeActionResult> {
+  const cfg = await resolveConfig(env);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, content, when_at, when_kind, when_label, when_source") as (EntryAccessRow & Record<string, any> | null);
+    if (!row) return { ok: false, error: `No entry found with ID: ${id}`, status: 404 };
+    const denied = assertCanEditContent(identity, row);
+    if (denied) return { ok: false, error: denied.message, status: 403 };
+    const tags = parseTags(row.tags as string);
+    if (!isLedgerDecision(tags)) return { ok: false, error: `${id} is not a logged decision.`, status: 400 };
+
+    const priorWhen = { when_at: row.when_at ?? null, when_kind: row.when_kind ?? null, when_label: row.when_label ?? null, when_source: row.when_source ?? null };
+    const now = Date.now();
+    const update = buildOutcomeUpdate(tags, result, row.content as string, now, { reviewDefaultDays: cfg.DECISION_REVIEW_DEFAULT_DAYS, timezone: cfg.TIMEZONE });
+    const trimmedNote = note?.trim();
+    const nextContent = trimmedNote ? `${row.content as string}${outcomeNoteSuffix(result, trimmedNote, now)}` : (row.content as string);
+    const casColumns = { tags: row.tags, content: row.content, workspace_id: row.workspace_id, ...priorWhen };
+    const nextWhen: WhenChange = update.nextWhen;
+    const snapshot = snapshotStatement(env, {
+      // meta.when: true (src/memory/undo.ts's restoreWhen) tells a plain undo to restore
+      // when_* too — this is a "status"-reason version (spec 4.2) that also changes when_*,
+      // unlike an ordinary status change, so it needs the same escape hatch "due"-reason
+      // versions get automatically.
+      entryId: id, reason: "status", change,
+      content: trimmedNote ? { kind: "next", content: nextContent } : { kind: "unchanged" },
+      nextTags: update.nextTags, nextWhen, meta: { decision_outcome: result, when: true }, now,
+      guard: p => buildCasGuard(p, casColumns),
+    });
+    const p = new Params();
+    const contentIdx = trimmedNote ? p.add(nextContent) : undefined;
+    const tagsIdx = p.add(JSON.stringify(update.nextTags));
+    const whenAtIdx = p.add(update.nextWhen.when_at);
+    const whenKindIdx = p.add(update.nextWhen.when_kind);
+    const whenSourceIdx = p.add(update.nextWhen.when_source);
+    const idIdx = p.add(id);
+    // versioning: snapshot
+    const statement = env.DB.prepare(
+      `UPDATE entries AS e SET ${contentIdx ? `content = ${contentIdx}, ` : ""}tags = ${tagsIdx}, when_at = ${whenAtIdx}, when_kind = ${whenKindIdx}, when_source = ${whenSourceIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`,
+    ).bind(...p.values());
+    const results = await env.DB.batch([snapshot, statement, pruneStatement(env, id, cfg.VERSION_KEEP)]);
+    if (changesOf(results[1]) === 0) continue;
+
+    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { decision_outcome: result, prior: { tags, ...priorWhen }, ...channelPayload(change) } });
+
+    return { ok: true, id, reply: update.reply, reviewAt: update.reviewAt, reviewsDone: update.reviewsDone };
+  }
+  return { ok: false, error: "Could not resolve, try again", status: 409 };
 }
 
 export type InsightAction = "confirm" | "dismiss";

@@ -65,6 +65,7 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("brief rows_read on workerd", (
                  CASE WHEN x % 200 = 0 THEN ? + 3600000 ELSE NULL END, CASE WHEN x % 200 = 0 THEN 'due' ELSE NULL END, CASE WHEN x % 200 = 0 THEN 'explicit' ELSE NULL END
           FROM c`).bind(start + 1, Math.min(start + 2000, N), now, now).run();
       }
+      const ctx = { waitUntil: (_: Promise<unknown>) => {} };
       const log: { sql: string; rows: number }[] = [];
       const env = makeTestEnv(undefined, { DB: metered(d1.db, log) as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
       const auth = { userId: "u1", personalWorkspaceId: "ws-p", companyWorkspaceIds: [], role: "member" } as unknown as Identity;
@@ -72,10 +73,10 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("brief rows_read on workerd", (
       const measure = async (run: () => Promise<unknown>) => { log.length = 0; await run(); return { rows: total(), detail: JSON.stringify(log) }; };
 
       const rest = await measure(() => computeBrief(env, auth, true));
-      const mcp = await measure(() => computeAgentBrief(env, auth));
-      const lean = await measure(() => computeLeanBrief(env, auth));
-      const scoped = await measure(() => computeLeanBrief(env, auth, [project]));
-      const mcpScoped = await measure(() => computeAgentBrief(env, auth, [project]));
+      const mcp = await measure(() => computeAgentBrief(env, ctx, auth));
+      const lean = await measure(() => computeLeanBrief(env, ctx, auth));
+      const scoped = await measure(() => computeLeanBrief(env, ctx, auth, [project]));
+      const mcpScoped = await measure(() => computeAgentBrief(env, ctx, auth, [project]));
       const restScoped = await measure(() => computeBrief(env, auth, true, [project]));
       console.log(`N=${N} rows_read REST /brief=${rest.rows} MCP brief=${mcp.rows} lean brief=${lean.rows} with a 16-alias project: REST=${restScoped.rows} MCP=${mcpScoped.rows} lean=${scoped.rows}\nMCP ${mcp.detail}\nLEAN ${lean.detail}`);
       const budget = BUDGET[N];

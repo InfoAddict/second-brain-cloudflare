@@ -116,7 +116,7 @@ describe("held text: the agent-facing reader inventory", () => {
     expect(brief, "brief (agent)").not.toContain(HELD_MARKER);
 
     // brief (lean, what the session-start hook injects into every agent's context)
-    const lean = await computeLeanBrief(env, identity);
+    const lean = await computeLeanBrief(env, ctx, identity);
     expect(JSON.stringify(lean), "brief (lean/hook)").not.toContain(HELD_MARKER);
 
     // graph: buildGraph seeded directly on the held row

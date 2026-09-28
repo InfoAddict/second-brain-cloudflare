@@ -349,11 +349,12 @@ export async function compressTag(
     const result = await captureEntry(content, ["synthesized", tag], SYSTEM_SOURCE, env, ctx, cfg,
       { workspaceId, actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
 
-    // Only a blocked capture wrote nothing. Every other status (flagged, contradiction,
-    // contradiction_protected, merged, replaced) left a row that holds these sources'
-    // digest, so they roll up onto it; skipping them would re-digest the same sources
-    // into a fresh near-duplicate every cooldown.
-    if (result.status === "blocked") {
+    // Only a blocked capture (or a t7_refused one — never reachable here, a system job
+    // never passes Track 7 parameters) wrote nothing. Every other status (flagged,
+    // contradiction, contradiction_protected, merged, replaced) left a row that holds
+    // these sources' digest, so they roll up onto it; skipping them would re-digest the
+    // same sources into a fresh near-duplicate every cooldown.
+    if (result.status === "blocked" || result.status === "t7_refused") {
       continue;
     }
     // A protected draft is not a live digest: rolling sources up onto it would penalise and

@@ -49,6 +49,7 @@ const SCHEMA_PROBE_RESULTS = [
     "idx_projects_workspace", "idx_entries_project", "idx_entries_conflict_held", "idx_push_subscriptions_workspace",
     "idx_recall_log_ws",
     "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
+    "idx_entries_ledger", "idx_entries_standing",
     "idx_entry_versions_entry", "idx_entries_trash_deleted", "idx_entries_trash_workspace_deleted"]
     .map(name => ({ kind: "index", name })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
@@ -861,6 +862,17 @@ export class D1Mock {
         }
         if (s.includes("COUNT(*) as count")) {
           return { count: db.entries.length };
+        }
+        // Standing memory cap check (src/capture/t7-capture.ts, Design 2.1 point 3): the
+        // workspace's live standing:active count, run before a standing capture's INSERT.
+        if (s.includes(`instr(lower(tags), '"standing:active"')`) && s.includes("COUNT(*) AS n")) {
+          const workspaceId = args[0];
+          const n = db.entries.filter((e: any) => {
+            if ((e.workspace_id ?? "") !== workspaceId) return false;
+            const tags: string[] = JSON.parse(e.tags ?? "[]").map((t: string) => String(t).toLowerCase());
+            return tags.includes("standing:active") && !tags.includes("status:deprecated");
+          }).length;
+          return { n };
         }
         if (s.includes("WHERE id") && !s.includes("json_each")) {
           return db.entries.find((e: any) => e.id === args[0]) ?? null;

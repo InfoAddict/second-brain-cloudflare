@@ -8,6 +8,12 @@ import { isTopicTagSql } from "../compression/eligibility";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, STALE_AS_OF } from "../memory/stale";
 import { openLoopSql } from "../memory/loops";
+import { openOutboundSql, openInboundSql, OWED_TO_ME_SQL } from "../commitments/direction";
+import { LEDGER_TAG } from "../tags/t7";
+import { resolveConfig } from "../config";
+import { calibrationQuery, decisionsActionable, parseDecisionOutcomeRow } from "../decisions/queries";
+import { calibrate, type CalibrationResult } from "../decisions/calibration";
+import { readStandingCaches } from "../standing/cache";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { D1_MAX_BOUND_PARAMS } from "../constants";
 import { DUE_WITHIN_MS, dueSql } from "../when/input";
@@ -176,21 +182,30 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
       `SELECT
          SUM(CASE WHEN vector_ids = '[]' AND ${INDEXABLE_SQL} THEN 1 ELSE 0 END) AS unindexed,
          SUM(CASE WHEN ${STALE_REVIEW_SQL} THEN 1 ELSE 0 END) AS stale,
-         SUM(CASE WHEN ${openLoopSql(now)} THEN 1 ELSE 0 END) AS open_loops,
+         SUM(CASE WHEN ${openOutboundSql(now)} THEN 1 ELSE 0 END) AS open_loops,
+         SUM(CASE WHEN ${openInboundSql(now)} THEN 1 ELSE 0 END) AS owed_to_me,
+         SUM(CASE WHEN instr(lower(tags), '"${LEDGER_TAG}"') > 0
+                   AND (tags LIKE '%"outcome:right"%' OR tags LIKE '%"outcome:wrong"%' OR tags LIKE '%"outcome:mixed"%')
+                   AND tags NOT LIKE '%"status:deprecated"%'
+              THEN 1 ELSE 0 END) AS decisions_resolved,
          SUM(CASE WHEN ${dueSql(now)} AND when_at <= ? THEN 1 ELSE 0 END) AS due,
          COUNT(*) AS total
        FROM entries WHERE ${scope.clause}`,
     ).bind(now + DUE_WITHIN_MS, ...scope.bindings).first() as Promise<Record<string, any> | null>,
 
-    // The loop queue's own preview: up to three most recent open commitments,
-    // same row shape GET /loops returns, so the panel and the sheet behind it
-    // read identically. One added query, the cost Task A's brief accepts for
-    // showing anything beyond a bare count.
+    // The loop queue's own preview: up to three most recent open commitments PER DIRECTION
+    // (Design 5.3 L2), same row shape GET /loops returns, so the panel and the sheet behind it
+    // read identically. Still one statement: the inner query partitions by direction and the
+    // outer filter keeps only each partition's newest 3.
     // validity: current: a replaced loop is not open (5.5)
     env.DB.prepare(
-      `SELECT id, content, source, tags, created_at FROM entries
-       WHERE ${openLoopSql(now)} AND ${scope.clause}
-       ORDER BY created_at DESC LIMIT 3`,
+      `SELECT id, content, source, tags, created_at, direction FROM (
+         SELECT id, content, source, tags, created_at,
+           (CASE WHEN ${OWED_TO_ME_SQL} THEN 'in' ELSE 'out' END) AS direction,
+           ROW_NUMBER() OVER (PARTITION BY (CASE WHEN ${OWED_TO_ME_SQL} THEN 1 ELSE 0 END) ORDER BY created_at DESC, id DESC) AS rn
+         FROM entries WHERE ${TASK_INDEXED} AND ${openLoopSql(now)} AND ${scope.clause}
+       ) WHERE rn <= 3
+       ORDER BY direction, rn`,
     ).bind(...scope.bindings).all(),
   ]);
 
@@ -254,14 +269,29 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
   }
 
   const loopItems = (loopItemRows.results as {
-    id: string; content: string; source: string; tags: string; created_at: number;
+    id: string; content: string; source: string; tags: string; created_at: number; direction: "in" | "out";
   }[]).map(r => ({
     id: r.id,
     content: r.content,
     source: r.source,
     tags: parseTags(r.tags),
     created_at: r.created_at,
+    direction: r.direction,
   }));
+
+  // C11: gated on the aggregate's own decisions_resolved column, so the calibration read costs
+  // nothing until the brain actually has enough resolved decisions to say anything with it.
+  const decisionsResolved = (attentionRow?.decisions_resolved as number) ?? 0;
+  const cfg = await resolveConfig(env);
+  let calibration: { ready: boolean; line: string; n: number } | undefined;
+  if (decisionsResolved >= cfg.CALIBRATION_MIN_N) {
+    const calibScope = briefWorkspaceScope(auth);
+    const { sql, bindings } = calibrationQuery(calibScope, decisionsActionable(auth));
+    const { results } = await env.DB.prepare(sql).bind(...bindings).all();
+    const rows = (results as { tags: string }[]).map(r => parseDecisionOutcomeRow(r.tags));
+    const result = calibrate(rows, { minN: cfg.CALIBRATION_MIN_N, minBucketN: cfg.CALIBRATION_MIN_BUCKET_N, minTopicN: cfg.CALIBRATION_MIN_TOPIC_N });
+    calibration = { ready: result.ready, line: result.line, n: result.n };
+  }
 
   return {
     ok: true,
@@ -294,6 +324,8 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
       open: (attentionRow?.open_loops as number) ?? 0,
       items: loopItems,
     },
+    owed_to_me: (attentionRow?.owed_to_me as number) ?? 0,
+    ...(calibration ? { calibration } : {}),
   };
 }
 
@@ -316,9 +348,23 @@ function actionable(auth: Identity): ScopeClause {
 export type BriefPart = "due" | "loops" | "stale" | "insights";
 export interface BriefRow { id: string; content: string; when_at?: number }
 export interface BriefSection { total: number; items: BriefRow[] }
-export type AgentBriefData = Partial<Record<BriefPart, BriefSection>>;
+export interface AgentBriefData {
+  due?: BriefSection;
+  /** Decisions due for review (C10): split out of the due query by the same statement, never
+   * duplicated into `due` — a decision review appears here only. */
+  decisions_due?: BriefSection;
+  /** Open outbound loops ("You owe"). Kept under the `loops` key for backward compatibility
+   * with the lean brief's existing shape. */
+  loops?: BriefSection;
+  /** Open inbound loops ("Owed to you"), split from `loops` by the same statement (Design 5.3 L3). */
+  owed_to_you?: BriefSection;
+  stale?: BriefSection;
+  insights?: BriefSection;
+}
 
-/** The four agent-brief reads, each optional and each one bounded statement. */
+/** The four agent-brief reads, each optional. stale and insights are one bounded statement each;
+ * due and loops each split into two sections, from two statements each (an items read and a
+ * separate totals aggregate — see dueSplit/loopsSplit below for why) (Design 5.3, C10). */
 export async function readAgentBrief(
   env: Env, auth: Identity,
   opts: { parts: BriefPart[]; projectRows?: ProjectRow[]; layer?: "personal" | "company"; teamId?: string },
@@ -332,56 +378,219 @@ export async function readAgentBrief(
     const rows = results as unknown as (BriefRow & { total: number })[];
     return { total: rows[0]?.total ?? 0, items: rows.slice(0, cap).map(({ id, content, when_at }) => ({ id, content, ...(when_at != null ? { when_at } : {}) })) };
   };
-  // validity: current: a replaced due item or loop must not appear in this agent's own brief (5.5)
-  const queries: Record<BriefPart, () => Promise<BriefSection>> = {
-    due: () => run(`SELECT id, content, when_at, COUNT(*) OVER() AS total FROM entries
-      WHERE ${dueSql(now)} AND when_at <= ? AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
-      ORDER BY when_at ASC, id ASC LIMIT 5`, 5, [now + DUE_WITHIN_MS]),
-    // validity: current: openLoopSql carries the predicate (5.5)
-    loops: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
-      WHERE ${TASK_INDEXED} AND ${openLoopSql(now)} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
-      ORDER BY created_at DESC, id DESC LIMIT 5`, 5),
-    stale: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
-      WHERE ${STALE_INDEXED} AND ${STALE_REVIEW_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
-      ORDER BY COALESCE(updated_at, created_at) ASC, id ASC LIMIT 2`, 2),
-    insights: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
-      WHERE ${INSIGHT_INDEXED} AND ${PENDING_INSIGHT_SQL} AND ${scope.clause} AND ${NOT_HELD_SQL}
-      ORDER BY created_at DESC, id DESC LIMIT 1`, 1, [], false),
+
+  /** due (≤5) and decisions_due (≤3), partitioned by whether the row is a logged decision (C10).
+   * A decision row's own when_at never appears under `due`.
+   *
+   * Two statements, not the one window-function statement this used to be: PARTITION BY on a
+   * computed CASE (not a column) can't ride idx_entries_when's own (workspace_id, when_at)
+   * ordering, so SQLite materialized and sorted every due row to number and count each partition
+   * — a review found this reading 11,507 rows at 10k memories where 86 was enough. The items read
+   * is now a plain ORDER BY ... LIMIT per branch, which SQLite can satisfy by walking the index
+   * and stopping as soon as it has enough rows; the total is a separate, sort-free SUM/CASE
+   * aggregate over the same index (still one full pass, but a cheap one — no partition, no sort).
+   * validity: current: a replaced due item must not appear in this agent's own brief (5.5) */
+  const dueSplit = async (): Promise<{ due: BriefSection; decisions_due: BriefSection }> => {
+    const isDecisionSql = `instr(lower(tags), '"${LEDGER_TAG}"') > 0`;
+    const dueAt = now + DUE_WITHIN_MS;
+    const [itemsResult, totalsRow] = await Promise.all([
+      // validity: current: dueSql carries the predicate (5.5)
+      env.DB.prepare(
+        `SELECT id, content, when_at, is_decision FROM (
+           SELECT id, content, when_at, 0 AS is_decision FROM entries
+              WHERE ${dueSql(now)} AND when_at <= ? AND NOT (${isDecisionSql}) AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+              ORDER BY when_at ASC, id ASC LIMIT 5
+         )
+         UNION ALL
+         SELECT id, content, when_at, is_decision FROM (
+           SELECT id, content, when_at, 1 AS is_decision FROM entries
+              WHERE ${dueSql(now)} AND when_at <= ? AND ${isDecisionSql} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+              ORDER BY when_at ASC, id ASC LIMIT 3
+         )`,
+      ).bind(dueAt, ...scope.bindings, ...mine.bindings, dueAt, ...scope.bindings, ...mine.bindings).all(),
+      // validity: current: dueSql carries the predicate (5.5)
+      env.DB.prepare(
+        `SELECT
+           SUM(CASE WHEN NOT (${isDecisionSql}) THEN 1 ELSE 0 END) AS due_total,
+           SUM(CASE WHEN ${isDecisionSql} THEN 1 ELSE 0 END) AS decisions_due_total
+         FROM entries WHERE ${dueSql(now)} AND when_at <= ? AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}`,
+      ).bind(dueAt, ...scope.bindings, ...mine.bindings).first() as Promise<{ due_total: number; decisions_due_total: number } | null>,
+    ]);
+    const rows = itemsResult.results as unknown as { id: string; content: string; when_at: number; is_decision: number }[];
+    const toSection = (isDecision: number, total: number): BriefSection => {
+      const matching = rows.filter(r => r.is_decision === isDecision);
+      return { total, items: matching.map(({ id, content, when_at }) => ({ id, content, when_at })) };
+    };
+    return { due: toSection(0, totalsRow?.due_total ?? 0), decisions_due: toSection(1, totalsRow?.decisions_due_total ?? 0) };
   };
-  const results = await Promise.all(opts.parts.map(async part => [part, await queries[part]()] as const));
-  return Object.fromEntries(results) as AgentBriefData;
+
+  /** loops (≤5, outbound, "You owe") and owed_to_you (≤5, inbound), partitioned by direction
+   * (Design 5.3 L3). Same two-statement split as dueSplit above and for the same reason: a
+   * partitioned window read over idx_entries_task forced a full sorted scan of every open loop
+   * (11,507 rows at 10k where 86 was enough); a plain per-direction ORDER BY ... LIMIT lets the
+   * index walk stop early, with the totals taken from one sort-free aggregate.
+   * validity: current: openLoopSql/openOutboundSql/openInboundSql carry the predicate (5.5) */
+  const loopsSplit = async (): Promise<{ loops: BriefSection; owed_to_you: BriefSection }> => {
+    const [itemsResult, totalsRow] = await Promise.all([
+      // validity: current: openOutboundSql/openInboundSql carry the predicate (5.5)
+      env.DB.prepare(
+        `SELECT id, content, is_inbound FROM (
+           SELECT id, content, 0 AS is_inbound FROM entries
+              WHERE ${TASK_INDEXED} AND ${openOutboundSql(now)} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+              ORDER BY created_at DESC, id DESC LIMIT 5
+         )
+         UNION ALL
+         SELECT id, content, is_inbound FROM (
+           SELECT id, content, 1 AS is_inbound FROM entries
+              WHERE ${TASK_INDEXED} AND ${openInboundSql(now)} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+              ORDER BY created_at DESC, id DESC LIMIT 5
+         )`,
+      ).bind(...scope.bindings, ...mine.bindings, ...scope.bindings, ...mine.bindings).all(),
+      // validity: current: openLoopSql carries the predicate (5.5)
+      env.DB.prepare(
+        `SELECT
+           SUM(CASE WHEN ${OWED_TO_ME_SQL} THEN 0 ELSE 1 END) AS loops_total,
+           SUM(CASE WHEN ${OWED_TO_ME_SQL} THEN 1 ELSE 0 END) AS owed_to_you_total
+         FROM entries WHERE ${TASK_INDEXED} AND ${openLoopSql(now)} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}`,
+      ).bind(...scope.bindings, ...mine.bindings).first() as Promise<{ loops_total: number; owed_to_you_total: number } | null>,
+    ]);
+    const rows = itemsResult.results as unknown as { id: string; content: string; is_inbound: number }[];
+    const toSection = (isInbound: number, total: number): BriefSection => {
+      const matching = rows.filter(r => r.is_inbound === isInbound);
+      return { total, items: matching.map(({ id, content }) => ({ id, content })) };
+    };
+    return { loops: toSection(0, totalsRow?.loops_total ?? 0), owed_to_you: toSection(1, totalsRow?.owed_to_you_total ?? 0) };
+  };
+
+  const stalePart = async (): Promise<BriefSection> => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
+      WHERE ${STALE_INDEXED} AND ${STALE_REVIEW_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+      ORDER BY COALESCE(updated_at, created_at) ASC, id ASC LIMIT 2`, 2);
+  const insightsPart = async (): Promise<BriefSection> => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
+      WHERE ${INSIGHT_INDEXED} AND ${PENDING_INSIGHT_SQL} AND ${scope.clause} AND ${NOT_HELD_SQL}
+      ORDER BY created_at DESC, id DESC LIMIT 1`, 1, [], false);
+
+  const wants = new Set(opts.parts);
+  const [due, loops, stale, insights] = await Promise.all([
+    wants.has("due") ? dueSplit() : Promise.resolve(undefined),
+    wants.has("loops") ? loopsSplit() : Promise.resolve(undefined),
+    wants.has("stale") ? stalePart() : Promise.resolve(undefined),
+    wants.has("insights") ? insightsPart() : Promise.resolve(undefined),
+  ]);
+  return {
+    ...(due ?? {}),
+    ...(loops ?? {}),
+    ...(stale ? { stale } : {}),
+    ...(insights ? { insights } : {}),
+  };
 }
 
-/** Text for the MCP tool: sections omitted when empty, stored text framed as data. */
-export function formatAgentBrief(data: AgentBriefData): string {
+/** Text for the MCP tool: sections omitted when empty, stored text framed as data. Order:
+ * Due, Decisions due for review, You owe, Owed to you, [standing, calibration appended by the
+ * caller], May be out of date, Pending insights. */
+export function formatAgentBrief(data: AgentBriefData, extraSections: string[] = []): string {
   const line = (r: BriefRow) => `- ${storedLine(r.id, 64)}: ${storedLine(r.content, 120)}`;
   const sections: string[] = [];
   const add = (title: string, part: BriefSection | undefined, render: (r: BriefRow) => string = line) => {
     if (part?.items.length) sections.push(`${title}\n${part.items.map(render).join("\n")}`);
   };
   add("Due", data.due, r => `${line(r)} (${new Date(r.when_at as number).toISOString()})`);
-  add("Open commitments", data.loops);
+  add("Decisions due for review", data.decisions_due, r => `${line(r)} (due ${new Date(r.when_at as number).toISOString().slice(0, 10)})`);
+  add("You owe", data.loops);
+  add("Owed to you", data.owed_to_you);
+  sections.push(...extraSections);
   add(`May be out of date (${data.stale?.total ?? 0})`, data.stale);
   add(`Pending insights (${data.insights?.total ?? 0})`, data.insights);
   return sections.length ? `${STORED_DATA_NOTICE}\n\n${sections.join("\n\n")}` : "Nothing needs attention.";
 }
 
+/**
+ * Standing instructions for this project (Design 2.11): only with a project given, oldest first,
+ * at most 3. One conditional hydration statement, only when at least one cached item matches.
+ */
+async function standingBriefItems(
+  env: Env, ctx: { waitUntil: (p: Promise<unknown>) => void }, auth: Identity,
+  projectRows: ProjectRow[] | undefined, layer: "personal" | "company" | undefined, teamId: string | undefined,
+): Promise<{ id: string; content: string }[]> {
+  if (!projectRows?.length) return [];
+  const slugs = new Set<string>();
+  for (const p of projectRows) { slugs.add(p.id); for (const alias of p.aliases) slugs.add(alias); }
+
+  const cfg = await resolveConfig(env);
+  const workspaceIds = readScopeWorkspaces(auth, { layer, teamId });
+  const caches = await readStandingCaches(env, ctx, cfg, workspaceIds);
+  const matches: { id: string; createdAt: number }[] = [];
+  for (const cache of caches) {
+    for (const item of cache.items) {
+      if (item.projects.length && item.projects.some(p => slugs.has(p))) matches.push({ id: item.id, createdAt: item.createdAt });
+    }
+  }
+  if (!matches.length) return [];
+  matches.sort((a, b) => a.createdAt - b.createdAt);
+  const ids = matches.slice(0, 3).map(m => m.id);
+
+  const scope = briefWorkspaceScope(auth, layer, teamId);
+  // validity: any: hydrates ids readStandingCaches already picked with its own currentValidityAt filter
+  const { results } = await env.DB.prepare(
+    `SELECT id, content, created_at FROM entries
+      WHERE id IN (SELECT value FROM json_each(?)) AND ${scope.clause}
+        AND tags LIKE '%"standing:active"%' AND tags NOT LIKE '%"status:deprecated"%' AND tags NOT LIKE '%"quarantine:%'`,
+  ).bind(JSON.stringify(ids), ...scope.bindings).all();
+  return (results as { id: string; content: string; created_at: number }[])
+    .sort((a, b) => a.created_at - b.created_at)
+    .map(r => ({ id: r.id, content: r.content }));
+}
+
+/** The full MCP brief's calibration line (C11): always one statement, reading only idx_entries_ledger rows. */
+async function calibrationLine(env: Env, auth: Identity, cfg: Awaited<ReturnType<typeof resolveConfig>>): Promise<CalibrationResult> {
+  const scope = briefWorkspaceScope(auth);
+  const { sql, bindings } = calibrationQuery(scope, decisionsActionable(auth));
+  const { results } = await env.DB.prepare(sql).bind(...bindings).all();
+  const rows = (results as { tags: string }[]).map(r => parseDecisionOutcomeRow(r.tags));
+  return calibrate(rows, { minN: cfg.CALIBRATION_MIN_N, minBucketN: cfg.CALIBRATION_MIN_BUCKET_N, minTopicN: cfg.CALIBRATION_MIN_TOPIC_N });
+}
+
 /** Compact attention view for agents. Shares the scope and queue predicates with dashboard brief. */
-export async function computeAgentBrief(env: Env, auth: Identity, projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string): Promise<string> {
-  return formatAgentBrief(await readAgentBrief(env, auth, { parts: ["due", "loops", "stale", "insights"], projectRows, layer, teamId }));
+export async function computeAgentBrief(
+  env: Env, ctx: { waitUntil: (p: Promise<unknown>) => void }, auth: Identity,
+  projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string,
+): Promise<string> {
+  const cfg = await resolveConfig(env);
+  const [data, standingItems, calibration] = await Promise.all([
+    readAgentBrief(env, auth, { parts: ["due", "loops", "stale", "insights"], projectRows, layer, teamId }),
+    standingBriefItems(env, ctx, auth, projectRows, layer, teamId),
+    calibrationLine(env, auth, cfg),
+  ]);
+  const extraSections: string[] = [];
+  if (standingItems.length) {
+    extraSections.push(`Standing instructions for this project\n${standingItems.map(i => `- ${storedLine(i.id, 64)}: ${storedLine(i.content, 120)}`).join("\n")}`);
+  }
+  // Design brief section list: "Calibration (one line, when ready)" — omitted, not the
+  // not-ready wording, when there is nothing to say yet.
+  if (calibration.ready) extraSections.push(`Calibration\n${calibration.line}`);
+  return formatAgentBrief(data, extraSections);
 }
 
 /**
  * The session-start hook's brief: due and open commitments only, in the shape GET /brief uses for
- * them. No resurface, topics or activity, so it reads only the rows those two queues hold.
+ * them. No resurface, topics or activity, so it reads only the rows those two queues hold. Adds
+ * owed_to_you and standing (Design 2.11); never decisions or calibration — the hook is not a
+ * place for informational lines.
  */
-export async function computeLeanBrief(env: Env, auth: Identity, projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string) {
-  const { due, loops } = await readAgentBrief(env, auth, { parts: ["due", "loops"], projectRows, layer, teamId });
+export async function computeLeanBrief(
+  env: Env, ctx: { waitUntil: (p: Promise<unknown>) => void }, auth: Identity,
+  projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string,
+) {
+  const [{ due, loops, owed_to_you }, standingItems] = await Promise.all([
+    readAgentBrief(env, auth, { parts: ["due", "loops"], projectRows, layer, teamId }),
+    standingBriefItems(env, ctx, auth, projectRows, layer, teamId),
+  ]);
   return {
     ok: true,
     lean: true,
     attention: { due: due?.total ?? 0 },
     loops: { open: loops?.total ?? 0, items: (loops?.items ?? []).slice(0, 3).map(({ id, content }) => ({ id, content })) },
+    owed_to_you: { open: owed_to_you?.total ?? 0, items: (owed_to_you?.items ?? []).slice(0, 2).map(({ id, content }) => ({ id, content })) },
+    standing: { items: standingItems.map(({ id, content }) => ({ id, content })) },
   };
 }
 

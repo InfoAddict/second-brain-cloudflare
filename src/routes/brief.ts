@@ -5,7 +5,7 @@ import { readResurfaceState, withDismissed, writeResurfaceState } from "../runti
 import { computeBrief, computeLeanBrief } from "../brief/compute";
 import { readProjectParam } from "./project-param";
 
-export async function handleBriefRoutes(request: Request, url: URL, env: Env): Promise<Response | null> {
+export async function handleBriefRoutes(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response | null> {
   if (url.pathname === "/resurface/dismiss" && request.method === "POST") {
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
@@ -29,7 +29,7 @@ export async function handleBriefRoutes(request: Request, url: URL, env: Env): P
     if (teamId instanceof Response) return teamId;
     const projectRows = await readProjectParam(env, auth, url, { layer, teamId });
     if (projectRows instanceof Response) return projectRows;
-    return json(await computeLeanBrief(env, auth, projectRows, layer, teamId));
+    return json(await computeLeanBrief(env, ctx, auth, projectRows, layer, teamId));
   }
   const projectRows = await readProjectParam(env, auth, url);
   if (projectRows instanceof Response) return projectRows;

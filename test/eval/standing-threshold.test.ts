@@ -47,10 +47,10 @@ describe("standing threshold report", () => {
     expect(distilled.chosen.test.recall).toBeLessThan(0.2);
   });
 
-  // Enabled once Task 6 adds STANDING_THRESHOLD to DEFAULTS; wired so a change to either the config value
-  // or this committed report, without updating the other, fails.
-  it.skip("STANDING_THRESHOLD in DEFAULTS equals the eval's recorded choice for the raw input", () => {
-    // const { DEFAULTS } = await import("../../src/config");
-    // expect(DEFAULTS.STANDING_THRESHOLD).toBe(readReport().standing!.inputs.raw.chosen.threshold);
+  // Wired so a change to either the config value or this committed report, without updating
+  // the other, fails.
+  it("STANDING_THRESHOLD in DEFAULTS equals the eval's recorded choice for the raw input", async () => {
+    const { DEFAULTS } = await import("../../src/config");
+    expect(DEFAULTS.STANDING_THRESHOLD).toBe(readReport().standing!.inputs.raw.chosen.threshold);
   });
 });

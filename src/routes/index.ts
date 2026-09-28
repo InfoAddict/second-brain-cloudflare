@@ -15,6 +15,8 @@ import { handleBriefRoutes } from "./brief";
 import { handleConfigRoutes } from "./config";
 import { handleMigrationRoutes } from "./migration";
 import { handleOAuthRevokeRoutes } from "./oauth-revoke";
+import { handleStandingRoutes } from "./standing";
+import { handleLedgerRoutes } from "./ledger";
 
 type RouteHandler = (
   request: Request,
@@ -37,6 +39,8 @@ const routeHandlers: RouteHandler[] = [
   handleConfigRoutes,
   handleMigrationRoutes,
   handleOAuthRevokeRoutes,
+  handleStandingRoutes,
+  handleLedgerRoutes,
 ];
 
 export function createDefaultHandler() {

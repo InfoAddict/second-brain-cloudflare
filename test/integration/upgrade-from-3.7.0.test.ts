@@ -102,6 +102,32 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     expect(setCount).toBe(25);
   });
 
+  it("creates idx_entries_ledger and idx_entries_standing on a 3.7.0 upgrade, both empty", async () => {
+    // A pre-4.0 brain never wrote either marker tag, so migrating it must not reinterpret
+    // anything: both indexes are created and both start empty (T-0089.7.1, T-0089.7.2).
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'an ordinary pre-4.0 memory', '["decision","standing"]', 'api', 1000, '[]')`);
+    env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
+
+    await initializeDatabase(env);
+
+    const objects = (await (d1.db as any).prepare(
+      `SELECT name, type FROM sqlite_master WHERE name IN ('idx_entries_ledger','idx_entries_standing')`,
+    ).all()).results as { name: string; type: string }[];
+    expect(objects.map((o) => o.name).sort()).toEqual(["idx_entries_ledger", "idx_entries_standing"]);
+    expect(objects.every((o) => o.type === "index")).toBe(true);
+
+    // The pre-4.0 row's plain "decision"/"standing" tags are ordinary tags (P7.2), not the
+    // reserved "ledger:decision"/"standing:active" markers, so neither index picks it up.
+    const ledgerCount = (await (d1.db as any).prepare(
+      `SELECT COUNT(*) AS n FROM entries WHERE instr(lower(tags), '"ledger:decision"') > 0`,
+    ).first()).n as number;
+    const standingCount = (await (d1.db as any).prepare(
+      `SELECT COUNT(*) AS n FROM entries WHERE instr(lower(tags), '"standing:active"') > 0`,
+    ).first()).n as number;
+    expect(ledgerCount).toBe(0);
+    expect(standingCount).toBe(0);
+  });
+
   it("a second cold start issues only the probe, no more CREATEs", async () => {
     env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
     await initializeDatabase(env);

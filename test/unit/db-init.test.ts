@@ -82,6 +82,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "idx_entries_conflict_held",
   // Agent brief queues (T-0089.6): partial indexes, post-column.
   "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
+  // Decision ledger and standing memory (T-0089.7.1, T-0089.7.2): partial indexes, post-column.
+  "idx_entries_ledger", "idx_entries_standing",
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
   // Sampled recall log (T-0089.5.2 Part A).
@@ -297,7 +299,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 73 -> 74 (R5, budget audit) by idx_entries_trash_workspace_deleted.
       // MOVED 74 -> 75 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER.
       // MOVED 75 -> 77 (T-0089.2.1, merge with v4/t5-log) by the valid_from and valid_until ALTERs; measured.
-      expect(migrated).toBe(77); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs)
+      // MOVED 77 -> 79 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
+      expect(migrated).toBe(79); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs + T7 ledger/standing indexes)
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -528,6 +531,30 @@ describe("initializeDatabase against real SQLite", () => {
     expect(sameColumns(d1.columns())).toBe(true);
   });
 
+  it("creates idx_entries_ledger and idx_entries_standing on a fresh brain, both empty", async () => {
+    d1 = makeSqliteD1({ schema: false });
+    await initializeDatabase(envFor(d1));
+
+    const objects = (await d1.db.prepare(
+      `SELECT name, type FROM sqlite_master WHERE name IN ('idx_entries_ledger','idx_entries_standing')`,
+    ).all()).results as { name: string; type: string }[];
+    expect(objects.map(o => o.name).sort()).toEqual(["idx_entries_ledger", "idx_entries_standing"]);
+    expect(objects.every(o => o.type === "index")).toBe(true);
+
+    // Neither tag exists yet on a fresh brain, so both partial indexes start empty (Design "Global constraints").
+    await d1.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'ordinary', '["work"]', 'api', 1, '[]')`,
+    ).run();
+    const ledgerCount = (await d1.db.prepare(
+      `SELECT COUNT(*) AS n FROM entries INDEXED BY idx_entries_ledger WHERE workspace_id = '' AND instr(lower(tags), '"ledger:decision"') > 0`,
+    ).first()) as { n: number };
+    const standingCount = (await d1.db.prepare(
+      `SELECT COUNT(*) AS n FROM entries INDEXED BY idx_entries_standing WHERE workspace_id = '' AND instr(lower(tags), '"standing:active"') > 0`,
+    ).first()) as { n: number };
+    expect(ledgerCount.n).toBe(0);
+    expect(standingCount.n).toBe(0);
+  });
+
   it("advances Prompt Capsule revisions atomically on entry writes and workspace moves", async () => {
     d1 = makeSqliteD1({ schema: false });
     await initializeDatabase(envFor(d1));
@@ -641,7 +668,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 67 -> 68 (R5, budget audit) by idx_entries_trash_workspace_deleted.
     // MOVED 68 -> 69 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER, wasted the same way.
     // MOVED 69 -> 71 (T-0089.2.1, merge with v4/t5-log) by the valid_from and valid_until ALTERs; measured.
-    expect(cold).toBe(71); // one probe, then the 70 statements a new brain needs
+    // MOVED 71 -> 73 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
+    expect(cold).toBe(73); // one probe, then the 72 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
