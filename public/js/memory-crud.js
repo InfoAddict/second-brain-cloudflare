@@ -680,7 +680,7 @@ async function stopStanding(entry, btn) {
 const EDITED_CANONICAL_LABEL_DAYS = 7
 
 /**
- * "Trusted · edited by Cursor on Sep 26" for 7 days after an MCP edit kept a
+ * "Trusted · edited via Cursor on Sep 26" for 7 days after an MCP edit kept a
  * canonical memory canonical (5.7) - null once the tag is stale, absent, or
  * the memory isn't canonical (the label only ever qualifies "Trusted").
  * The client name comes from the newest matching history row's own `client`
@@ -722,6 +722,11 @@ function renderViewStatus(entry) {
  * src/quarantine/tags.ts): `too_long` gets its own complete sentence (deck
  * section 9); every other reason fills held.banner's {reason} from the
  * matching held.reason* key.
+ *
+ * Release is hidden, not just disabled, when `can_edit === false` (deck 18
+ * section 11's truth check: only the author or an admin can actually release
+ * a shared company hold - see assertCanMutateEntry). held.bannerOther takes
+ * over the sentence in that case, naming who can act instead of saying "you".
  */
 function renderViewHeld(entry) {
   const block = document.getElementById('view-held')
@@ -734,7 +739,15 @@ function renderViewHeld(entry) {
     return
   }
   block.style.display = ''
-  line.textContent = reason === 'too_long' ? t('held.tooLongLine') : t('held.banner', { reason: heldReasonPhrase(reason) })
+  const locked = entry.can_edit === false
+  btn.style.display = locked ? 'none' : ''
+  if (reason === 'too_long') {
+    line.textContent = t('held.tooLongLine')
+  } else if (locked) {
+    line.textContent = t('held.bannerOther', { reason: heldReasonPhrase(reason) })
+  } else {
+    line.textContent = t('held.banner', { reason: heldReasonPhrase(reason) })
+  }
   btn.onclick = () => releaseHeld(entry, btn)
 }
 

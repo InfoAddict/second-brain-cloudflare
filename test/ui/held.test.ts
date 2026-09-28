@@ -165,7 +165,7 @@ describe("sheet banner with reason and Release", () => {
     const cases: Array<[string, string]> = [
       ["instruction", "looks like an instruction to an AI"],
       ["hidden", "contains hidden text"],
-      ["burst", "many memories were written in a short time"],
+      ["burst", "AI tools made many changes in a short time"],
       ["capsule", "changes what your AI tools always see"],
     ];
     for (const [reason, phrase] of cases) {
@@ -173,7 +173,24 @@ describe("sheet banner with reason and Release", () => {
       expect(ctx.__els.get("view-held").style.display, reason).toBe("");
       expect(ctx.__els.get("view-held-line").textContent, reason).toContain(phrase);
       expect(ctx.__els.get("view-held-line").textContent, reason).toContain("It stays saved");
+      expect(ctx.__els.get("view-held-release").style.display, reason).toBe("");
     }
+  });
+
+  it("hides Release and uses held.bannerOther when the viewer cannot release a company hold", () => {
+    const ctx = load();
+    ctx.renderViewHeld({ id: "m1", tags: ["quarantine:instruction"], can_edit: false });
+    const line = ctx.__els.get("view-held-line").textContent;
+    expect(line).toContain("the person who saved it or an admin releases it");
+    expect(line).not.toContain(" until you release it");
+    expect(ctx.__els.get("view-held-release").style.display).toBe("none");
+  });
+
+  it("shows Release and held.banner when can_edit is absent (older Worker or a solo brain)", () => {
+    const ctx = load();
+    ctx.renderViewHeld({ id: "m1", tags: ["quarantine:instruction"] });
+    expect(ctx.__els.get("view-held-line").textContent).toContain(" until you release it");
+    expect(ctx.__els.get("view-held-release").style.display).toBe("");
   });
 
   it("too_long gets its own complete sentence, not the generic banner template", () => {
@@ -298,7 +315,7 @@ describe("status line shows 'edited by {tool}' for 7 days", () => {
       history: { items: [{ kind: "change", reason: "update", channel: "mcp", client: "Cursor", at: Date.now() }] },
     };
     ctx.renderViewStatus(entry);
-    expect(ctx.__els.get("view-status-caption").textContent).toMatch(/^Trusted · edited by Cursor on /);
+    expect(ctx.__els.get("view-status-caption").textContent).toMatch(/^Trusted · edited via Cursor on /);
   });
 
   it("falls back to 'an AI tool' when the history row carries no client", () => {
@@ -309,14 +326,14 @@ describe("status line shows 'edited by {tool}' for 7 days", () => {
       history: { items: [{ kind: "change", reason: "append", channel: "mcp", client: null, at: Date.now() }] },
     };
     ctx.renderViewStatus(entry);
-    expect(ctx.__els.get("view-status-caption").textContent).toBe(`Trusted · edited by an AI tool on ${ctx.formatDateUI(Date.parse(`${recentDate(1)}T00:00:00Z`), { month: "short", day: "numeric" })}`);
+    expect(ctx.__els.get("view-status-caption").textContent).toBe(`Trusted · edited via an AI tool on ${ctx.formatDateUI(Date.parse(`${recentDate(1)}T00:00:00Z`), { month: "short", day: "numeric" })}`);
   });
 
   it("shows the ordinary help text once the label is 7 or more days old", () => {
     const ctx = load();
     const entry = { id: "m1", tags: [`edited-canonical:${recentDate(7)}`], history: { items: [] } };
     ctx.renderViewStatus(entry);
-    expect(ctx.__els.get("view-status-caption").textContent).not.toContain("edited by");
+    expect(ctx.__els.get("view-status-caption").textContent).not.toContain("edited via");
     expect(ctx.__els.get("view-status-caption").textContent).toContain("Confirmed");
   });
 
@@ -324,7 +341,7 @@ describe("status line shows 'edited by {tool}' for 7 days", () => {
     const ctx = load();
     const entry = { id: "m1", tags: ["status:draft", `edited-canonical:${recentDate(1)}`], history: { items: [] } };
     ctx.renderViewStatus(entry);
-    expect(ctx.__els.get("view-status-caption").textContent).not.toContain("edited by");
+    expect(ctx.__els.get("view-status-caption").textContent).not.toContain("edited via");
   });
 
   it("shows the ordinary help text when there is no canonical-edit tag at all", () => {

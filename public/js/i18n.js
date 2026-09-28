@@ -365,14 +365,17 @@ const I18N_EN = {
     tooLongChip: 'Held: too long',
     tooLongLine: "Held out of search and away from your AI tools, because it's too long to check automatically for hidden instructions. Read it, and release it if it's fine. Shorter memories aren't held.",
     chip: 'Held',
-    banner: 'Held out of search: {reason}. It stays saved, and AI tools will not see it until you release it.',
+    banner: "Held out of search: {reason}. It stays saved, and your AI tools won't see it until you release it.",
+    // Shown instead of held.banner when Release is hidden from a non-author,
+    // non-admin viewer (copywriter, deck 18 section 11): names who can act on it.
+    bannerOther: "Held out of search: {reason}. It stays saved, and AI tools won't see it until the person who saved it or an admin releases it.",
     release: 'Release',
     released: 'Released',
     // DRAFT, flagged for the copywriter: no key given for a failed release.
     releaseFailed: 'Could not release this: {message}',
     reasonInstruction: 'looks like an instruction to an AI',
     reasonHidden: 'contains hidden text',
-    reasonBurst: 'many memories were written in a short time',
+    reasonBurst: 'AI tools made many changes in a short time',
     reasonCapsule: 'changes what your AI tools always see',
   },
   undo: {
@@ -415,7 +418,7 @@ const I18N_EN = {
     failed: 'Could not change the status: {message}',
     // T3/T4 lane S5 (16-t3-t4-trust-spec.md 5.7, UX-E.3): the 7-day canonical-
     // edit label, replacing the plain help line above while it applies.
-    editedBy: 'Trusted · edited by {tool} on {date}',
+    editedBy: 'Trusted · edited via {tool} on {date}',
     // Not in the deck's own status.* table; reused from history.byAgent's
     // established wording ("via an AI tool") for the same unnamed-client case.
     anAiTool: 'an AI tool',
@@ -1677,13 +1680,14 @@ const I18N_IT = {
     tooLongChip: 'Trattenuto: troppo lungo',
     tooLongLine: 'Tenuto fuori dalla ricerca e lontano dai tuoi strumenti di IA, perché è troppo lungo per controllarlo automaticamente in cerca di istruzioni nascoste. Leggilo e rilascialo se va bene. I ricordi più brevi non vengono trattenuti.',
     chip: 'Trattenuto',
-    banner: 'Escluso dalla ricerca: {reason}. Resta salvato e gli strumenti di IA non lo vedranno finché non lo rilasci.',
+    banner: 'Tenuto fuori dalla ricerca: {reason}. Resta salvato e i tuoi strumenti di IA non lo vedranno finché non lo rilasci.',
+    bannerOther: "Tenuto fuori dalla ricerca: {reason}. Resta salvato e gli strumenti di IA non lo vedranno finché non lo rilascia chi l'ha salvato o un amministratore.",
     release: 'Rilascia',
     released: 'Rilasciato',
     releaseFailed: 'Impossibile rilasciarlo: {message}',
     reasonInstruction: "sembra un'istruzione per un'IA",
     reasonHidden: 'contiene testo nascosto',
-    reasonBurst: 'molti ricordi sono stati scritti in poco tempo',
+    reasonBurst: 'gli strumenti di IA hanno fatto molte modifiche in poco tempo',
     reasonCapsule: 'cambia ciò che i tuoi strumenti di IA vedono sempre',
   },
   undo: {
@@ -1722,7 +1726,7 @@ const I18N_IT = {
     wrongHelp: 'Non vero, o da non usare. La ricerca lo esclude, per te e per i tuoi strumenti di IA. Puoi cambiarlo in qualsiasi momento.',
     keywordOnly: "Non trovabile per significato finché non è indicizzato.",
     failed: 'Impossibile cambiare lo stato: {message}',
-    editedBy: 'Affidabile · modificato da {tool} il {date}',
+    editedBy: 'Affidabile · modificato tramite {tool} il {date}',
     anAiTool: 'uno strumento di IA',
   },
   graph: {
