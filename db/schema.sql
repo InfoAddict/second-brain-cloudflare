@@ -275,6 +275,27 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id);
 
+-- Sampled recall log (T-0089.5.2 Part A), feeding the golden eval set T-0043. Additive:
+-- old code never reads this table and rollback is a no-op. Opt-in (config RECALL_LOG,
+-- off by default everywhere, D5.2) and sampled by src/recall/log.ts's KV day counter, not
+-- written on every recall. followed_ids starts empty and is filled by Part B (get, append,
+-- update or link on a returned id within 30 minutes) within the same row, never a new one.
+-- Must stay in step with src/db/init.ts.
+CREATE TABLE IF NOT EXISTS recall_log (
+  id           TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  channel      TEXT NOT NULL,             -- mcp | rest
+  query        TEXT NOT NULL,
+  params       TEXT NOT NULL,             -- JSON: topK, filters, hops
+  returned_ids TEXT NOT NULL,             -- JSON array, in order
+  followed_ids TEXT NOT NULL DEFAULT '[]' -- JSON array, filled by Part B within 30 minutes
+);
+
+-- The only read path: the latest row for a workspace within the follow window
+-- (Part B) and the retention purge (oldest-first). One index serves both.
+CREATE INDEX IF NOT EXISTS idx_recall_log_ws ON recall_log(workspace_id, created_at DESC);
+
 -- Content history (4.0, T-0089.1.1). One row per retired state of an entry,
 -- written in the same batch as the change. Must stay in step with src/db/init.ts.
 CREATE TABLE IF NOT EXISTS entry_versions (

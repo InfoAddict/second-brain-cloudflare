@@ -11,6 +11,7 @@ import { captureEntry } from "../capture/entry";
 import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
+import { maybeMarkFollowed } from "../recall/log";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
 import { parseExplicitWhen } from "../when/input";
 import { contentByteLength, isOverContentLimit, tooLargeRestBody, MAX_CONTENT_BYTES } from "../lib/content-size";
@@ -222,11 +223,12 @@ export async function handleCaptureRoutes(
       return json(tooLargeRestBody(), 413);
     }
 
+    const cfg = await resolveConfig(env);
     let indexed: boolean;
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
+      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
     } catch (e) {
       if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
       if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
@@ -234,6 +236,10 @@ export async function handleCaptureRoutes(
     }
 
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "rest" } });
+    // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
+    // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+    // hand from appendToEntry above, so this adds no second KV read.
+    ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
 
     return json({
       ok: true,
@@ -325,7 +331,8 @@ export async function handleCaptureRoutes(
     // Absent (undefined) means "leave the tags alone", so nothing was ignored.
     const { ignored: ignoredReservedTags } = stripNewReservedTags(replaceTags ?? []);
 
-    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string);
+    const cfg = await resolveConfig(env);
+    const result = await updateEntryContent(env, id, newContent, cfg, updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string);
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {
@@ -350,6 +357,10 @@ export async function handleCaptureRoutes(
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "rest" } });
     // New content plus an end date: the text first, then the window, each its own version.
     const endFields = hasValidity ? validityBody(await setValidity(row.workspace_id as string)).body : {};
+    // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
+    // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+    // hand from updateEntryContent above, so this adds no second KV read.
+    ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
 
     if (!result.vectorIds) {
       return json(withReservedNote({

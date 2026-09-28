@@ -8,12 +8,13 @@ import { EDGE_TYPES } from "../graph/types";
 import { buildGraph, getConnections } from "../graph/traverse";
 import { resolveConfig } from "../config";
 import { readProjectParam } from "./project-param";
+import { maybeMarkFollowedMany } from "../recall/log";
 
 export async function handleGraphRoutes(
   request: Request,
   url: URL,
   env: Env,
-  _ctx: ExecutionContext,
+  ctx: ExecutionContext,
 ): Promise<Response | null> {
   // POST /link — create an explicit edge between two memories, mirrors the MCP `link` tool
   if (url.pathname === "/link" && request.method === "POST") {
@@ -58,6 +59,11 @@ export async function handleGraphRoutes(
 
     const edge = await createEdge(sourceId, targetId, type, { provenance: "explicit", weight: 1.0, workspaceId: source.workspace_id, readableWorkspaceIds: readableWorkspaces(auth) }, env);
     if (!edge) return json({ ok: false, error: "Cannot link an entry to itself" }, 400);
+    // T-0089.5.2 Part B: a link on a recently-recalled id is implicit feedback that
+    // the recall was used. Checked for both ends together (one shared read-then-write,
+    // not two racing ones); config is only resolved if a matching row is found, so the
+    // common case (RECALL_LOG never turned on) costs no KV read.
+    ctx.waitUntil(maybeMarkFollowedMany(env, source.workspace_id, [sourceId, targetId], Date.now()));
     return json({ ok: true, source_id: edge.source_id, target_id: edge.target_id, type: edge.type });
   }
 

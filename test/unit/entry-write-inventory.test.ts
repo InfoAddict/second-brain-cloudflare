@@ -145,10 +145,9 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
-  // MOVED 1235 -> 1257 -> 1287 -> 1291 (T-0089.2.1): the validity predicate and superseded_by
-  // subquery, the candidateSignalProjection valid_until comment, and B2's validity-reader-inventory
-  // marker added lines to the hydration block above this site; same site, shifted only.
-  { file: 'src/recall/search.ts', line: 1286, kind: 'exempt' },
+  // MOVED 1235 -> 1257 -> 1287 -> 1291 -> 1286 (T-0089.2.1), and 1235 -> 1236 (T-0089.5.2, the recall log's
+  // Part A hook): both lanes added lines above this site; merged position measured from the scanner.
+  { file: 'src/recall/search.ts', line: 1287, kind: 'exempt' },
   // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
   // retryAfterMs rework added lines above this site; same site, shifted only.
   // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.
