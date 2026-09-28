@@ -45,7 +45,7 @@ import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./ke
 import { vectorSortKey } from "../vectorize/ids";
 import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
 import { applyOccupancyCap, CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates, liftFor } from "./source-trust";
-import { enrichWithAsOf } from "./as-of";
+import { enrichWithAsOf, asOfPredicateSql, asOfPredicateBindings } from "./as-of";
 import { getVersionsSince } from "../memory/versions";
 
 /**
@@ -105,10 +105,8 @@ async function keywordSearchLike(
   // `not` are terms whose rows are excluded (already read whole by an earlier window); `max` is the window's row cap.
   // The rows come back without their text: each carries, for every term, how the note holds it (see keyword-rows.ts).
   // validity: current: a superseded or ended row must not take a keyword pool slot from one that is still true (5.5); as-of (5.7 item 2) also lets through a belief the OR's second arm names, confirmed later by as-of.ts's belief batch
-  const validitySql = asOf === undefined
-    ? "(valid_until IS NULL OR valid_until > ?)"
-    : "((COALESCE(valid_from, created_at) <= ? AND (valid_until IS NULL OR valid_until > ?)) OR (tags LIKE '%\"status:deprecated\"%' AND created_at <= ?))";
-  const validityBindings = asOf === undefined ? [now] : [asOf, asOf, asOf];
+  const validitySql = asOf === undefined ? "(valid_until IS NULL OR valid_until > ?)" : asOfPredicateSql();
+  const validityBindings = asOf === undefined ? [now] : asOfPredicateBindings(asOf);
   const windowFor = (subset: string[], max: number, not: string[] = []) => {
     const where = subset.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
     const exclude = not.length ? ` AND NOT (${not.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ")})` : "";
@@ -178,10 +176,8 @@ async function keywordSearchFts(
   const shortHits = shortTerms.map(() => `(e.content LIKE ? ${CONTENT_LIKE_ESCAPE})`).join(" + ");
   const shortBindings = shortTerms.map(contentLikePattern);
   // validity: current: a superseded or ended row must not take a keyword pool slot from one that is still true (5.5); as-of (5.7 item 2) also lets through a belief the OR's second arm names, confirmed later by as-of.ts's belief batch
-  const validitySql = asOf === undefined
-    ? "(e.valid_until IS NULL OR e.valid_until > ?)"
-    : "((COALESCE(e.valid_from, e.created_at) <= ? AND (e.valid_until IS NULL OR e.valid_until > ?)) OR (e.tags LIKE '%\"status:deprecated\"%' AND e.created_at <= ?))";
-  const validityBindings = asOf === undefined ? [now] : [asOf, asOf, asOf];
+  const validitySql = asOf === undefined ? "(e.valid_until IS NULL OR e.valid_until > ?)" : asOfPredicateSql("e");
+  const validityBindings = asOf === undefined ? [now] : asOfPredicateBindings(asOf);
   // Rows come back without their text, with per-term match levels instead (keyword-rows.ts). `sh` and `rk` carry the ranking
   // (short-token hits, then bm25) so the outer SELECT keeps the order the LIMIT chose.
   // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
@@ -925,14 +921,10 @@ export async function recallEntries(
     ...expanded.map(e => e.id),
   ])];
   // validity: current: a replaced or ended fact must never be presented as current (5.5); as-of (5.7 item 3) instead keeps what was true at T plus belief candidates (confirmed by as-of.ts's belief batch)
-  const asOfValidity = `AND (
-    (tags NOT LIKE '%"status:deprecated"%' AND COALESCE(valid_from, created_at) <= ? AND (valid_until IS NULL OR valid_until > ?))
-    OR (tags LIKE '%"status:deprecated"%' AND created_at <= ?)
-  )`;
   let d1Filters = asOf === undefined
     ? ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%' AND (valid_until IS NULL OR valid_until > ?) AND ${NOT_HELD_SQL}`
-    : ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' ${asOfValidity} AND ${NOT_HELD_SQL}`;
-  const filterBindings: (string | number)[] = asOf === undefined ? [now] : [asOf, asOf, asOf];
+    : ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND ${asOfPredicateSql()} AND ${NOT_HELD_SQL}`;
+  const filterBindings: (string | number)[] = asOf === undefined ? [now] : asOfPredicateBindings(asOf);
   if (tag) {
     d1Filters += ` AND tags LIKE ? ${TAG_LIKE_ESCAPE}`;
     filterBindings.push(tagLikePattern(tag));
