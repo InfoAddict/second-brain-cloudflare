@@ -26,8 +26,14 @@ function* walk(dir: string): Generator<string> {
 
 /** A statement that reaches entries via a JOIN (not a bounded `id IN (...)` off the candidate pipeline). */
 const JOINS_ENTRIES = /\bJOIN entries\b/;
-/** Projects entries' own text to the caller: a content column, or a preview substr of one. */
-const PROJECTS_CONTENT = /\b\w*\.?content\b|\bpreview\b/;
+/**
+ * Projects entries' own text to the caller: a content column (however aliased — `content AS text`,
+ * `substr(content, ...) AS snippet`), or a preview substr of one. A bare substring match, not
+ * anchored to a word boundary: a boundary-anchored pattern misses a rename that butts another
+ * identifier straight against "content" with no separator. Over-matching is the safe direction —
+ * it earns another pinned exemption, not a silent miss.
+ */
+export const PROJECTS_CONTENT = /content|preview/;
 /** The hold filter itself, literal or the shared fragment (any alias): NOT_HELD_SQL interpolated is `${NOT_HELD_SQL}` after an alias dot, or the literal LIKE it expands to. */
 const HOLD_FILTER = /\$\{NOT_HELD_SQL\}|NOT LIKE '%"quarantine:/;
 
@@ -59,6 +65,25 @@ const EXEMPT: { file: string; has: string; why: string }[] = [
   { file: "src/routes/admin.ts", has: "FROM admin_events ae", why: "the admin activity trail: a human admin's own audit log, not a model prompt or an agent-facing recall result" },
   { file: "src/routes/admin.ts", has: "FROM edges e LEFT JOIN entries m ON m.id = e.target_id", why: "insight review's source preview for a human admin reviewer; a held source renders as unreadable the same as a deleted one (see the comment above this query), never as ordinary content" },
 ];
+
+describe("PROJECTS_CONTENT (review NIT)", () => {
+  // The old, word-boundary-anchored pattern this replaced: content had to sit at a \b on both
+  // sides. It happened to match `content AS text` and `substr(content, ...) AS snippet` (the
+  // reviewer's own two examples: nothing else in either string touches "content" directly), but
+  // missed a rename that butts straight up against "content" with no separator at all.
+  const OLD_BOUNDARY_ANCHORED = /\b\w*\.?content\b|\bpreview\b/;
+
+  it("matches a butted-up rename the boundary-anchored pattern missed", () => {
+    const sql = "SELECT s.content_preview FROM edges g JOIN entries s ON s.id = g.source_id";
+    expect(OLD_BOUNDARY_ANCHORED.test(sql)).toBe(false); // fails before this change
+    expect(PROJECTS_CONTENT.test(sql)).toBe(true);
+  });
+
+  it("still matches the reviewer's own two examples", () => {
+    expect(PROJECTS_CONTENT.test("SELECT s.content AS text FROM edges g JOIN entries s ON s.id = g.source_id")).toBe(true);
+    expect(PROJECTS_CONTENT.test("SELECT substr(s.content, 1, 60) AS snippet FROM edges g JOIN entries s ON s.id = g.source_id")).toBe(true);
+  });
+});
 
 describe("held-reader class guard (T-0089.2.2 review, MAJOR)", () => {
   const hits = scan();
