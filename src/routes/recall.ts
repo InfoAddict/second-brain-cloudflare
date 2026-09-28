@@ -14,6 +14,7 @@ import { readProjectParam } from "./project-param";
 import { allowanceFor, snippetOf } from "../recall/snippet";
 import { editedCanonicalAt } from "../quarantine/tags";
 import { parseSupersededBy, validitySummary } from "../recall/validity-view";
+import { parseValidityDate } from "../memory/validity";
 
 /**
  * Add the caller's workspace predicate before ORDER BY and LIMIT.
@@ -181,7 +182,14 @@ export async function handleRecallRoutes(
     if (project instanceof Response) return project;
 
     const cfg = await resolveConfig(env);
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
+    const asOfParam = url.searchParams.get("as_of")?.trim();
+    let asOf: number | undefined;
+    if (asOfParam) {
+      const parsed = parseValidityDate(asOfParam, Date.now(), cfg.TIMEZONE, "end");
+      if (typeof parsed !== "number") return json({ ok: false, error: parsed.error }, 400);
+      asOf = parsed;
+    }
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale, asOf: asOfHeader } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team, asOf });
 
     if (!matches.length) {
       return json({
@@ -189,6 +197,7 @@ export async function handleRecallRoutes(
         results: [],
         query_used: queryUsed,
         semantic_unavailable: semanticUnavailable,
+        ...(asOfHeader ? { as_of: { at: asOfHeader.at, not_recorded_before: asOfHeader.notRecordedBefore } } : {}),
         message: semanticUnavailable
           ? `Semantic search was unavailable or incomplete for this query, so only keyword and tag matches were considered. ${SEMANTIC_UNAVAILABLE_DETAIL}`
           : "Nothing found matching that query.",
@@ -199,6 +208,7 @@ export async function handleRecallRoutes(
       ok: true,
       query_used: queryUsed,
       compound_stale: compoundStale ?? null,
+      ...(asOfHeader ? { as_of: { at: asOfHeader.at, not_recorded_before: asOfHeader.notRecordedBefore } } : {}),
       results: matches.map((m, i) => {
         const s = full
           ? { text: m.content, truncated: false, fullLength: (m.content ?? "").length }
@@ -230,6 +240,12 @@ export async function handleRecallRoutes(
           validity_state: m.validityState,
           superseded_by: m.supersededBy,
           retracted_source: m.retractedSource,
+          ...(asOfHeader ? {
+            as_of_text_changed_at: m.asOfTextChangedAt ?? null,
+            status_at: m.statusAt ?? null,
+            recorded_after_as_of: m.recordedAfterAsOf ?? false,
+            retracted_belief: m.retractedBelief ? { retracted_at: m.retractedBelief.retractedAt, attached_to: m.retractedBelief.attachedTo } : null,
+          } : {}),
           ...(explain ? { why: m.why ?? null } : {}),
         };
       }),

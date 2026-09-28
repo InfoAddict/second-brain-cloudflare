@@ -44,7 +44,7 @@ import { resolveClientLabel, type McpClientExtra, type McpClientProps } from "./
 import { heldReason, holdReasonPhrase, isHeld } from "../quarantine/tags";
 import { contentByteLength, isOverContentLimit, tooLargeMcpMessage, MAX_CONTENT_BYTES } from "../lib/content-size";
 import {
-  parseValidityInput, supersedeReply, updateEntryValidity, updateValidityReply, validityReplySuffix, VALIDITY_WITH_CONTENT_ERROR,
+  parseValidityDate, parseValidityInput, supersedeReply, updateEntryValidity, updateValidityReply, validityReplySuffix, VALIDITY_WITH_CONTENT_ERROR,
 } from "../memory/validity";
 
 // Asking the calling model for this is the whole point: it has already read the content
@@ -104,6 +104,10 @@ export const RECALL_DESCRIPTION =
   + "memories, or missing something you expected to be there, make one more targeted recall before concluding "
   + "the information is not stored. Sharpen it with any of: a more specific query, the subject named "
   + "explicitly instead of a pronoun or a vague reference, tag, kind, after, before, hops.\n\n"
+  + "AS OF. When the user asks what was true at a past time (\"where did I live in March?\"), pass as_of with "
+  + "that date. You get what was actually true then, with later corrections applied. A belief that was later "
+  + "retracted is listed underneath, marked, and is never the answer. Without as_of, results are what is true "
+  + "now: replaced facts are left out.\n\n"
   + "CHOOSE ON FIT. Prefer the memory that most directly answers the question — not automatically the newest, "
   + "the highest-scoring, the longest, or a particular kind. All else equal: semantic memories are better for "
   + "durable facts, settled decisions, preferences, and current authoritative state; episodic memories are "
@@ -1019,15 +1023,22 @@ export function buildMcpServer(
         team: z.string().optional().describe("When workspace is company, restrict to one team — id from list_teams"),
         project: projectParam.describe("Search inside one project: its slug from list_projects. Matches the project's own memories and anything its aliases claim. An unknown slug is an error, not an empty result"),
         explain: z.boolean().optional().describe("Add one line per result saying why it came back (meaning rank, matched keywords, boosts, rerank, link). Off by default because it costs output tokens"),
+        as_of: z.string().optional().describe("Answer what was actually true on this past date, not what is true now: a date like 2026-06-15, a month, or a year. Never a future date."),
       },
     },
-    async ({ query, topK, tag, after, before, kind, hops, workspace, team, project, explain }) => {
+    async ({ query, topK, tag, after, before, kind, hops, workspace, team, project, explain, as_of }) => {
       const teamRead = identity ? readTeamParam(team, identity, workspace) : {};
       if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
       const projectRows = await resolveProjectArg(project, workspace, teamRead.teamId);
       if (typeof projectRows === "string") return { content: [{ type: "text", text: projectRows }] };
       const cfg = await resolveConfig(env);
-      const { matches, insight, semanticUnavailable, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId });
+      let asOf: number | undefined;
+      if (as_of !== undefined) {
+        const parsed = parseValidityDate(as_of, Date.now(), cfg.TIMEZONE, "end");
+        if (typeof parsed !== "number") return { content: [{ type: "text", text: parsed.error }] };
+        asOf = parsed;
+      }
+      const { matches, insight, semanticUnavailable, queryTokens, compoundStale, asOf: asOfHeader } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId, asOf });
 
       const notice = semanticUnavailable
         ? `Note: semantic search was unavailable or incomplete for this query, so these results may be keyword matches only. ${SEMANTIC_UNAVAILABLE_DETAIL}\n\n`
@@ -1037,7 +1048,7 @@ export function buildMcpServer(
         return { content: [{ type: "text", text: notice + "Nothing found matching that query." }] };
       }
 
-      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg, compoundStale }) }] };
+      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg, compoundStale, asOf: asOfHeader }) }] };
     }
   );
 

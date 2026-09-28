@@ -72,20 +72,45 @@ export function validityBracket(v: ValiditySummary, timezone: string): string | 
     : `[ended ${until}: ${trueWindow}]`;
 }
 
+/** "Believed then, later retracted on <date> (not the answer): ID <id> "<preview 80>"" (spec 14 5.9). */
+function beliefLine(m: RecallMatch, timezone: string): string {
+  const date = formatValidityDate(m.retractedBelief!.retractedAt, timezone);
+  const preview = m.content.trim().replace(/\s+/g, " ").slice(0, 80);
+  return `  Believed then, later retracted on ${date} (not the answer): ID ${m.id} "${preview}"`;
+}
+
+/** Per-result as-of markers, appended to the header line in spec order, each only when true (5.9 item 6). */
+function asOfMarkers(m: RecallMatch, timezone: string): string {
+  const parts: string[] = [];
+  if (m.validUntil !== null && m.supersededBy) parts.push(` · true until ${formatValidityDate(m.validUntil, timezone)}, then replaced by ${m.supersededBy.id}`);
+  if (m.recordedAfterAsOf) parts.push(` · recorded ${formatValidityDate(m.createdAt, timezone)}, after that day`);
+  if (m.asOfTextChangedAt !== null && m.asOfTextChangedAt !== undefined) {
+    parts.push(` [as of ${formatValidityDate(m.asOfTextChangedAt, timezone)}: since changed, see history]`);
+  }
+  if (m.asOfPruned) parts.push(" · text before that date is not kept");
+  if (m.asOfTextHidden) parts.push(" · earlier text is not visible to you");
+  return parts.join("");
+}
+
 export function renderRecallText(
   matches: RecallMatch[],
   insight: string,
-  opts: { full?: boolean; queryTokens?: string[]; config?: Readonly<Config>; compoundStale?: CompoundStaleSignal } = {},
+  opts: { full?: boolean; queryTokens?: string[]; config?: Readonly<Config>; compoundStale?: CompoundStaleSignal; asOf?: { at: number; notRecordedBefore: number | null } } = {},
 ): string {
+  const cfg = opts.config ?? DEFAULTS;
+  const beliefs = opts.asOf ? matches.filter(m => m.retractedBelief) : [];
+  const trueMatches = opts.asOf ? matches.filter(m => !m.retractedBelief) : matches;
+  const attachedBelief = new Map(beliefs.filter(b => b.retractedBelief!.attachedTo).map(b => [b.retractedBelief!.attachedTo as string, b]));
+  const unattachedBeliefs = beliefs.filter(b => !b.retractedBelief!.attachedTo);
+
   const contentById = new Map(matches.map(m => [m.id, m.content]));
   const blocks: string[] = [];
   const renderedMatches: RecallMatch[] = [];
   let used = 0;
   let omitted = 0;
-  const cfg = opts.config ?? DEFAULTS;
 
-  for (let i = 0; i < matches.length; i++) {
-    const m = matches[i];
+  for (let i = 0; i < trueMatches.length; i++) {
+    const m = trueMatches[i];
     // Spelled month: this text is read by assistants, and a numeric date is
     // ambiguous between US and international order.
     const header = memoryHeader(m);
@@ -104,18 +129,24 @@ export function renderRecallText(
       : "";
     const similarIdsLine = m.similar?.length ? `similar ids: ${m.similar.map(s => s.id).join(", ")}\n` : "";
 
+    const asOfLabel = opts.asOf ? asOfMarkers(m, cfg.TIMEZONE) : "";
+
     const s: Snippet = opts.full
       ? { text: (m.content ?? "").trim(), truncated: false, fullLength: (m.content ?? "").length }
       : snippetOf(m.content, allowanceFor(i, m.score, cfg), { queryTokens: opts.queryTokens });
     const body = s.truncated ? `${s.text}${truncationNote(m.id, s)}` : s.text;
-    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}${trueSinceLabel}${retractedSourceLabel}${similarLabel}\nID: ${m.id}\n${body}`;
+    // A belief attached to this result renders under it (5.9), inside the same block so it
+    // travels (and is budgeted) with the result it explains rather than as a separate entry.
+    const attached = attachedBelief.get(m.id);
+    const bodyWithBelief = attached ? `${body}\n${beliefLine(attached, cfg.TIMEZONE)}` : body;
+    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}${trueSinceLabel}${asOfLabel}${retractedSourceLabel}${similarLabel}\nID: ${m.id}\n${bodyWithBelief}`;
     // The why line rides outside the budget: asking for an explanation must not change which memories come back.
     const whyLine = m.why ? `why: ${whyText(m, m.why, contentById)}\n` : "";
     const extraLines = `${whyLine}${similarIdsLine}`;
 
     // Stop once the budget is spent, but always return at least one match.
     if (!opts.full && blocks.length && used + block.length > cfg.RECALL_OUTPUT_BUDGET) {
-      omitted = matches.length - i;
+      omitted = trueMatches.length - i;
       break;
     }
     used += block.length;
@@ -129,10 +160,20 @@ export function renderRecallText(
     const oldest = new Date(compoundStale.oldestUpdatedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
     prefix = `**Staleness warning:** ${compoundStale.count} sources are marked stale as-of (oldest touch: ${oldest}). Verify before combining them into a single claim.\n\n---\n\n`;
   }
+  if (opts.asOf) {
+    const tz = cfg.TIMEZONE;
+    const note = opts.asOf.notRecordedBefore !== null
+      ? ` Edits before ${formatValidityDate(opts.asOf.notRecordedBefore, tz)} were not recorded, so some memories show their current text.`
+      : "";
+    prefix = `As of ${formatValidityDate(opts.asOf.at, tz)}: what was true then, with every correction made since.${note}\n\n${prefix}`;
+  }
 
   let text = blocks.join("\n\n");
   if (omitted > 0) {
     text += `\n\n${omitted} more match${omitted > 1 ? "es" : ""} omitted to bound the response size. Narrow the query, or call get("<id>") for a specific memory.`;
+  }
+  if (unattachedBeliefs.length) {
+    text += `\n\nBelieved then, later retracted:\n${unattachedBeliefs.map(b => beliefLine(b, cfg.TIMEZONE)).join("\n")}`;
   }
   const body = insight ? `**Insight:** ${insight}\n\n---\n\n${text}` : text;
   return prefix ? prefix + body : body;
