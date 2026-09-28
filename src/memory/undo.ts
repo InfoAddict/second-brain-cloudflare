@@ -739,68 +739,74 @@ async function resolveTrashGroup(
   return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: "trash" };
 }
 
-interface NewestVersionRow {
-  entry_id: string; actor_id: string; channel: string; reason: string; meta: string; created_at: number; workspace_id: string;
+interface ChainRow {
+  seq: number; meta: string; reason: string; channel: string; actor_id: string; created_at: number; workspace_id: string;
 }
 
-async function lowestQualifyingVersion(env: Env, id: string, decoded: DecodedGroup, cfg: Readonly<Config>): Promise<number | undefined> {
+type MemberVerdict =
+  | { kind: "pending"; toVersion: number; workspaceId: string }
+  | { kind: "done" }
+  | { kind: "changed_since" }
+  | { kind: "not_found" };
+
+/**
+ * Whether this one memory is still owed the group's own revert, told from a stable, seq-based
+ * cursor rather than a timestamp (reviewer MINOR: an undo landing in the group's own final
+ * millisecond used to read as still-eligible on the next page, and paging repeated it instead of
+ * advancing). `target_seq` is the "before this version" seq a plain revert always records
+ * (metaCandidate above); a later version carrying `reason: "revert"` and that exact target_seq is
+ * unambiguous proof this exact group-qualifying change was already undone, whatever time it
+ * landed at. Nothing happening after the qualifying version at all (newest === toVersion) is
+ * "pending"; anything else that happened since, and is not that proof, is a third party's edit
+ * (reviewer MAJOR, R21 follow-up: the qualifying version's own actor must equal the group's own
+ * actor, or a same-window edit by someone else using the same client label could be reverted).
+ */
+async function classifyMember(env: Env, id: string, decoded: DecodedGroup, cfg: Readonly<Config>, scope: string[]): Promise<MemberVerdict> {
   const { results } = await env.DB.prepare(
-    // scope-exempt: `id` is only ever called here for a candidate resolveVersionGroup already
-    // confirmed is inside the reader's scope (its own workspace_id IN (?) read, just above).
-    `SELECT seq, meta FROM entry_versions WHERE entry_id = ?1 AND created_at >= ?2 AND channel = 'mcp' ORDER BY seq ASC`,
-  ).bind(id, decoded.start).all<{ seq: number; meta: string }>();
+    // scope-checked: en.workspace_id IN (?2) narrows to the reader's own scope; `id` also already
+    // comes from groupCandidates's own reader-scoped derivation, so this is defense in depth.
+    `SELECT ev.seq, ev.meta, ev.reason, ev.channel, ev.actor_id, ev.created_at, en.workspace_id
+     FROM entry_versions ev JOIN entries en ON en.id = ev.entry_id
+     WHERE ev.entry_id = ?1 AND en.workspace_id IN (SELECT value FROM json_each(?2))
+     ORDER BY ev.seq ASC LIMIT 500`,
+  ).bind(id, JSON.stringify(scope)).all<ChainRow>();
+  if (!results.length) return { kind: "not_found" };
+
+  let toVersion: number | undefined;
+  let consumed = false;
   for (const r of results) {
     let meta: Record<string, unknown> = {};
-    try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no client */ }
-    if (safeClient(meta.client, cfg) === decoded.client) return r.seq;
+    try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no client / no target_seq */ }
+    if (toVersion === undefined) {
+      if (r.created_at >= decoded.start && r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
+        toVersion = r.seq;
+      }
+      continue;
+    }
+    if (r.reason === "revert" && meta.target_seq === toVersion) consumed = true;
   }
-  return undefined;
+  if (toVersion === undefined) return { kind: "not_found" };
+  if (consumed) return { kind: "done" };
+  const newest = results[results.length - 1];
+  return newest.seq === toVersion ? { kind: "pending", toVersion, workspaceId: newest.workspace_id } : { kind: "changed_since" };
 }
 
 async function resolveVersionGroup(
   env: Env, identity: Identity, decoded: DecodedGroup, ids: string[], change: ChangeContext, config: Readonly<Config>,
   ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
 ): Promise<UndoGroupResult> {
-  const { results: newestRows } = await env.DB.prepare(
-    // scope-checked: en.workspace_id IN (?2) narrows to the reader's own scope; ids already come
-    // from groupCandidates's own reader-scoped derivation, so this is defense in depth, not the
-    // only check. No window function (R14): MAX(seq) per id is a correlated-subquery point
-    // lookup over an id list capped at UNDO_GROUP_MAX, not a sorted scan of the whole table.
-    `SELECT ev.entry_id, ev.actor_id, ev.channel, ev.reason, ev.meta, ev.created_at, en.workspace_id
-     FROM entry_versions ev JOIN entries en ON en.id = ev.entry_id
-     WHERE ev.entry_id IN (SELECT value FROM json_each(?1)) AND en.workspace_id IN (SELECT value FROM json_each(?2))
-       AND ev.seq = (SELECT MAX(seq) FROM entry_versions v2 WHERE v2.entry_id = ev.entry_id)`,
-  ).bind(JSON.stringify(ids), JSON.stringify(scope)).all<NewestVersionRow>();
-  const byId = new Map(newestRows.map(r => [r.entry_id, r]));
-
-  type Verdict = "pending" | "changed_since" | "done" | "not_found";
-  const verdictOf = (id: string): Verdict => {
-    const newest = byId.get(id);
-    if (!newest) return "not_found";
-    let meta: Record<string, unknown> = {};
-    try { meta = JSON.parse(newest.meta || "{}"); } catch { /* treated as no client */ }
-    const client = safeClient(meta.client, config);
-    if (newest.created_at <= decoded.end && newest.actor_id === decoded.actorId && client === decoded.client) return "pending";
-    const doneByUs = newest.created_at > decoded.end && newest.actor_id === identity.userId
-      && (newest.reason === "revert" || (newest.reason === "status" && meta.release !== undefined));
-    return doneByUs ? "done" : "changed_since";
-  };
-
-  const verdicts = new Map(ids.map(id => [id, verdictOf(id)]));
-  const actionable = ids.filter(id => verdicts.get(id) !== "done");
-  const page = actionable.slice(0, UNDO_GROUP_PAGE);
-
   const results: { id: string; result: string }[] = [];
-  for (const id of page) {
-    const verdict = verdicts.get(id)!;
-    if (verdict === "not_found" || verdict === "changed_since") { results.push({ id, result: verdict }); continue; }
-    const newest = byId.get(id)!;
-    const toVersion = await lowestQualifyingVersion(env, id, decoded, config);
-    if (toVersion === undefined) { results.push({ id, result: "changed_since" }); continue; }
-    const outcome = await revertEntry(env, identity, id, change, config, toVersion, newest.workspace_id, undefined, ctx);
-    results.push({ id, result: resultForStatus(outcome.status) });
+  let doneCount = 0;
+  let i = 0;
+  for (; i < ids.length && results.length < UNDO_GROUP_PAGE; i++) {
+    const verdict = await classifyMember(env, ids[i], decoded, config, scope);
+    if (verdict.kind === "done") { doneCount++; continue; }
+    if (verdict.kind === "not_found" || verdict.kind === "changed_since") { results.push({ id: ids[i], result: verdict.kind }); continue; }
+    const outcome = await revertEntry(env, identity, ids[i], change, config, verdict.toVersion, verdict.workspaceId, undefined, ctx);
+    results.push({ id: ids[i], result: resultForStatus(outcome.status) });
   }
-  const remaining = actionable.length - page.length;
+  // Everything from i onward is still unexamined and stays actionable for the next call.
+  const remaining = ids.length - doneCount - results.length;
   return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: decoded.family };
 }
 

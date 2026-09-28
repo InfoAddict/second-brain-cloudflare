@@ -1509,7 +1509,11 @@ describe("the checker over the real source tree", () => {
     // each carry their own workspace_id IN (?) scope-checked comment, and lowestQualifyingVersion's
     // single-id lookup is scope-exempt (its caller already confirmed that id is in the reader's
     // scope, just above).
-    ).toEqual({ queries: 237, exempt: 117, checked: 35, outerJoin: 1 });
+    // Deliberate: -1 query, -1 documented exception (237/117/35 -> 236/116/35) for the reviewer's
+    // MINOR/MAJOR follow-up: lowestQualifyingVersion's separate scope-exempt lookup merged into
+    // classifyMember's single scope-checked chain scan (undo.ts), which now also carries the
+    // actor check that closes the widened-group-key MAJOR. Net one fewer statement, not a new one.
+    ).toEqual({ queries: 236, exempt: 116, checked: 35, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
