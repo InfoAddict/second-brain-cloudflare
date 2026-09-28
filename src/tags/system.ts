@@ -14,7 +14,7 @@
 // additionally hides machine identifiers (`#5118`, `#fd540a`). That extra rule is
 // deliberately absent here: hiding a junk tag costs nothing, but treating it as
 // unowned would let an edit silently delete a tag that is genuinely stored.
-import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX, NEEDS_RESCAN_TAG, isHoldReasonValue, isEditedCanonicalDateValue } from "../quarantine/tags";
+import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX, QUARANTINE_SCANNED_TAG_PREFIX, isHoldReasonValue, isEditedCanonicalDateValue } from "../quarantine/tags";
 import {
   T7_TAG_PREFIXES, OWED_TO_ME_TAG,
   STANDING_TAG_PREFIX, LEDGER_TAG_PREFIX, CONFIDENCE_TAG_PREFIX, CONFIDENCE_SOURCE_TAG_PREFIX,
@@ -70,6 +70,9 @@ export const RESERVED_TAG_PREFIXES = [
   CAPSULE_SLOT_TAG_PREFIX,
   QUARANTINE_TAG_PREFIX,
   EDITED_CANONICAL_TAG_PREFIX,
+  // The pending-scan progress cursor (class D, T-0089.4.2): a namespace, not a bare marker,
+  // since it carries a numeric offset. Reserved so a caller cannot forge scan progress.
+  QUARANTINE_SCANNED_TAG_PREFIX,
   ...T7_TAG_PREFIXES,
 ];
 
@@ -97,10 +100,23 @@ const PIPELINE_TAG_NAMES = new Set([
   OWED_TO_ME_TAG,
   // Built on a memory that was later retracted (Track 2 cascade, T-0089.2.4). Cleared by undo or Keep.
   RETRACTED_SOURCE_TAG,
-  // Queues a >32 KB row whose unscanned middle the nightly background pass still owes a
-  // quarantine rescan (Lane W follow-up, spec 5.1 point 2). Cleared once that pass runs.
-  NEEDS_RESCAN_TAG,
 ]);
+
+/**
+ * The one normalization every caller-, import- or sync-supplied tag list must pass through
+ * before it is ever written (Codex review class B, T-0089.4.2): trims each tag and drops any
+ * that become empty. A stored tag with a leading or trailing space still matches
+ * `isWorkerOwnedTag`/`isHeld` (both trim before checking), but never matches the literal LIKE
+ * patterns (NOT_HELD_SQL, INDEXABLE_SQL) those same tags drive at the SQL layer — a held row
+ * with a stray space around its `quarantine:` tag would then read as excluded in application
+ * code but still surface through a raw SQL filter. Applied at every entry point tags can first
+ * reach storage from outside this Worker's own write paths (capture already trims via
+ * normalizeCaptureInput; this covers the ones that do not): import, trash restore, and mirror
+ * sync. Idempotent, so calling it more than once on the same list is harmless.
+ */
+export function normalizeTagList(tags: readonly unknown[]): string[] {
+  return tags.filter((t): t is string => typeof t === "string").map(t => t.trim()).filter(Boolean);
+}
 
 /** True when the tag is the brain's own bookkeeping rather than the user's word. */
 export function isWorkerOwnedTag(tag: string): boolean {

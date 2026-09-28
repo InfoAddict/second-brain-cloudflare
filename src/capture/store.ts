@@ -17,8 +17,8 @@ import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import type { ChangeContext, AuditChannel } from "../lib/audit";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement, type WhenChange } from "../memory/versions";
 import { scoreWrite, type QuarantineChannel } from "../quarantine/score";
-import { heldTagsFor, holdStatements, type HeldInfo } from "../quarantine/hold";
-import { isHeld, withEditedCanonical, withNeedsRescan } from "../quarantine/tags";
+import { heldTagsFor, holdDecision, holdStatements, type HeldInfo } from "../quarantine/hold";
+import { isHeld, withEditedCanonical } from "../quarantine/tags";
 import { countMcpWritesInWindow } from "../quarantine/burst";
 import { getStatus } from "../memory/status";
 import { isCapsuleTag } from "../tags/system";
@@ -109,6 +109,16 @@ export async function upsertEntryVectors(
   /** Embed chunks embedBatchSize() per AI call (the nightly backfill), rather than one call each. */
   opts: { batchEmbeds?: boolean } = {},
 ): Promise<StoredEntry> {
+  // Codex review class A (T-0089.4.2): the one gate every embed-or-upsert site for a row's real
+  // content routes through — this is the single low-level function every one of them (storeEntry,
+  // reembedOrThrow, reembedOrDegrade, undo's reembedForRevert, trash restore, mirror sync, the
+  // embedding migration, vectorize-pending) already calls to talk to Vectorize. A row whose OWN
+  // tags are still held must never be embedded, whichever route reached this call — that is
+  // exactly the invariant a hold exists to enforce, and it must hold even when the caller (a
+  // restore, a nightly repair) never scored this write itself. `tags` here is always the tags
+  // this call is ABOUT to commit, never assumed: a deliberate release passes the row's post-
+  // release (unheld) tags, so it passes this gate without needing a bypass flag.
+  if (isHeld(tags)) throw new HeldRowEmbedRefusedError(id);
   // A mirrored record is indexed by its first chunk only. `chunkText` splits at
   // CHUNK_MAX_CHARS and every chunk below gets its own vector, so a long one from
   // an external system produces vectors whose entire content is templated trailer
@@ -367,10 +377,9 @@ export async function updateEntryContent(
         config,
       );
     }
-    const heldTags = score?.hold ? heldTagsFor(committedTags, score.reasons) : null;
-    // 5.1 scorer byte budget, point 2 (Lane W follow-up): queues an unheld >32 KB edit for the
-    // nightly background rescan of its unscanned middle.
-    if (!heldTags && score?.partial) committedTags = withNeedsRescan(committedTags);
+    // Codex review class D (T-0089.4.2): a `partial` score holds too, reason pending-scan.
+    const decision = score ? holdDecision(score) : { hold: false as const };
+    const heldTags = decision.hold ? heldTagsFor(committedTags, decision.reasons) : null;
 
     // Re-embed FIRST (#212): if it fails, leave the entry's content and vectors untouched and
     // surface an error, instead of committing new content and then deleting every vector —
@@ -378,8 +387,11 @@ export async function updateEntryContent(
     // (#270), not that this embed failed. A retry re-embeds only if the row's text changed (another
     // writer may have upserted over these ids); a tags-only change keeps the vectors already made.
     // 5.4 W-b: a held write skips this pre-commit re-embed entirely (saves a model call) — the
-    // row is never vectorized, so there is nothing to embed for.
-    if (!heldTags && (attempt === 1 || embeddedFrom !== readContent)) {
+    // row is never vectorized, so there is nothing to embed for. Codex review class A
+    // (T-0089.4.2): an edit that keeps an ALREADY-held row held (D4.1, not rescored) must skip it
+    // too — committedTags still carries the quarantine: tag, and upsertEntryVectors' own gate
+    // now refuses that content outright rather than silently indexing a row a hold excludes.
+    if (!heldTags && !alreadyHeld && (attempt === 1 || embeddedFrom !== readContent)) {
       // A previous attempt's embed is being abandoned for this fresh one (content moved again since
       // it ran): delete its upload now, before embedding again.
       await recoverFromLostAttempt();
@@ -436,8 +448,8 @@ export async function updateEntryContent(
         // 5.4 W-b: holdStatements appended to the same batch — the edit above is its own version
         // and the hold is the next. Guarded on the edit's own post-state, so a lost compare-and-set
         // (the UPDATE above changed nothing) cannot land the hold either.
-        ...(heldTags ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
-          entryId: id, reasons: score!.reasons, score: score!.score, signals: score!.signals, change, heldTags, now,
+        ...(heldTags && decision.hold ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
+          entryId: id, reasons: decision.reasons, score: decision.score, signals: decision.signals, change, heldTags, now,
           // holdStatements' own UPDATE targets plain `entries`, unaliased (unlike the snapshot's `entries e` above).
           guard: p2 => `content = ${p2.add(finalContent)} AND tags = ${p2.add(JSON.stringify(committedTags))}`,
         }) : []),
@@ -468,7 +480,7 @@ export async function updateEntryContent(
           console.error("Vectorize delete failed after a held update (non-fatal):", e);
         }
       }
-      return { status: "updated", vectorIds: null, held: { reasons: score!.reasons, score: score!.score }, wasCanonical, capsuleChanged };
+      return { status: "updated", vectorIds: null, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical, capsuleChanged };
     }
 
     if (newVectorIds) {
@@ -510,6 +522,15 @@ export class WriteConflictError extends Error {
 /** The row was forgotten between the caller's guard read and the write. */
 export class EntryGoneError extends Error {
   constructor(id: string) { super(`No memory found with ID: ${id}`); }
+}
+
+/** Codex review class A (T-0089.4.2): upsertEntryVectors' own refusal when the tags it was asked
+ * to embed are still held. Every caller either already checks `isHeld` before it gets here (the
+ * ordinary write paths, which never call this with held tags to begin with) or must now handle
+ * this explicitly (trash restore, undo's release paths) — a thrown error, not a silent no-op, so
+ * a caller that forgets fails loudly in tests rather than shipping a quiet embed. */
+export class HeldRowEmbedRefusedError extends Error {
+  constructor(id: string) { super(`refusing to embed held row ${id}`); }
 }
 
 /**
@@ -622,18 +643,19 @@ export async function appendToEntry(
         config,
       );
     }
-    const heldTags = score?.hold ? heldTagsFor(refreshedTags, score.reasons) : null;
-    // 5.1 scorer byte budget, point 2 (Lane W follow-up): the scored slice here is already
-    // bounded (2,000 characters of context plus the addition), so this only fires when the
-    // addition itself is large enough to trip the scorer's own 32 KB cap.
-    if (!heldTags && score?.partial) refreshedTags = withNeedsRescan(refreshedTags);
+    // Codex review class D (T-0089.4.2): a `partial` score holds too, reason pending-scan — the
+    // scored slice here is already bounded (2,000 characters of context plus the addition), so
+    // this only fires when the addition itself is large enough to trip the scorer's own 32 KB cap.
+    const decision = score ? holdDecision(score) : { hold: false as const };
+    const heldTags = decision.hold ? heldTagsFor(refreshedTags, decision.reasons) : null;
 
     if (readContent.length + suffix.length > CHUNK_MAX_CHARS) {
       // The whole text is re-embedded, so this commit must be of the text that was embedded.
       const newContent = readContent + suffix;
       // 5.4 W-c: no pre-commit re-embed for a held append — saves a model call, and the row is
-      // never vectorized.
-      const newVectorIds = heldTags ? null : (await reembedOrDegrade(env, id, newContent, rowTags, source, config, embedCtx))?.vectorIds ?? null;
+      // never vectorized. Codex review class A (T-0089.4.2): also skipped for an append that
+      // keeps an already-held row held (D4.1) — rowTags still carries the quarantine: tag.
+      const newVectorIds = (heldTags || alreadyHeld) ? null : (await reembedOrDegrade(env, id, newContent, rowTags, source, config, embedCtx))?.vectorIds ?? null;
       // ADV-12: taken AFTER the embed, not before — a slow embed that lets a concurrent append commit
       // first must not stamp this later write with an earlier time than the one it lands on top of.
       const now = Date.now();
@@ -662,8 +684,8 @@ export async function appendToEntry(
           pruneStatement(env, id, config.VERSION_KEEP),
           // 5.4 W-c: holdStatements appended to the same batch, guarded on this append's own
           // post-state so a lost compare-and-set cannot land the hold either.
-          ...(heldTags ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
-            entryId: id, reasons: score!.reasons, score: score!.score, signals: score!.signals, change, heldTags, now,
+          ...(heldTags && decision.hold ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
+            entryId: id, reasons: decision.reasons, score: decision.score, signals: decision.signals, change, heldTags, now,
             guard: p2 => `content = ${p2.add(newContent)} AND tags = ${p2.add(JSON.stringify(refreshedTags))}`,
           }) : []),
         ]);
@@ -696,7 +718,7 @@ export async function appendToEntry(
             console.error("Vectorize delete failed after a held append (non-fatal):", e);
           }
         }
-        return { indexed: false, held: { reasons: score!.reasons, score: score!.score }, wasCanonical };
+        return { indexed: false, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical };
       }
 
       // Skipped when Vectorize is unavailable: the old vectors are the entry's only remaining semantic index.
@@ -715,8 +737,9 @@ export async function appendToEntry(
       return { indexed: newVectorIds !== null, wasCanonical };
     }
 
-    // 5.4 W-c: a held append is never indexed — no chunk embed, no Vectorize insert.
-    if (!heldTags && !chunk) {
+    // 5.4 W-c: a held append is never indexed — no chunk embed, no Vectorize insert. Codex
+    // review class A (T-0089.4.2): also true for an append that keeps an already-held row held.
+    if (!heldTags && !alreadyHeld && !chunk) {
       const values = await embed(addition, env, config);
       const [chunkId] = mintVectorIds(id, 1);
       const metadata: Record<string, any> = {
@@ -772,8 +795,8 @@ export async function appendToEntry(
         // edit's own UPDATE unconditionally sets tags to refreshedTags on a match, so checking
         // tags = refreshedTags here still proves the edit landed, with no need to know the exact
         // resulting content (which a concurrent short append could also have touched).
-        ...(heldTags ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
-          entryId: id, reasons: score!.reasons, score: score!.score, signals: score!.signals, change, heldTags, now,
+        ...(heldTags && decision.hold ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
+          entryId: id, reasons: decision.reasons, score: decision.score, signals: decision.signals, change, heldTags, now,
           guard: p2 => `tags = ${p2.add(JSON.stringify(refreshedTags))} AND workspace_id = ${p2.add(pinnedWorkspaceId)}`,
         }) : []),
       ]);
@@ -797,7 +820,7 @@ export async function appendToEntry(
           console.error("Vectorize delete failed after a held append (non-fatal):", e);
         }
       }
-      return { indexed: false, held: { reasons: score!.reasons, score: score!.score }, wasCanonical };
+      return { indexed: false, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical };
     }
 
     try {

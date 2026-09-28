@@ -25,9 +25,8 @@ import { standingTouched, type StandingCacheConfig } from "../standing/cache";
 import { buildDecisionCapture } from "../decisions/capture";
 import { buildCommitmentTags, validateT7Capture, type T7CaptureInput, type T7ReplyInfo } from "./t7-capture";
 import { scoreWrite, type QuarantineChannel, type ScoreResult } from "../quarantine/score";
-import { heldTagsFor, holdStatements, type HeldInfo } from "../quarantine/hold";
+import { heldTagsFor, holdDecision, holdStatements, type HeldInfo } from "../quarantine/hold";
 import { countMcpWritesInWindow } from "../quarantine/burst";
-import { withNeedsRescan } from "../quarantine/tags";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -254,9 +253,12 @@ export async function captureEntry(
       cfg,
     );
   }
+  // Codex review class D (T-0089.4.2): a `partial` score (over 32 KB, only the head and tail
+  // scanned) holds too, reason pending-scan, not just an outright `hold` — see holdDecision.
+  const decision = score ? holdDecision(score) : { hold: false as const };
 
   const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(
-    c, env, cfg, writeCtx.workspaceId, ctx, { skipModelCall: score?.hold === true },
+    c, env, cfg, writeCtx.workspaceId, ctx, { skipModelCall: decision.hold },
   );
 
   const definesCapsule = t.some(isCapsuleTag);
@@ -500,13 +502,9 @@ export async function captureEntry(
   const supersedes = contradiction.detected && !!contradiction.conflicting_id && (protectConflict || (plan !== null && plan.action !== "none"));
   const baseTags = supersedes ? [...t, "contradiction-resolved"] : t;
   const duplicateTags = dup.status === "flagged" ? [...baseTags, "duplicate-candidate"] : baseTags;
-  const scoredTags = protectConflict
+  const finalTags = protectConflict
     ? withStatus(duplicateTags.filter(tag => tag !== "contradiction-resolved"), "draft")
     : duplicateTags;
-  // 5.1 scorer byte budget, point 2 (Lane W follow-up): this branch is only reached when
-  // score.hold is false (a held write already returned above), so a `partial` score here is an
-  // unheld write over 32 KB whose middle the nightly pass still owes a check.
-  const finalTags = score?.partial ? withNeedsRescan(scoredTags) : scoredTags;
 
   // A decision's own computed review date wins over everything (Design 4.1); it is never
   // combined with a caller `when` (validateT7Capture already refused review_by + when
@@ -532,19 +530,20 @@ export async function captureEntry(
     window.valid_from, window.valid_until,
   );
 
-  if (score?.hold) {
+  if (decision.hold) {
     // 5.4: the INSERT (with the tags the write asked for) and the hold's own version, guarded
     // UPDATE and prune all land in ONE batch, so a crash between them can never leave an
-    // unheld row. No scheduleIndex: a held create is never vectorized (5.3 point 1).
-    const heldTags = heldTagsFor(finalTags, score.reasons);
+    // unheld row. No scheduleIndex: a held create is never vectorized (5.3 point 1). Class D
+    // (T-0089.4.2): this also covers a `partial` score, held reason pending-scan.
+    const heldTags = heldTagsFor(finalTags, decision.reasons);
     await env.DB.batch([
       insertStatement,
       ...holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: cfg.VERSION_KEEP }, {
-        entryId: id, reasons: score.reasons, score: score.score, signals: score.signals, change, heldTags, now,
+        entryId: id, reasons: decision.reasons, score: decision.score, signals: decision.signals, change, heldTags, now,
       }),
     ]);
     ctx.waitUntil(rememberTags(env, finalTags, writeCtx.workspaceId));
-    const held: HeldInfo = { reasons: score.reasons, score: score.score };
+    const held: HeldInfo = { reasons: decision.reasons, score: decision.score };
     return withT7(
       dup.status === "flagged"
         ? { status: "flagged", id, matchId: dup.matchId, score: dup.score, held }

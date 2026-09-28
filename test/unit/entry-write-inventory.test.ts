@@ -73,32 +73,30 @@ function scanInventory(): Site[] {
 // combining rather than hand-reconciling two independently-tracked line sets, same reasoning as
 // every prior cross-track merge this table records — see the history further below.
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
-  // MOVED to real --inventory output (T-0089.4.2, Lane W): captureEntry's write-time scoring
-  // (W1), store.ts's update/append holds and canonical label (W2), mirror.ts's held create/
-  // update (W3), undo.ts's release-via-undo split (W5) and the new quarantine/rescan.ts
-  // background pass (5.1 point 2 follow-up) all shifted or added entries-write sites.
-  // Recomputed against the real scanner output, same convention as every prior table reset.
+  // MOVED to real --inventory output (T-0089.4.2, Codex review classes A-D): the embed gate,
+  // the pending-scan hold redesign and its chunked nightly rescan all shifted or added
+  // entries-write sites. Recomputed against the real scanner output.
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 356, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 400, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 524, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 589, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 596, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 598, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 633, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 650, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 358, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 402, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 522, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 588, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 595, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 597, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 632, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 649, kind: 'exempt' },
   { file: 'src/capture/lifecycle.ts', line: 158, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 235, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
   { file: 'src/capture/store.ts', line: 74, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 433, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 660, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 767, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 445, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 682, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 790, kind: 'snapshot' },
   { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot' },
-  { file: 'src/entries/import.ts', line: 33, kind: 'exempt' },
-  { file: 'src/integrations/mirror.ts', line: 109, kind: 'exempt' },
-  { file: 'src/integrations/mirror.ts', line: 192, kind: 'snapshot' },
+  { file: 'src/entries/import.ts', line: 34, kind: 'exempt' },
+  { file: 'src/integrations/mirror.ts', line: 111, kind: 'exempt' },
+  { file: 'src/integrations/mirror.ts', line: 193, kind: 'snapshot' },
   { file: 'src/lib/team-admin.ts', line: 592, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
   { file: 'src/memory/actions.ts', line: 73, kind: 'snapshot' },
@@ -109,11 +107,11 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/actions.ts', line: 250, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 291, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 303, kind: 'snapshot' },
-  { file: 'src/memory/trash.ts', line: 228, kind: 'trash' },
-  { file: 'src/memory/trash.ts', line: 611, kind: 'exempt' },
-  { file: 'src/memory/undo.ts', line: 156, kind: 'snapshot' },
-  { file: 'src/memory/undo.ts', line: 446, kind: 'snapshot' },
-  { file: 'src/memory/undo.ts', line: 482, kind: 'exempt' },
+  { file: 'src/memory/trash.ts', line: 230, kind: 'trash' },
+  { file: 'src/memory/trash.ts', line: 621, kind: 'exempt' },
+  { file: 'src/memory/undo.ts', line: 174, kind: 'snapshot' },
+  { file: 'src/memory/undo.ts', line: 469, kind: 'snapshot' },
+  { file: 'src/memory/undo.ts', line: 505, kind: 'exempt' },
   { file: 'src/memory/validity.ts', line: 161, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 301, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 370, kind: 'snapshot' },
@@ -121,8 +119,10 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/validity.ts', line: 457, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 616, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 634, kind: 'snapshot' },
-  { file: 'src/quarantine/hold.ts', line: 98, kind: 'snapshot' },
-  { file: 'src/quarantine/rescan.ts', line: 133, kind: 'exempt' },
+  { file: 'src/quarantine/hold.ts', line: 113, kind: 'snapshot' },
+  { file: 'src/quarantine/rescan.ts', line: 135, kind: 'snapshot' },
+  { file: 'src/quarantine/rescan.ts', line: 154, kind: 'exempt' },
+  { file: 'src/quarantine/rescan.ts', line: 209, kind: 'snapshot' },
   { file: 'src/recall/search.ts', line: 1287, kind: 'exempt' },
   { file: 'src/routes/admin.ts', line: 1563, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 87, kind: 'exempt' },
@@ -144,11 +144,11 @@ const HYGIENE_EXEMPT = new Set([
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   // MOVED 540/601 -> 589/650 (T-0089.4.2, Lane W): W1's scoring code shifted these down; same two sites.
-  "src/capture/entry.ts:589", "src/capture/entry.ts:650",
+  "src/capture/entry.ts:588", "src/capture/entry.ts:649",
   // The nightly quarantine-rescan pass (5.1 point 2 follow-up) clears its own NEEDS_RESCAN_TAG
   // pipeline marker once a row's unscanned middle has been checked: bookkeeping, not a
   // user-visible change, and the row's hold path (a real tags edit) is its own snapshot site above.
-  "src/quarantine/rescan.ts:133",
+  "src/quarantine/rescan.ts:154",
 ]);
 
 const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");

@@ -12,22 +12,41 @@ export const QUARANTINE_TAG_PREFIX = "quarantine:";
 export const EDITED_CANONICAL_TAG_PREFIX = "edited-canonical:";
 
 /**
- * Lane W follow-up (spec 5.1 "Scorer byte budget", point 2): a create or update scored
- * `partial` (the note is over 32 KB, so only the head and tail were scanned) but did not hold
- * on what was scanned. This bare marker — never a `quarantine:` tag — queues the row for the
- * bounded background pass (inside the existing nightly cron) that scores the unscanned middle.
- * Until that pass runs the row stays unheld and indexable, which is the accepted, recorded gap.
+ * Codex review class D (reversing the earlier 5.1 point 2 acceptance, T-0089.4.2): a create or
+ * update scored `partial` (the note is over 32 KB, so only the head and tail were scanned) is
+ * held — reason `pending-scan` — instead of stored unheld with a marker. It stays out of recall
+ * and unindexed until the nightly pass has scored every part of it, in bounded chunks across as
+ * many nights as it takes. Safe, visible failure (a delayed note) beats the earlier design's
+ * exposure window (an unscanned middle that was searchable in the meantime).
+ *
+ * Progress tag: `quarantine-scanned:<charOffset>` records how far into the note's middle (the
+ * region between the head and tail the write-time score already covered) the nightly pass has
+ * scored, so it can resume — never a bare marker, so a caller can never forge or race it away
+ * from the read that also observes the row's tags.
  */
-export const NEEDS_RESCAN_TAG = "quarantine-scan-pending";
+export const QUARANTINE_SCANNED_TAG_PREFIX = "quarantine-scanned:";
 
-/** Adds NEEDS_RESCAN_TAG if absent; a no-op if the row is already queued. */
-export function withNeedsRescan(tags: readonly string[]): string[] {
-  return tags.includes(NEEDS_RESCAN_TAG) ? [...tags] : [...tags, NEEDS_RESCAN_TAG];
+/** The progress cursor recorded on the row, or null if scanning has not started (a fresh partial
+ * write: only the head/tail were ever scored, nothing of the middle yet). */
+export function scannedProgress(tags: readonly string[]): number | null {
+  for (const tag of tags) {
+    if (!isTagString(tag)) continue;
+    const t = tag.trim();
+    if (!t.startsWith(QUARANTINE_SCANNED_TAG_PREFIX)) continue;
+    const n = Number(t.slice(QUARANTINE_SCANNED_TAG_PREFIX.length));
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  return null;
 }
 
-/** Removes NEEDS_RESCAN_TAG once the background pass has scored the row. */
-export function withoutNeedsRescan(tags: readonly string[]): string[] {
-  return tags.filter(t => t !== NEEDS_RESCAN_TAG);
+/** Replaces any existing progress cursor with `offset`. */
+export function withScanProgress(tags: readonly string[], offset: number): string[] {
+  return [...withoutScanProgress(tags), `${QUARANTINE_SCANNED_TAG_PREFIX}${Math.trunc(offset)}`];
+}
+
+/** Drops the progress cursor — the scan is either not started or finished. */
+export function withoutScanProgress(tags: readonly string[]): string[] {
+  return tags.filter(t => !(isTagString(t) && t.trim().startsWith(QUARANTINE_SCANNED_TAG_PREFIX)));
 }
 
 /**
@@ -36,8 +55,8 @@ export function withoutNeedsRescan(tags: readonly string[]): string[] {
  */
 export const NOT_HELD_SQL = `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%'`;
 
-export type HoldReason = "instruction" | "hidden" | "burst" | "capsule";
-const HOLD_REASONS: readonly HoldReason[] = ["instruction", "hidden", "burst", "capsule"];
+export type HoldReason = "instruction" | "hidden" | "burst" | "capsule" | "pending-scan";
+const HOLD_REASONS: readonly HoldReason[] = ["instruction", "hidden", "burst", "capsule", "pending-scan"];
 const EDITED_CANONICAL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function isTagString(t: unknown): t is string {
@@ -122,6 +141,25 @@ export function holdReasonPhrase(reason: HoldReason | null): string {
     case "hidden": return "it contains hidden text";
     case "burst": return "many memories were written in a short time";
     case "capsule": return "it changes what your AI tools always see";
+    case "pending-scan": return "it is too long to check all at once";
     case null: return "it was held automatically";
   }
+}
+
+/**
+ * Class D copy (T-0089.4.2, copy deck section 9.1): a pending-scan hold gets its own MCP reply
+ * shape, not the generic "Stored, but held out of recall: <phrase>. The user can release it."
+ * template — it explains the delay (a nightly check, possibly more than one night) rather than a
+ * suspicion. `verb` is "Stored"/"Updated"/"Appended", matching remember/update/append.
+ */
+export function pendingScanReplyText(verb: "Stored" | "Updated" | "Appended", id: string): string {
+  return `${verb}. ID: ${id}. Held out of search for now: it is too long to check all at once. `
+    + "The nightly check reads it over one or more nights, and it joins search once the check "
+    + "finds nothing that looks like an instruction to an AI.";
+}
+
+/** Class D copy (T-0089.4.2, copy deck 9.1): REST shows "checking" for pending-scan rather than
+ * the internal reason name, since it is a delay, not a suspicion. */
+export function restHeldReason(reason: HoldReason): string {
+  return reason === "pending-scan" ? "checking" : reason;
 }

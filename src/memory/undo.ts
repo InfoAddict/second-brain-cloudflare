@@ -105,6 +105,23 @@ async function reembedForRevert(
 }
 
 /**
+ * Codex review class A (T-0089.4.2): releasing a hold must NEVER degrade to keyword-only —
+ * `reembedForRevert`'s degrade-on-outage contract exists for an ordinary edit, where the row was
+ * already searchable and a transient Vectorize outage just means the update itself waits for
+ * indexing. A held row has NO index at all; committing its unheld state without one would leave
+ * it silently unsearchable with nothing to say so, and no signal to ever retry. Throws on every
+ * failure, Vectorize-unavailable included, so the caller always returns `reembed_failed` and the
+ * row stays held rather than releasing without ever becoming findable.
+ */
+async function reembedForRelease(
+  env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config>, writeCtx: WriteContext,
+): Promise<StoredEntry> {
+  const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx);
+  if (!stored.vectorIds.length) throw new Error("re-embed produced no vectors");
+  return stored;
+}
+
+/**
  * 5.6, the "row was edited after the hold" case: the hold is not the newest version, so a plain
  * revert-of-newest would restore the wrong thing (the tags-only state just before that LATER
  * edit, which are still the held ones). This is a tags-only change instead: strip quarantine:*
@@ -129,9 +146,10 @@ async function releaseHeldAfterEdit(
   const ofSeq = holdVersion?.seq ?? chain.rows[chain.rows.length - 1].seq;
 
   const embedCtx: WriteContext = { workspaceId: row.workspace_id, actorId: change.actorId || OWNER_WRITE_CONTEXT.actorId };
-  let newVectorIds: string[] | null = null;
+  let newVectorIds: string[];
   try {
-    newVectorIds = (await reembedForRevert(env, id, row.content, releasedTags, row.source, config, embedCtx))?.vectorIds ?? null;
+    // Codex review class A (T-0089.4.2): never degrades to keyword-only — see reembedForRelease.
+    newVectorIds = (await reembedForRelease(env, id, row.content, releasedTags, row.source, config, embedCtx)).vectorIds;
   } catch (e) {
     console.error("Release re-embed failed — the hold is left in place:", e);
     return { status: "reembed_failed" };
@@ -141,7 +159,7 @@ async function releaseHeldAfterEdit(
   const casColumns = { tags: row.tags, workspace_id: authorizedWorkspaceId, vector_ids: row.vector_ids ?? null };
   const p = new Params();
   const tagsIdx = p.add(JSON.stringify(releasedTags));
-  const vectorIdsIdx = p.add(newVectorIds ? JSON.stringify(newVectorIds) : "[]");
+  const vectorIdsIdx = p.add(JSON.stringify(newVectorIds));
   const nowIdx = p.add(now);
   const idIdx = p.add(id);
   let results;
@@ -401,7 +419,12 @@ export async function revertEntry(
   let newVectorIds: string[] | null = null;
   if (needsReembed) {
     try {
-      newVectorIds = (await reembedForRevert(env, id, restoredContent, restoredTags, row.source, config, embedCtx))?.vectorIds ?? null;
+      // Codex review class A (T-0089.4.2): releasing a hold never degrades to keyword-only — see
+      // reembedForRelease's own reasoning. Every other reason needsReembed fires keeps the
+      // existing degrade-on-outage contract.
+      newVectorIds = releasing
+        ? (await reembedForRelease(env, id, restoredContent, restoredTags, row.source, config, embedCtx)).vectorIds
+        : (await reembedForRevert(env, id, restoredContent, restoredTags, row.source, config, embedCtx))?.vectorIds ?? null;
     } catch (e) {
       console.error("Undo re-embed failed — entry left unchanged:", e);
       return { status: "reembed_failed" };

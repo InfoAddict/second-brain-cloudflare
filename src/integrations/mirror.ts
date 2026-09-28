@@ -24,8 +24,9 @@ import { ensureTenantBootstrap } from "../lib/tenancy";
 import { MIRROR_VERSION_KEEP, WRITE_CAS_ATTEMPTS } from "../constants";
 import { changesOf, mirrorPruneStatement, pruneStatement, snapshotStatement } from "../memory/versions";
 import { scoreWrite } from "../quarantine/score";
-import { heldTagsFor, holdStatements } from "../quarantine/hold";
-import { isHeld, withNeedsRescan } from "../quarantine/tags";
+import { heldTagsFor, holdDecision, holdStatements } from "../quarantine/hold";
+import { isHeld } from "../quarantine/tags";
+import { normalizeTagList } from "../tags/system";
 import { deleteEntryVectors } from "../vectorize/batch";
 
 export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_CONTEXT, resolved?: Readonly<Config>, providerId?: string): MirrorStore & { flushAudit(): Promise<void> } {
@@ -81,7 +82,9 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       // Classify like a normal capture so mirror entries (email, calendar,
       // Notion) get a kind/importance and don't sit in the "not classified"
       // bucket. Non-fatal — a failure just leaves it for the backfill to pick up.
-      let finalTags = tags;
+      // Codex review class B (T-0089.4.2): normalized at the door — a provider's own tags are
+      // untrusted input, same reasoning as import and restore.
+      let finalTags = normalizeTagList(tags);
       let importance = 0;
       // Used for both the classify and the embed below: they must agree on the
       // model, and this function once resolved config for the embed while
@@ -100,25 +103,24 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       // calendar invite sets its own `source` and can never declare itself `direct`.
       const change = { actorId: writeCtx.actorId, channel: "system:mirror" as const };
       const score = scoreWrite({ content, tags: finalTags, source, channel: "system:mirror", kind: "create" }, cfg);
-      // 5.1 scorer byte budget, point 2 (Lane W follow-up): queues an unheld >32 KB mirror
-      // create for the nightly background rescan of its unscanned middle.
-      if (score.partial && !score.hold) finalTags = withNeedsRescan(finalTags);
+      // Codex review class D (T-0089.4.2): a `partial` score holds too, reason pending-scan.
+      const decision = holdDecision(score);
 
       // versioning: exempt: creation — a new row has no prior state to keep
       const insertStatement = env.DB.prepare(
         `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, importance_score, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(id, content, JSON.stringify(finalTags), source, now, now, "[]", importance, writeCtx.workspaceId, writeCtx.actorId);
 
-      if (score.hold) {
+      if (decision.hold) {
         // Same shape as a held capture (W1): the INSERT (with the tags the sync asked for)
         // and the hold's own version, guarded UPDATE and prune all land in one batch, so a
         // crash between them can never leave an unheld row. No storeEntry call: a held
         // create is never vectorized.
-        const heldTags = heldTagsFor(finalTags, score.reasons);
+        const heldTags = heldTagsFor(finalTags, decision.reasons);
         await env.DB.batch([
           insertStatement,
           ...holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: cfg.VERSION_KEEP }, {
-            entryId: id, reasons: score.reasons, score: score.score, signals: score.signals, change, heldTags, now,
+            entryId: id, reasons: decision.reasons, score: decision.score, signals: decision.signals, change, heldTags, now,
           }),
         ]);
         await rememberTags(env, finalTags, writeCtx.workspaceId);
@@ -172,10 +174,9 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
         const score = alreadyHeld ? null : scoreWrite(
           { content, tags: refreshedTags, source: row.source as string, channel: "system:mirror", kind: "update" }, cfg,
         );
-        const heldTags = score?.hold ? heldTagsFor(refreshedTags, score.reasons) : null;
-        // 5.1 scorer byte budget, point 2 (Lane W follow-up): queues an unheld >32 KB mirror
-        // update for the nightly background rescan of its unscanned middle.
-        if (!heldTags && score?.partial) refreshedTags = withNeedsRescan(refreshedTags);
+        // Codex review class D (T-0089.4.2): a `partial` score holds too, reason pending-scan.
+        const decision = score ? holdDecision(score) : { hold: false as const };
+        const heldTags = decision.hold ? heldTagsFor(refreshedTags, decision.reasons) : null;
 
         // Versioned, keeping the last MIRROR_VERSION_KEEP (D1.1): the normal prune caps the row
         // at VERSION_KEEP whatever it holds, and the mirror prune below brings it back to 3 once
@@ -196,8 +197,8 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
           // 5.4: holdStatements appended to the same batch — the edit is its own version and the
           // hold is the next. Guarded on the edit's OWN post-state, so a lost race (the UPDATE
           // above changed nothing) cannot land the hold either.
-          ...(heldTags ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: cfg.VERSION_KEEP }, {
-            entryId: id, reasons: score!.reasons, score: score!.score, signals: score!.signals, change, heldTags, now,
+          ...(heldTags && decision.hold ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: cfg.VERSION_KEEP }, {
+            entryId: id, reasons: decision.reasons, score: decision.score, signals: decision.signals, change, heldTags, now,
             // holdStatements' own UPDATE targets plain `entries`, unaliased (unlike snapshotStatement's `entries e` above).
             guard: p => `content = ${p.add(content)} AND tags = ${p.add(JSON.stringify(refreshedTags))}`,
           }) : []),
@@ -214,6 +215,12 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
               console.error("Vectorize delete failed after a held mirror update (non-fatal):", e);
             }
           }
+          return "updated";
+        }
+        if (alreadyHeld) {
+          // Codex review class A (T-0089.4.2): a benign re-sync of an already-held row (D4.1) —
+          // refreshedTags still carries the quarantine: tag, so this skips storeEntry entirely
+          // rather than reaching upsertEntryVectors' own gate only to have it refused.
           return "updated";
         }
 

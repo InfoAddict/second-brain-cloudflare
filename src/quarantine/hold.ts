@@ -7,11 +7,26 @@
 // parameters and this file imports none of them; Lane W wires the real ones.
 import type { Env } from "../env";
 import { withHold, type HoldReason } from "./tags";
-import type { SignalHit } from "./score";
+import type { ScoreResult, SignalHit } from "./score";
 
 /** Shared across every write path a hold can land on (5.4): what a caller needs to tell the
  * reader and the audit trail that this write ended up held. */
 export interface HeldInfo { reasons: HoldReason[]; score: number }
+
+/**
+ * One policy, used by every write path that scores content (Codex review class D, T-0089.4.2):
+ * turns a scorer result into "does this write hold, and with what reason." A write that scored
+ * `hold` on what it could scan holds for that reason as before. A write that scored `partial`
+ * (over 32 KB — the scorer only scanned the head and tail) but did NOT hold on what it scanned
+ * still holds, reason `pending-scan`, rather than shipping unheld and indexable with an
+ * unscanned middle: the nightly rescan pass (src/quarantine/rescan.ts) owns clearing it, in
+ * bounded chunks, once every part of the note has been checked.
+ */
+export function holdDecision(score: ScoreResult): { hold: true; reasons: HoldReason[]; score: number; signals: SignalHit[] } | { hold: false } {
+  if (score.hold) return { hold: true, reasons: score.reasons, score: score.score, signals: score.signals };
+  if (score.partial) return { hold: true, reasons: ["pending-scan"], score: score.score, signals: score.signals };
+  return { hold: false };
+}
 
 /** Structural twin of Track 1's `Params`: allocates the next dense `?n` placeholder, reusing one for a repeated value. */
 export interface PlaceholderSink {
