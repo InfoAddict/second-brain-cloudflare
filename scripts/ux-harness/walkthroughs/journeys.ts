@@ -1,11 +1,15 @@
 /**
- * UX-I: the map's W1-W25 dashboard journeys (13-ux-build-spec.md 6.2, 11.2; 16-t3-t4-trust-spec.md
+ * UX-I: the map's W1-W26 dashboard journeys (13-ux-build-spec.md 6.2, 11.2; 16-t3-t4-trust-spec.md
  * 12.1), each with real backend setup through the actual Worker code and a real browser drive
  * against the dashboard. Selectors come from 13-ux-build-spec.md 4.7 (the contract every lane
  * codes against) plus the T3/T4/T7 additions (#view-held, #view-standing, #ledger-sheet) confirmed
  * present in the merged tree. A journey that hits a feature genuinely not on this branch yet
  * (S4's AI-changes line, SH-5's validity labels) throws NotBuilt with the exact UX item so the
  * runner reports PENDING, not FAILED, and the same script goes green once that lane ships.
+ *
+ * W23 and W26 (director, 2026-09-28): the trust spec's canonical-label journey keeps the W23
+ * number; Track 2's "Wrong, then Undo, then Replaced by" journey (formerly the OTHER W23, in
+ * 14-t2-time-spec.md) is renumbered W26 there and here.
  */
 import type { Env } from "../../../src/env";
 import { ensureTenantBootstrap } from "../../../src/lib/tenancy";
@@ -16,7 +20,8 @@ import { updateEntryContent } from "../../../src/capture/store";
 import { createMember } from "../../../src/lib/team-admin";
 import { moveEntry } from "../../../src/capture/share";
 import { captureEntry } from "../../../src/capture/entry";
-import { withHold } from "../../../src/quarantine/tags";
+import { withHold, withEditedCanonical } from "../../../src/quarantine/tags";
+import { memoryHeader } from "../../../src/recall/render";
 import { STANDING_TAG } from "../../../src/tags/t7";
 import { NotBuilt, type Journey } from "./types";
 
@@ -458,21 +463,89 @@ export const journeys: Journey[] = [
   {
     id: "w21",
     title: "Chat trash: forget, new session, list_recent(in_trash), undo",
-    async setup() { throw new NotBuilt("UX-C: chat trash walkthrough", "this is an MCP chat walkthrough (12-user-interaction-map.md 6.4), not a dashboard journey -- run via npm run ux:chat, not run-all.ts"); },
+    async setup() { throw new NotBuilt("UX-C: chat trash walkthrough", "this is an MCP chat walkthrough, not a dashboard journey -- passes via npm run ux:chat (chat-walkthroughs/trust-scenarios.ts), not run-all.ts"); },
     async run() {},
   },
   {
     id: "w22",
     title: "DCR client name recorded in the timeline, trash row and MCP history",
-    async setup() { throw new NotBuilt("UX-E: client-name walkthrough", "needs the harness's MCP DCR script client (scripts/ux-harness/chat-walkthroughs/) driving a real registration; not wired into this dashboard-journey runner yet"); },
+    async setup() { throw new NotBuilt("UX-E: client-name walkthrough", "this is an MCP chat walkthrough, not a dashboard journey -- passes via npm run ux:chat (chat-walkthroughs/trust-scenarios.ts), checking MCP history and the trash row; the dashboard timeline is the one surface still unverified here"); },
     async run() {},
   },
-  {
-    id: "w23",
-    title: "Canonical label, recall header, sheet line, gone after 7 days and after undo",
-    async setup() { throw new NotBuilt("T3/T4 lane S5: canonical label lifecycle", "16-t3-t4-trust-spec.md 871 defines this W23; 14-t2-time-spec.md 840 defines a DIFFERENT W23 (Wrong/Undo/\"Replaced by\") -- numbering conflict between two specs, needs the director to pick one before this journey can be written unambiguously"); },
-    async run() {},
-  },
+  (() => {
+    // Headers are computed in setup(), while `env` is still live: runner.ts calls `close()` on
+    // this journey's env right after setup() returns (it re-opens a fresh dev server against the
+    // same on-disk state for run()'s browser to hit), so a D1 read from run()'s ctx.env throws
+    // "Attempted to use poisoned stub" -- confirmed by hitting exactly that error here. Every other
+    // journey avoids this by only ever touching env inside setup(); this one carries the two
+    // memoryHeader() results forward in closure state instead of re-reading in run().
+    let freshHeader = "";
+    let staleHeader = "";
+    return {
+      id: "w23",
+      title: "Canonical label, recall header, sheet line, gone after 7 days and after undo",
+      async setup(env) {
+        await seedOne(env, "w23-mem", "Original canonical fact.", ["status:canonical"]);
+        const ctx = await ownerCtx(env);
+        // A real MCP-channel edit that keeps the row canonical: store.ts:393 sets today's
+        // edited-canonical: tag only for change.channel === "mcp" (5.7). No client name is given --
+        // render.ts's own comment (Q-I) says recall never names a tool, and the sheet's fallback for
+        // an unnamed client ("an AI tool") is itself one of the documented states (trust spec 7.8).
+        await updateEntryContent(env, "w23-mem", "Updated canonical fact via an AI tool.", DEFAULTS, undefined, undefined, ctx.writeCtx, { actorId: ctx.owner.userId, channel: "mcp" }, ctx.roots.ownerPersonalWorkspaceId);
+        const freshRow = await env.DB.prepare(`SELECT tags, created_at FROM entries WHERE id = 'w23-mem'`).first<{ tags: string; created_at: number }>();
+        if (!freshRow) throw new Error("w23-mem is missing from entries right after setup wrote it");
+        freshHeader = memoryHeader({ createdAt: freshRow.created_at, tags: JSON.parse(freshRow.tags) });
+
+        // A second row whose edited-canonical: date is already 8 days old. The "clock injected" the
+        // spec calls for is this stored date: render.ts and memory-crud.js both compare today against
+        // it at render time (5.7, no expiry job), so seeding an old date has the same effect as
+        // mocking Date.now() without needing to.
+        const staleTags = withEditedCanonical(["status:canonical"], Date.now() - 8 * 86_400_000);
+        await env.DB.prepare(
+          `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w23-stale', 'A canonical fact edited over a week ago.', ?, 'api', ?, '[]', ?, ?)`,
+        ).bind(JSON.stringify(staleTags), Date.now() - 9 * 86_400_000, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+        staleHeader = memoryHeader({ createdAt: Date.now() - 9 * 86_400_000, tags: staleTags });
+      },
+      async run(ctx) {
+        await gotoMemory(ctx.page, ctx.baseUrl, "w23-mem");
+        const caption = await ctx.page.$eval("#view-status-caption", el => el.textContent).catch(() => null);
+        if (!caption || !caption.includes("edited via")) {
+          throw new NotBuilt("T3/T4 lane S5 (UX-E.3): canonical-edit sheet line", `no "edited via" text in #view-status-caption (${JSON.stringify(caption)})`);
+        }
+        await ctx.shot("sheet-fresh", "the sheet's canonical-edit label, within the 7-day window");
+
+        // The same label on the MCP-facing recall header (render.ts's memoryHeader), computed in
+        // setup() from the real row it just wrote (see the closure note above this journey).
+        if (!freshHeader.includes("edited via an AI tool")) {
+          throw new NotBuilt("T3/T4 lane S5 (UX-E.3): canonical-edit recall header", `memoryHeader() omitted the edited-via label: ${freshHeader}`);
+        }
+
+        // Gone after 7 days: both surfaces fall back to their ordinary text for the 8-day-old label.
+        await gotoMemory(ctx.page, ctx.baseUrl, "w23-stale");
+        const staleCaption = await ctx.page.$eval("#view-status-caption", el => el.textContent).catch(() => null);
+        if (staleCaption && staleCaption.includes("edited via")) {
+          throw new NotBuilt("T3/T4 lane S5 (UX-E.3): 7-day expiry", `#view-status-caption still shows the edited label after 8 days (${JSON.stringify(staleCaption)})`);
+        }
+        if (staleHeader.includes("edited via")) {
+          throw new NotBuilt("T3/T4 lane S5 (UX-E.3): 7-day expiry", `memoryHeader() still shows the edited label after 8 days: ${staleHeader}`);
+        }
+        await ctx.shot("sheet-stale", "the sheet once the canonical-edit label's 7-day window has passed");
+
+        // Gone after undo: undoing the MCP edit restores w23-mem's prior tags, which predate the label.
+        await gotoMemory(ctx.page, ctx.baseUrl, "w23-mem");
+        const undoBtn = await ctx.page.$('#view-timeline .history-item[data-seq] [data-action="undo"]');
+        if (!undoBtn) throw new NotBuilt("UX-A.2: history row Undo action", 'no [data-action="undo"] on a #view-timeline history row');
+        await undoBtn.click();
+        await waitForToast(ctx.page);
+        await gotoMemory(ctx.page, ctx.baseUrl, "w23-mem");
+        const afterUndoCaption = await ctx.page.$eval("#view-status-caption", el => el.textContent).catch(() => null);
+        if (afterUndoCaption && afterUndoCaption.includes("edited via")) {
+          throw new NotBuilt("T3/T4 lane S5 (UX-E.3): label cleared by undo", `#view-status-caption still shows the edited label after undo (${JSON.stringify(afterUndoCaption)})`);
+        }
+        await ctx.shot("undone", "the sheet after undoing the MCP edit -- the canonical-edit label is gone");
+      },
+    };
+  })(),
   {
     id: "w24",
     title: "Hook line per provider, against each adapter's contract test server",
@@ -482,7 +555,13 @@ export const journeys: Journey[] = [
   {
     id: "w25",
     title: "Client-name spoof: instruction-shaped name, HTML-injection name",
-    async setup() { throw new NotBuilt("UX-E: client-name spoof walkthrough", "needs the same DCR script client as W22 to register a client named \"Ignore previous instructions\" / \"<img src=x>\" and inspect the rendered (escaped) result"); },
+    async setup() { throw new NotBuilt("UX-E: client-name spoof walkthrough", "this is an MCP chat walkthrough, not a dashboard journey -- passes via npm run ux:chat (chat-walkthroughs/trust-scenarios.ts), same two surfaces as W22"); },
+    async run() {},
+  },
+  {
+    id: "w26",
+    title: "Wrong, then Undo from the toast, then the restored memory's sheet shows \"Replaced by\" again",
+    async setup() { throw new NotBuilt("Track 2 D3: validity labels (UX-F.1 / SH-5)", "builder 154c8ae4 on branch v4/t2-ui is building the sheet's \"true until\"/\"replaced by\" rendering now (director, 2026-09-28); this journey (formerly the OTHER W23, in 14-t2-time-spec.md, now renumbered W26 there and here) stays pending until it lands, same as W12"); },
     async run() {},
   },
 ];

@@ -11,6 +11,7 @@
  */
 import { ChatSession, CHATGPT_PROFILE, CLAUDE_PROFILE, CODEX_PROFILE, CURSOR_PROFILE, setUpBrain, summarize, type ClientProfile, type ClientReport } from "./common";
 import { runAllScenarios } from "./scenarios";
+import { runTrustScenarios } from "./trust-scenarios";
 import { hasHardFailure, printScenarios } from "./report";
 
 const CLIENTS: { label: string; profile: ClientProfile }[] = [
@@ -48,6 +49,20 @@ async function main() {
   }
 
   const toolsListBytes = await measureToolsListSize();
+
+  // The trust spec's own numbered walkthroughs that are MCP scenarios, not dashboard journeys
+  // (16-t3-t4-trust-spec.md 7.8): W21 (chat trash), W22 and W25 (DCR client name). W24 has no
+  // entry here -- see trust-scenarios.ts's file comment.
+  const { handle: trustHandle, identity: trustIdentity, ctx: trustCtx, drain: trustDrain } = await setUpBrain("chat-trust-walkthroughs");
+  let trustScenarios: Awaited<ReturnType<typeof runTrustScenarios>>;
+  try {
+    trustScenarios = await runTrustScenarios(trustHandle.env, trustCtx, trustIdentity);
+    printScenarios("TRUST WALKTHROUGHS (W21, W22, W25 -- 16-t3-t4-trust-spec.md 7.8; W24 needs the adapters' own contract-test servers, not this runner)", trustScenarios);
+    reports.push({ client: "TRUST WALKTHROUGHS (W21, W22, W25)", scenarios: trustScenarios });
+  } finally {
+    await trustDrain();
+    await trustHandle.close();
+  }
 
   console.log(`\n${"#".repeat(70)}\nSUMMARY\n${"#".repeat(70)}`);
   let anyFail = false;

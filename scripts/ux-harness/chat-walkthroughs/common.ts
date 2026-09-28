@@ -21,6 +21,7 @@ import { ensureTenantBootstrap } from "../../../src/lib/tenancy";
 import { resolveIdentityByUserId, type Identity } from "../../../src/lib/identity";
 import { openLocalBrain, resetLocalBrain, type LocalEnvHandle } from "../local-env";
 import type { Env } from "../../../src/env";
+import type { McpClientProps } from "../../../src/mcp/client-label";
 
 export const EM_DASH = "—";
 export const hasEmDash = (text: string): boolean => text.includes(EM_DASH);
@@ -55,8 +56,10 @@ export class ChatSession {
   private ready: Promise<void>;
   calls: ToolCallLog[] = [];
 
-  constructor(env: Env, ctx: ExecutionContext, identity: Identity | undefined, label: string) {
-    const server = buildMcpServer(env, ctx, identity);
+  /** `clientProps` (W22, W25): simulates the OAuth grant a real DCR-registered client would have
+   * -- see trust-scenarios.ts's own note on why this, not a full DCR + authorize HTTP round trip. */
+  constructor(env: Env, ctx: ExecutionContext, identity: Identity | undefined, label: string, clientProps?: McpClientProps) {
+    const server = buildMcpServer(env, ctx, identity, clientProps);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     this.client = new Client({ name: `ux-chat-${label}`, version: "1.0.0" });
     this.ready = Promise.all([this.client.connect(clientTransport), server.connect(serverTransport)]).then(() => {});
