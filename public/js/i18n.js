@@ -1031,6 +1031,14 @@ const I18N_EN = {
     recallCardTitleBy: 'Standing instruction (set by {name}, {date})',
     recallOpen: 'Open',
     recallStop: 'Stop',
+    // DRAFT, flagged for the copywriter: the sheet's immediate, in-place
+    // confirmation once Stop succeeds (UI reviewer), echoing the wording
+    // resolveEntryAction's own stop_standing guard already uses server-side
+    // for a row that isn't one ("X is not a standing instruction."). No
+    // re-arm control here: spec 2.2 says turning an ordinary memory into a
+    // standing one is not offered in 4.0 - only Undo, from the toast, brings
+    // it back.
+    notStanding: 'Not a standing instruction',
   },
   loops: {
     title: 'Open loops',
@@ -2262,6 +2270,7 @@ const I18N_IT = {
     recallCardTitleBy: 'Istruzione permanente (impostata da {name} il {date})',
     recallOpen: 'Apri',
     recallStop: 'Disattiva',
+    notStanding: 'Non è un\'istruzione permanente',
   },
   loops: {
     title: 'Impegni aperti',

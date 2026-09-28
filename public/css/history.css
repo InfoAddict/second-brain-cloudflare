@@ -24,12 +24,16 @@
 
 /* T7-E Task 14: shares this row with the status control above (SH-3) rather
    than a second full-width block, so Stop reads as one more fact about this
-   memory, not a second control competing for the same space. */
+   memory, not a second control competing for the same space.
+   UI reviewer: side-by-side with the button squeezed the line's own column
+   narrow enough to orphan a word onto its own line. Stacked instead - the
+   line gets the sheet's full width, and the button sits below it, left
+   aligned like the line it belongs to. */
 .view-standing {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   margin-bottom: 14px;
 }
 

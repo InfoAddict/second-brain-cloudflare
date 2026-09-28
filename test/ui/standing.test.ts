@@ -309,6 +309,58 @@ describe("Stop posts /standing/stop and shows Undo", () => {
     ctx.renderViewStanding({ id: "m2", tags: ["work"] });
     expect(ctx.__els.get("view-standing").style.display).toBe("none");
   });
+
+  it("UI reviewer: the sheet updates in place the moment Stop succeeds, before the round trip settles", async () => {
+    const ctx = load({ ok: true, id: "m1" });
+    ctx.renderViewStanding(entry); // the sheet is open on a standing memory, as it would be before Stop is clicked
+
+    await ctx.stopStanding(entry, { disabled: false });
+
+    const block = ctx.__els.get("view-standing");
+    expect(block.style.display).toBe("");
+    expect(ctx.__els.get("view-standing-line").textContent).toBe("Not a standing instruction");
+    expect(ctx.__els.get("view-standing-stop").style.display).toBe("none");
+  });
+
+  it("Undo restores both the line and the Stop button", async () => {
+    const ctx = load({ ok: true, id: "m1" });
+    ctx.renderViewStanding(entry);
+    await ctx.stopStanding(entry, { disabled: false });
+
+    await ctx.__toasts[0].opts.onAction();
+    // hydrateView's own re-fetch is exercised in memory-crud's other tests;
+    // what this proves is that onUndone clears the "just stopped" flag so
+    // the next render (hydrateView's real one, once its fetch answers) reads
+    // as standing again rather than staying on the acknowledgment.
+    ctx.renderViewStanding(entry);
+    expect(ctx.__els.get("view-standing-line").textContent).toBe("Standing instruction · comes up when this topic does");
+    expect(ctx.__els.get("view-standing-stop").style.display).toBe("");
+  });
+
+  it("a memory that was never standing shows no line at all, only one that was just stopped in this session", () => {
+    const ctx = baseCtx();
+    run(ctx, ["public/utils.js", "public/js/state.js", "public/js/toast.js", "public/js/undo.js", "public/js/memory-crud.js"]);
+
+    ctx.renderViewStanding({ id: "ordinary", tags: ["work"] });
+
+    expect(ctx.__els.get("view-standing").style.display).toBe("none");
+  });
+
+  it("opening a different memory clears the just-stopped acknowledgment", async () => {
+    const ctx = baseCtx();
+    ctx.fetch = async () => ({ ok: true, json: async () => ({ ok: true, id: "m1" }) });
+    ctx.hydrateView = () => {};
+    ctx.applyCardAuthorLock = () => false;
+    ctx.loadRelated = () => {};
+    run(ctx, ["public/utils.js", "public/js/state.js", "public/js/toast.js", "public/js/undo.js", "public/js/memory-crud.js"]);
+
+    await ctx.stopStanding({ id: "m1", tags: ["standing:active"] }, { disabled: false });
+    expect(ctx.__els.get("view-standing").style.display).toBe(""); // just stopped: acknowledged in place
+
+    ctx.openView({ id: "m2", tags: ["work"], content: "" });
+
+    expect(ctx.__els.get("view-standing").style.display).toBe("none");
+  });
 });
 
 describe("recall card renders from /recall standing", () => {

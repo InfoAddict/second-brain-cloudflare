@@ -605,6 +605,14 @@ function renderViewStatusLockNote(entry) {
  * button, hidden entirely on a memory that is not currently standing. Shares
  * this row with the status control below it (T-0101.8, `renderViewStatus`).
  */
+/**
+ * The one memory a Stop click just turned ordinary, for the CURRENT sheet
+ * session only - not a permanent "not standing" label on every ordinary
+ * memory (that would be a badge on every row, i.e. no badge at all). Cleared
+ * whenever a sheet opens fresh, and by Undo's own restore.
+ */
+let justStoppedStandingId = null
+
 function renderViewStanding(entry) {
   const block = document.getElementById('view-standing')
   const line = document.getElementById('view-standing-line')
@@ -612,13 +620,25 @@ function renderViewStanding(entry) {
   if (!block || !line || !btn) return
   const tags = entry.tags || []
   const isStanding = tags.some((tag) => String(tag).toLowerCase() === 'standing:active')
-  if (!isStanding) {
-    block.style.display = 'none'
+  if (isStanding) {
+    block.style.display = ''
+    line.textContent = t('standing.sheetLine')
+    btn.style.display = ''
+    btn.onclick = () => stopStanding(entry, btn)
     return
   }
-  block.style.display = ''
-  line.textContent = t('standing.sheetLine')
-  btn.onclick = () => stopStanding(entry, btn)
+  // UI reviewer: Stop must read as done the moment it succeeds, not only once
+  // the toast says so - this is the in-place confirmation, kept up until the
+  // sheet moves on to something else. No way to set it again here: spec 2.2
+  // says turning an ordinary memory into a standing one is not offered in
+  // 4.0, so Undo (from the toast) is the only way back.
+  if (entry.id != null && entry.id === justStoppedStandingId) {
+    block.style.display = ''
+    line.textContent = t('standing.notStanding')
+    btn.style.display = 'none'
+    return
+  }
+  block.style.display = 'none'
 }
 
 /** Stop is a resolve action (POST /standing/stop): removes standing:active only, versioned and undoable. */
@@ -632,8 +652,14 @@ async function stopStanding(entry, btn) {
     })
     const data = await res.json()
     if (!res.ok || !data.ok) throw new Error(data.error || '')
+    // Updates the sheet immediately, before the round trip below: the toast
+    // already says it happened, and the sheet should agree at once rather
+    // than a moment later.
+    justStoppedStandingId = entry.id
+    renderViewStanding({ ...entry, tags: (entry.tags || []).filter((tag) => String(tag).toLowerCase() !== 'standing:active') })
     undoToast(t('standing.stopped'), entry.id, {
       onUndone: () => {
+        if (justStoppedStandingId === entry.id) justStoppedStandingId = null
         if (typeof hydrateView === 'function') hydrateView(entry.id)
       },
     })
@@ -826,6 +852,10 @@ let viewOpenId = null
 
 function openView(entry, cardElement) {
   viewOpenId = entry.id || null
+  // A fresh sheet, even on the same memory reopened: the "just stopped"
+  // acknowledgment belongs to the session that clicked Stop, not to every
+  // later visit.
+  justStoppedStandingId = null
   document.getElementById('view-content-text').textContent = normalizeForDisplay(entry.content)
   renderViewMeta(entry)
   renderViewAutoSaveNote(entry)
