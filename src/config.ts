@@ -90,6 +90,11 @@ export const DEFAULTS = {
   TAG_BOOST_MAX: 1.5,
   CONTRADICTION_IMPORTANCE_STEP: 1.0,
 
+  // Re-check age by volatility (spec 14 5.8, T-0089.2.3): a state fact goes untouched for
+  // 90 days before the nightly pass asks again, a volatile one for 14. Durable never re-checks.
+  STALE_AFTER_DAYS_VOLATILE: 14,
+  STALE_AFTER_DAYS_STATE: 90,
+
   // A mild score demotion for a stale:as-of row under a "current" query intent (spec 14 5.8/B6).
   // 1.0 (off) until the as-of eval gate passes on knowledge-update:ku-silent with no regression on
   // ku-silent-true/ku-silent-fresh (director, 2026-09-27); the real value is 0.9.
@@ -264,6 +269,8 @@ export const RULES: Record<ConfigKey, Rule> = {
   TAG_BOOST_STEP: { kind: "number", min: 0, max: 1 },
   TAG_BOOST_MAX: { kind: "number", min: 1, max: 5 },
   CONTRADICTION_IMPORTANCE_STEP: { kind: "number", min: 0, max: 5 },
+  STALE_AFTER_DAYS_VOLATILE: { kind: "number", min: 1, max: 365, integer: true },
+  STALE_AFTER_DAYS_STATE: { kind: "number", min: 7, max: 730, integer: true },
   STALE_PENALTY: { kind: "number", min: 0.5, max: 1.0 },
 
   RERANK_MODE: { kind: "string" },

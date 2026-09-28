@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import worker from "../../src/index";
 import { runStalenessPass, STALENESS_AGE_MS, STALENESS_PASS_LIMIT } from "../../src/staleness/pass";
-import { makeTestDb, makeTestEnv } from "../helpers/make-env";
+import { makeTestDb, makeTestEnv, makeMemoryKV } from "../helpers/make-env";
 import { D1Mock } from "../helpers/d1-mock";
+import { writeOverrides } from "../../src/config";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 describe("runStalenessPass", () => {
   let db: D1Mock;
@@ -226,6 +229,92 @@ describe("runStalenessPass", () => {
     expect(tags).toContain("volatility:volatile");
     expect(tags).toContain("stale:as-of");
   });
+
+  it("a volatile row is flagged after 14 days, a state row after 90, durable never", async () => {
+    const now = Date.now();
+    db.entries.push(
+      // Volatile: 15 days old clears its 14-day threshold.
+      { id: "volatile-old", content: "x", tags: '["volatility:volatile"]', source: "api", created_at: now - 15 * DAY_MS, updated_at: now - 15 * DAY_MS, vector_ids: "[]" },
+      // Volatile: 10 days old does not clear it.
+      { id: "volatile-fresh", content: "x", tags: '["volatility:volatile"]', source: "api", created_at: now - 10 * DAY_MS, updated_at: now - 10 * DAY_MS, vector_ids: "[]" },
+      // State: 91 days old clears its 90-day threshold.
+      { id: "state-old", content: "x", tags: '["volatility:state"]', source: "api", created_at: now - 91 * DAY_MS, updated_at: now - 91 * DAY_MS, vector_ids: "[]" },
+      // State: 60 days old clears the volatile threshold but not its own — proves the
+      // two thresholds are independent, not just "whichever is shorter wins for everyone".
+      { id: "state-fresh", content: "x", tags: '["volatility:state"]', source: "api", created_at: now - 60 * DAY_MS, updated_at: now - 60 * DAY_MS, vector_ids: "[]" },
+      // Durable: 400 days old, past both thresholds, must still never be flagged.
+      { id: "durable-ancient", content: "x", tags: '["volatility:durable"]', source: "api", created_at: now - 400 * DAY_MS, updated_at: now - 400 * DAY_MS, vector_ids: "[]" },
+    );
+    const env = makeTestEnv(db);
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    const tagsOf = (id: string) => JSON.parse(db.entries.find(e => e.id === id)!.tags) as string[];
+    expect(tagsOf("volatile-old")).toContain("stale:as-of");
+    expect(tagsOf("volatile-fresh")).not.toContain("stale:as-of");
+    expect(tagsOf("state-old")).toContain("stale:as-of");
+    expect(tagsOf("state-fresh")).not.toContain("stale:as-of");
+    expect(tagsOf("durable-ancient")).not.toContain("stale:as-of");
+  });
+
+  it("a volatile row whose when_at passed is flagged at any age", async () => {
+    const now = Date.now();
+    db.entries.push(
+      // Created an hour ago, far under the 14-day threshold, but its own date has passed.
+      { id: "due-passed", content: "x", tags: '["volatility:volatile"]', source: "api", created_at: now - 3600000, updated_at: now - 3600000, when_at: now - 3600000, vector_ids: "[]" },
+      // Same age, but its date is still ahead — must not be flagged on age or date.
+      { id: "due-future", content: "x", tags: '["volatility:volatile"]', source: "api", created_at: now - 3600000, updated_at: now - 3600000, when_at: now + 3600000, vector_ids: "[]" },
+    );
+    const env = makeTestEnv(db);
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    expect(JSON.parse(db.entries.find(e => e.id === "due-passed")!.tags)).toContain("stale:as-of");
+    expect(JSON.parse(db.entries.find(e => e.id === "due-future")!.tags)).not.toContain("stale:as-of");
+  });
+
+  it("thresholds follow config", async () => {
+    const now = Date.now();
+    db.entries.push(
+      // 6 days old: stale under a 5-day volatile override, not under the 14-day default.
+      { id: "volatile-6d", content: "x", tags: '["volatility:volatile"]', source: "api", created_at: now - 6 * DAY_MS, updated_at: now - 6 * DAY_MS, vector_ids: "[]" },
+      // 21 days old: stale under a 20-day state override, not under the 90-day default.
+      { id: "state-21d", content: "x", tags: '["volatility:state"]', source: "api", created_at: now - 21 * DAY_MS, updated_at: now - 21 * DAY_MS, vector_ids: "[]" },
+    );
+    const env = makeTestEnv(db, { OAUTH_KV: makeMemoryKV() });
+    const written = await writeOverrides(env, { STALE_AFTER_DAYS_VOLATILE: 5, STALE_AFTER_DAYS_STATE: 20 });
+    expect(written.ok).toBe(true);
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    expect(JSON.parse(db.entries.find(e => e.id === "volatile-6d")!.tags)).toContain("stale:as-of");
+    expect(JSON.parse(db.entries.find(e => e.id === "state-21d")!.tags)).toContain("stale:as-of");
+  });
+
+  // After A1 (T-0089.2.1): a replaced fact's window is closed, so it is history, not a live
+  // claim to re-verify. It must never be (re-)flagged, however old or volatile it looks.
+  it("a replaced row is never flagged and leaves the stale review", async () => {
+    const now = Date.now();
+    db.entries.push({
+      id: "replaced",
+      content: "x",
+      tags: '["volatility:volatile", "stale:as-of"]',
+      source: "api",
+      created_at: now - 400 * DAY_MS,
+      updated_at: now - 400 * DAY_MS,
+      valid_until: now - DAY_MS, // closed in the past: replaced, not current
+      vector_ids: "[]",
+    });
+    const env = makeTestEnv(db);
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    const row = db.entries.find(e => e.id === "replaced")!;
+    // Not a candidate at all, so untouched: it keeps the stale:as-of tag it already had
+    // (nothing re-verified it), but the pass never re-derives or re-asserts it either.
+    expect(row.staleness_checked_at).toBeUndefined();
+    expect(JSON.parse(row.tags)).toEqual(["volatility:volatile", "stale:as-of"]);
+  });
 });
 
 // This codebase holds a Worker invocation to a self-imposed budget of ~50 D1
@@ -318,6 +407,32 @@ describe("runStalenessPass D1 round-trip cost", () => {
     expect(billed.run).toBe(0);
     expect(billed.total).toBe(2);
     expect(billed.total).toBeLessThanOrEqual(SELF_IMPOSED_D1_BUDGET);
+    expect(db.entries.filter(e => e.staleness_checked_at != null)).toHaveLength(STALENESS_PASS_LIMIT);
+  });
+
+  // Spec 14 5.8 (T-0089.2.3): the volatility-branched WHERE clause must not cost the pass a
+  // second SELECT or a second batch. A candidate pool of mixed volatile and state rows, well
+  // over the limit, still spends exactly 2 D1 calls and still caps at 25.
+  it("same 25-row limit and statement count", async () => {
+    const db = makeTestDb();
+    const now = Date.now();
+    for (let i = 0; i < 40; i++) {
+      db.entries.push({
+        id: `mixed-${i}`,
+        content: `entry ${i}`,
+        tags: i % 2 === 0 ? '["volatility:volatile"]' : '["volatility:state"]',
+        source: "api",
+        created_at: now - 200 * DAY_MS + i,
+        updated_at: now - 200 * DAY_MS + i,
+        vector_ids: "[]",
+      });
+    }
+    const { env, prepared, billed } = countingEnv(db);
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    expect(prepared.filter(s => s.includes("SELECT id, content, tags FROM entries"))).toHaveLength(1);
+    expect(billed.total).toBe(2);
     expect(db.entries.filter(e => e.staleness_checked_at != null)).toHaveLength(STALENESS_PASS_LIMIT);
   });
 

@@ -1,12 +1,16 @@
 import type { Env } from "../env";
 import { initializeDatabase } from "../db/init";
+import { resolveConfig } from "../config";
 import { getStatus } from "../memory/status";
 import { getVolatility, withVolatility } from "../memory/volatility";
 import { hasStaleAsOf, withStaleAsOf, withoutStaleAsOf } from "../memory/stale";
 import { classifyVolatility, shouldFlagStale } from "./heuristic";
 import { currentValidityAt } from "../memory/validity";
 
-export const STALENESS_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Kept for tests: equals the shipped default for a state fact (`STALE_AFTER_DAYS_STATE`, spec 14 5.8). */
+export const STALENESS_AGE_MS = 90 * DAY_MS;
 
 /**
  * How many candidates one pass inspects.
@@ -192,23 +196,35 @@ export async function runStalenessPass(
 ): Promise<{ flagged: number }> {
   await initializeDatabase(env);
 
-  const cutoff = Date.now() - STALENESS_AGE_MS;
+  const cfg = await resolveConfig(env);
   const now = Date.now();
+  const volatileCutoff = now - cfg.STALE_AFTER_DAYS_VOLATILE * DAY_MS;
+  const stateCutoff = now - cfg.STALE_AFTER_DAYS_STATE * DAY_MS;
   let candidates: Snapshot[] = [];
 
   try {
-    // The slice clause goes after the cutoff placeholder so its bind follows it.
+    // The slice clause is purely additive at the very end, right after currentValidityAt's own
+    // placeholder, so its bind follows it: the same shape this query has always had, kept exact
+    // for test/unit/cron-round-robin.test.ts's "sliced text starts with the unsliced prefix" check.
     const sliceSql = workspaceId != null ? `\n         AND workspace_id = ?` : "";
     const { results } = await env.DB.prepare(
       // scope-exempt: cron: nightly staleness pass, narrowed by the workspace slice in sliceSql
       // validity: current: a replaced or ended row is history, not stale (T-0089.2.1, 5.5)
+      // A volatile row is a candidate once untouched past its own shorter cutoff, OR the moment
+      // its own when_at passes, whichever comes first (spec 14 5.8). Everything else, including
+      // durable (classify below is what actually exempts it), uses the longer state cutoff.
       `SELECT id, content, tags FROM entries
-       WHERE COALESCE(updated_at, created_at) < ?
-         AND ${SYSTEM_TAG_EXCLUSIONS}
+       WHERE ${SYSTEM_TAG_EXCLUSIONS}
+         AND (
+              (tags LIKE '%"volatility:volatile"%' AND (COALESCE(updated_at, created_at) < ? OR (when_at IS NOT NULL AND when_at < ?)))
+           OR (tags NOT LIKE '%"volatility:volatile"%' AND COALESCE(updated_at, created_at) < ?)
+         )
          AND ${currentValidityAt("", "?")}${sliceSql}
        ORDER BY COALESCE(staleness_checked_at, 0) ASC
        LIMIT ${STALENESS_PASS_LIMIT}`,
-    ).bind(...(workspaceId != null ? [cutoff, now, workspaceId] : [cutoff, now]))
+    ).bind(...(workspaceId != null
+      ? [volatileCutoff, now, stateCutoff, now, workspaceId]
+      : [volatileCutoff, now, stateCutoff, now]))
       .all() as { results: { id: string; content: string; tags: string }[] };
     candidates = results.map(r => ({ id: r.id, tags: r.tags ?? "[]", content: r.content }));
   } catch (e) {

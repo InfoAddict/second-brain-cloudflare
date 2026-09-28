@@ -1168,7 +1168,15 @@ export class D1Mock {
           return { results };
         }
         if (s.includes("COALESCE(updated_at, created_at) < ?") && s.includes("SELECT id, content, tags FROM entries")) {
-          const cutoff = Number(args[0]);
+          // Bind order (spec 14 5.8, T-0089.2.3): volatileCutoff, now (when_at), stateCutoff,
+          // now (validity), workspace_id (only when the slice clause is present, always last).
+          const hasSlice = s.includes("AND workspace_id = ?");
+          let i = 0;
+          const volatileCutoff = Number(args[i++]);
+          const whenNowArg = Number(args[i++]);
+          const stateCutoff = Number(args[i++]);
+          const nowArg = Number(args[i++]);
+          const workspaceId = hasSlice ? args[i++] : undefined;
           const limitMatch = s.match(/LIMIT (\d+)/);
           const limit = limitMatch ? parseInt(limitMatch[1], 10) : 25;
           // This handler, and the other `tags.includes("auto-pattern"/"auto-insight")`
@@ -1190,8 +1198,15 @@ export class D1Mock {
               if (tags.includes("auto-insight")) return false;
               if (tags.includes("synthesized")) return false;
               if (tags.includes("rolled-up")) return false;
+              const validUntil = e.valid_until ?? null;
+              if (!(validUntil == null || validUntil > nowArg)) return false;
+              if (hasSlice && (e.workspace_id ?? "") !== workspaceId) return false;
               const touched = e.updated_at ?? e.created_at;
-              return touched < cutoff;
+              if (tags.includes("volatility:volatile")) {
+                const whenAt = e.when_at ?? null;
+                return touched < volatileCutoff || (whenAt != null && whenAt < whenNowArg);
+              }
+              return touched < stateCutoff;
             })
             .sort((a: any, b: any) => (a.staleness_checked_at ?? 0) - (b.staleness_checked_at ?? 0))
             .slice(0, limit)
