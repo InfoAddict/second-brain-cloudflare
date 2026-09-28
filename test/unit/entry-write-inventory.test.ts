@@ -76,18 +76,25 @@ function scanInventory(): Site[] {
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 250, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 289, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 376, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 413, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 420, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 422, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 460, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 504, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 513, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 515, kind: 'exempt' },
-  { file: 'src/capture/lifecycle.ts', line: 128, kind: 'snapshot' },
-  { file: 'src/capture/lifecycle.ts', line: 196, kind: 'snapshot' },
+  // T-0089.2.1 (Track 2 A3): the contradiction branch supersedes instead of deprecating. The system
+  // path's inline deprecate UPDATE (was 460) is gone: both paths close a window through
+  // supersedeStatements (src/memory/validity.ts). The two post-deprecate counter updates (were 513,
+  // 515) are one guarded counter builder (486) riding in the supersede batch. The rest shifted.
+  // MOVED +11 (T-0089.2.1): buildEntryFilterQuery's superseded_by subquery added lines above these sites; same sites.
+  { file: 'src/capture/entry.ts', line: 264, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 303, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 414, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 452, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 459, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 461, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 495, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 512, kind: 'exempt' },
+  // MOVED +4 (entry.ts): an unstated newcomer wins a start tie against the fact it contradicts.
+  // MOVED (R16): entry.ts -6 and search.ts -5 (their superseded_by copies became supersededBySql), validity.ts +19 (the helper).
+  // MOVED (T-0089.2.1 fix round): validity.ts +17 (currentValidityAt, SQL_NOW_MS), staleness/pass.ts +1 (its import).
+  // MOVED (T-0089.2.4): lifecycle.ts, actions.ts, trash.ts and undo.ts shift for the retraction hooks; same sites.
+  { file: 'src/capture/lifecycle.ts', line: 152, kind: 'snapshot' },
+  { file: 'src/capture/lifecycle.ts', line: 229, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
   // MOVED 56 -> 60 and every later store.ts site (T-0089.1.1 round 5): storeEntry's CAS pins the
   // workspace, StoredEntry gains `committed`, and settleLostVectorCommit is new; same sites.
@@ -103,43 +110,62 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/entries/import.ts', line: 33, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 96, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 148, kind: 'snapshot' },
-  { file: 'src/lib/team-admin.ts', line: 591, kind: 'hard-delete' },
+  // MOVED 591 -> 592 (T-0089.2.1): the retraction-exempt marker above it.
+  { file: 'src/lib/team-admin.ts', line: 592, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
-  { file: 'src/memory/actions.ts', line: 64, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 107, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 119, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 173, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 184, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 66, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 109, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 121, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 133, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 175, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 187, kind: 'snapshot' },
   // MOVED 218 -> 220, 605 -> 607 (T-0089.1.1 round 2): the trash insert is a plain INSERT, with a comment saying why.
   // MOVED 220 -> 221, 607 -> 608 (T-0089.1.1 round 3): trash.ts imports the shared edge readability guard.
-  { file: 'src/memory/trash.ts', line: 221, kind: 'trash' },
-  { file: 'src/memory/trash.ts', line: 588, kind: 'exempt' },
+  { file: 'src/memory/trash.ts', line: 228, kind: 'trash' },
+  { file: 'src/memory/trash.ts', line: 611, kind: 'exempt' },
   // REMOVED trash.ts:760 (T-0089.1.1 close-out): deleteForever no longer deletes a live entry at all;
   // it acts only on a trash row pinned by nonce.
   // MOVED 312 -> 316, 348 -> 352 (T-0089.1.1 round 2): revertEntry takes an optional trash nonce; same sites.
-  { file: 'src/memory/undo.ts', line: 320, kind: 'snapshot' },
-  { file: 'src/memory/undo.ts', line: 356, kind: 'exempt' },
+  // MOVED 320 -> 336, 356 -> 372 (T-0089.2.1): revertEntry restores the validity window too.
+  { file: 'src/memory/undo.ts', line: 344, kind: 'snapshot' },
+  { file: 'src/memory/undo.ts', line: 380, kind: 'exempt' },
+  // NEW (T-0089.2.1): the supersede UPDATE (validity window closed; its validity snapshot rides in the same batch).
+  { file: 'src/memory/validity.ts', line: 161, kind: 'snapshot' },
+  // NEW (T-0089.2.4): the retraction restore and un-retraction re-close UPDATEs (D-RET), and the
+  // cascade's flag and unflag UPDATEs; each rides after its own derived snapshot in the same batch,
+  // and lands only on the rows that snapshot versioned (nonce).
+  { file: 'src/memory/validity.ts', line: 301, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 370, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 413, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 457, kind: 'snapshot' },
+  // NEW (T-0089.2.1, Task A4): update(valid_from / valid_until) and its propagate UPDATE, each with its validity snapshot.
+  // MOVED +4 (lane A follow-up): the digest guard's comment shifted earlier lines in this file; same sites.
+  { file: 'src/memory/validity.ts', line: 616, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 634, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
-  // MOVED 1235 -> 1236 (T-0089.5.2, v4/t5-log merge): the sampled recall log's Part A hook
-  // (ctx.waitUntil(maybeLogRecall(...))) added lines above this site; same site, shifted only.
-  { file: 'src/recall/search.ts', line: 1236, kind: 'exempt' },
+  // MOVED 1235 -> 1257 -> 1287 -> 1291 -> 1286 (T-0089.2.1), and 1235 -> 1236 (T-0089.5.2, the recall log's
+  // Part A hook): both lanes added lines above this site; merged position measured from the scanner.
+  { file: 'src/recall/search.ts', line: 1287, kind: 'exempt' },
   // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
   // retryAfterMs rework added lines above this site; same site, shifted only.
   // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.
-  // MOVED 1531 -> 1535 (T-0101.8.5, BE-10): history_since on GET /health added lines above this site.
-  { file: 'src/routes/admin.ts', line: 1535, kind: 'exempt' },
-  { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
-  { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
+  // MOVED 1531 -> 1534 -> 1540 (T-0089.2.1): the insights dry-run pair query's validity predicate,
+  // then B2's due/loops/vectorize-pending validity-reader-inventory markers, added lines above this
+  // site. MOVED 1540 -> 1544 (merge of release/v4 57583d10, T-0101.8.5 BE-10): history_since on
+  // GET /health added lines above this site too; same site.
+  { file: 'src/routes/admin.ts', line: 1544, kind: 'exempt' },
+  { file: 'src/staleness/pass.ts', line: 87, kind: 'exempt' },
+  { file: 'src/staleness/pass.ts', line: 97, kind: 'exempt' },
   // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
   // MOVED 78 -> 89 (T-0089.1.1 round 3): the pass plans from lengths, then reads the chosen rows.
   // MOVED 89 -> 93 (T-0089.1.1 round 5): indexPendingRow reports whether its commit landed.
   // MOVED 93 -> 131 (T-0089.1.1 round 5): failure counting and demotion above the batch; same site.
   // MOVED 131 -> 151 (T-0089.1.1, budget auditor R11): the 128 KB nightly cap and its skip count.
   { file: 'src/vectorize/pending.ts', line: 165, kind: 'exempt' },
-  { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
+  // MOVED 367 -> 368 (T-0089.2.1): candidateSql's now parameter shifted this by one line; same site.
+  { file: 'src/when/pass.ts', line: 368, kind: 'exempt' },
 ];
 
 /**
@@ -149,13 +175,20 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
  * snapshot, trash or hard-delete (the undo invariant).
  */
 const HYGIENE_EXEMPT = new Set([
-  "src/staleness/pass.ts:86", "src/staleness/pass.ts:96",
-  "src/when/pass.ts:367",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1535", // /classify-pending and applyClassification (hygiene)
+  "src/staleness/pass.ts:87", "src/staleness/pass.ts:97",
+  "src/when/pass.ts:368",
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1544", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
-  "src/capture/entry.ts:413", "src/capture/entry.ts:504",
+  // MOVED 443 -> 454, 503 -> 514 (T-0089.2.1): buildEntryFilterQuery's superseded_by
+  // subquery added lines above these sites; same sites.
+  "src/capture/entry.ts:452", "src/capture/entry.ts:512",
 ]);
+
+const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");
+/** A SET of tags, a when_* column, or a validity column (T-0089.2.1): state undo must be able to restore. */
+const undoableStateWrite = (sql: string) =>
+  /\btags\s*=/i.test(setClause(sql)) || /\bwhen_(at|kind|label|source)\s*=/i.test(setClause(sql)) || /\bvalid_(from|until)\s*=/i.test(setClause(sql));
 
 describe("write-path inventory guard", () => {
   const sites = scanInventory();
@@ -182,14 +215,21 @@ describe("write-path inventory guard", () => {
     }
   });
 
-  it("every REST- or MCP-reachable write of tags or when_* is marked snapshot, trash or hard-delete", () => {
-    const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");
-    const tagsOrWhenWrites = sites.filter(s => /\btags\s*=/i.test(setClause(s.sql)) || /\bwhen_(at|kind|label|source)\s*=/i.test(setClause(s.sql)));
+  it("every REST- or MCP-reachable write of tags, when_* or valid_* is marked snapshot, trash or hard-delete", () => {
+    const tagsOrWhenWrites = sites.filter(s => undoableStateWrite(s.sql));
     const reachable = tagsOrWhenWrites.filter(s => !HYGIENE_EXEMPT.has(`${s.file}:${s.line}`));
     expect(reachable.length).toBeGreaterThan(0);
     for (const s of reachable) {
       expect(["snapshot", "trash", "hard-delete"], `${s.file}:${s.line}`).toContain(s.markerKind);
     }
+  });
+});
+
+describe("undoable state writes", () => {
+  it("the inventory rule requires a snapshot marker on any SET of valid_from or valid_until", () => {
+    expect(undoableStateWrite(`UPDATE entries AS e SET valid_until = ?1 WHERE e.id = ?2`)).toBe(true);
+    expect(undoableStateWrite(`UPDATE entries SET valid_from = ?, valid_until = ? WHERE id = ?`)).toBe(true);
+    expect(undoableStateWrite(`UPDATE entries SET recall_count = 1 WHERE valid_until IS NULL`)).toBe(false);
   });
 });
 

@@ -1,7 +1,7 @@
 import { validInputTags, projectSlugError, projectTagError, withProjectTag, MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS, reservedTagsNote, stripNewReservedTags } from "../tags/system";
 import { autoCreateProject } from "../projects/autocreate";
 import type { Env } from "../env";
-import { resolveConfig } from "../config";
+import { resolveConfig, type Config } from "../config";
 import { VECTORIZE_FIX_HINT } from "../constants";
 import { json } from "../lib/http";
 import { requireIdentity, type Identity } from "../lib/identity";
@@ -15,6 +15,7 @@ import { maybeMarkFollowed } from "../recall/log";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
 import { parseExplicitWhen } from "../when/input";
 import { contentByteLength, isOverContentLimit, tooLargeRestBody, MAX_CONTENT_BYTES } from "../lib/content-size";
+import { parseValidityInput, updateEntryValidity, VALIDITY_WITH_CONTENT_ERROR, type UpdateValidityResult } from "../memory/validity";
 
 /** Validate route-only volatility input; MCP gets equivalent Zod validation. */
 /** Where this caller's writes land and who gets stamped on them. */
@@ -65,7 +66,7 @@ export async function handleCaptureRoutes(
     if (auth instanceof Response) return auth;
     const identity = auth;
 
-    let body: { content?: string; tags?: string[]; source?: string; volatility?: unknown; workspace?: unknown; team?: unknown; project?: unknown; when?: unknown; when_kind?: unknown };
+    let body: { content?: string; tags?: string[]; source?: string; volatility?: unknown; workspace?: unknown; team?: unknown; project?: unknown; when?: unknown; when_kind?: unknown; valid_from?: unknown; valid_until?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (body.tags !== undefined && !validInputTags(body.tags)) return json({ ok: false, error: `tags must contain at most ${MAX_INPUT_TAGS} NUL-free strings of at most ${MAX_INPUT_TAG_CHARS} characters` }, 400);
     const badProjectTag = body.tags === undefined ? null : projectTagError(body.tags);
@@ -92,6 +93,10 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: "when_kind requires when" }, 400);
     }
 
+    // T-0089.2.1: when the fact became and stopped being true, as the user said it.
+    const validity = parseValidityInput(body, Date.now(), (await resolveConfig(env)).TIMEZONE, { allowNull: false });
+    if ("error" in validity) return json({ ok: false, error: validity.error, field: validity.field }, 400);
+
     // Empty means absent, like every other optional param. A bad slug is bad input, not an
     // unknown project, so it fails the capture before anything is written.
     let projectSlug: string | undefined;
@@ -117,7 +122,7 @@ export async function handleCaptureRoutes(
     const writeCtx = await writeContextFor(env, identity, body.workspace, body.team);
     if (writeCtx instanceof Response) return writeCtx;
 
-    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx, when, { channel: "rest" });
+    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx, when, { channel: "rest", validity: validity.value });
 
     if (projectSlug && result.status !== "blocked") {
       await autoCreateProject(env, ctx, { workspaceId: writeCtx.workspaceId, actorId: identity.userId, slug: projectSlug });
@@ -145,7 +150,10 @@ export async function handleCaptureRoutes(
       });
     }
     if (result.status === "contradiction") {
-      return json(withReservedNote({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason }, ignoredReservedTags));
+      const supersede = result.supersede
+        ? { closed_id: result.supersede.closedId, at: result.supersede.at, direction: result.supersede.direction }
+        : null;
+      return json(withReservedNote({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason, supersede }, ignoredReservedTags));
     }
     if (result.status === "contradiction_protected") {
       return json(withReservedNote({
@@ -249,9 +257,35 @@ export async function handleCaptureRoutes(
     if (auth instanceof Response) return auth;
     const identity = auth;
 
-    let body: { id?: string; content?: string; volatility?: unknown; tags?: unknown };
+    let body: { id?: string; content?: string; volatility?: unknown; tags?: unknown; valid_from?: unknown; valid_until?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+
+    // T-0089.2.1: valid_from / valid_until, the same rules as the MCP update tool.
+    const hasValidity = body.valid_from !== undefined || body.valid_until !== undefined;
+    if (body.content === undefined && !hasValidity) return json({ ok: false, error: "Nothing to update: pass content, valid_from or valid_until." }, 400);
+    if (body.content === undefined && (body.tags !== undefined || body.volatility !== undefined)) return json({ ok: false, error: "To change tags or volatility, pass content too." }, 400);
+    if (body.content !== undefined && body.valid_from !== undefined) return json({ ok: false, error: VALIDITY_WITH_CONTENT_ERROR, field: "valid_from" }, 400);
+    const validityCfg = hasValidity ? await resolveConfig(env) : null;
+    const validity = hasValidity ? parseValidityInput(body, Date.now(), (validityCfg as Config).TIMEZONE, { allowNull: true }) : null;
+    if (validity && "error" in validity) return json({ ok: false, error: validity.error, field: validity.field }, 400);
+    const setValidity = (workspaceId: string) =>
+      updateEntryValidity(env, body.id!.trim(), validity!.value as { from?: number | null; until?: number | null }, { actorId: identity.userId, channel: "rest" }, validityCfg as Config, workspaceId);
+    const validityBody = (r: UpdateValidityResult): { status: number; body: Record<string, unknown> } => {
+      if (r.status === "updated") return { status: 200, body: { validity: { valid_from: r.effectiveFrom, valid_from_stated: r.validFrom !== null, valid_until: r.validUntil, propagated: r.propagated } } };
+      if (r.status === "refused") return { status: 400, body: { ok: false, error: r.error, field: r.field } };
+      if (r.status === "no_change") return { status: 200, body: { validity: null, changed: false } };
+      if (r.status === "conflict") return { status: 409, body: { ok: false, error: "Entry changed while saving, try again" } };
+      return { status: 404, body: { ok: false, error: `No entry found with ID: ${body.id!.trim()}` } };
+    };
+    if (body.content === undefined) {
+      const target = await getReadableEntry(env, identity, body.id.trim(), "id, workspace_id, actor_id");
+      if (!target) return json({ ok: false, error: `No entry found with ID: ${body.id.trim()}` }, 404);
+      const refused = assertCanEditContent(identity, target);
+      if (refused) return json({ ok: false, error: refused.message }, 403);
+      const out = validityBody(await setValidity(target.workspace_id as string));
+      return json(out.status === 200 ? { ok: true, id: body.id.trim(), ...out.body } : out.body, out.status);
+    }
     if (body.tags !== undefined && !validInputTags(body.tags)) return json({ ok: false, error: `tags must contain at most ${MAX_INPUT_TAGS} NUL-free strings of at most ${MAX_INPUT_TAG_CHARS} characters` }, 400);
     const badProjectTag = body.tags === undefined ? null : projectTagError(body.tags);
     if (badProjectTag) return json({ ok: false, error: badProjectTag }, 400);
@@ -321,6 +355,8 @@ export async function handleCaptureRoutes(
 
     // Only a write that happened is audited.
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "rest" } });
+    // New content plus an end date: the text first, then the window, each its own version.
+    const endFields = hasValidity ? validityBody(await setValidity(row.workspace_id as string)).body : {};
     // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
     // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
     // hand from updateEntryContent above, so this adds no second KV read.
@@ -328,6 +364,7 @@ export async function handleCaptureRoutes(
 
     if (!result.vectorIds) {
       return json(withReservedNote({
+        ...endFields,
         ok: true,
         id,
         vectors: 0,
@@ -336,7 +373,7 @@ export async function handleCaptureRoutes(
       }, ignoredReservedTags));
     }
 
-    return json(withReservedNote({ ok: true, id, vectors: result.vectorIds.length }, ignoredReservedTags));
+    return json(withReservedNote({ ...endFields, ok: true, id, vectors: result.vectorIds.length }, ignoredReservedTags));
   }
 
   return null;

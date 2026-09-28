@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (198 queries, 102 exceptions, 18 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (221 queries, 114 exceptions, 28 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1463,19 +1463,16 @@ describe("the checker over the real source tree", () => {
     // MOVED (T-0089.1.1, merge of release/v4 ebc8010d): recomputed from a real check:scope run on the merged
     // tree, not by adding two independently-tracked totals: Track 1's 196/102/17 plus release/v4's own queries
     // (Track 7's calibration and standing-cache reads, lanes Q/R/D, BE-2) land at 198/102/18/1.
-    // MOVED 198/102/18/1 -> real --inventory output (merge of release/v4 bd69cc15 into v4/ux-be): this
-    // branch's own +1 query for T-0101.2.1 (BE-1, listTrash's entries_trash SELECT, scoped by
-    // workspace_id — no new exemption, since its second statement reads entry_events, not one of the
-    // four tracked tables) and release/v4's 198/102/18/1 above are independently-tracked deltas from
-    // the same 190/103/13/1 base — recomputed against the real scanner output after combining rather
-    // than hand-reconciling the two.
-    // MOVED (T-0089.4.3, merge of release/v4 fa609a16 into v4/t34-s): S1's own +1 query and +1
-    // scope-checked (src/brief/changes.ts's one-statement changes query, scoped by
-    // COALESCE(en.workspace_id, t.workspace_id) IN (SELECT value FROM json_each(?)) -- the lexer
-    // cannot see the leading AND inside that JS-assembled fragment) and release/v4's 199/102/18/1
-    // above are independently-tracked deltas from the same base, recomputed against the real
-    // scanner output on the merged tree rather than hand-added.
-    ).toEqual({ queries: 200, exempt: 102, checked: 19, outerJoin: 1 });
+    // MOVED 218/114/27/1 -> real --inventory output (merge of release/v4 57583d10 into v4/t2-b): this
+    // branch's own Task B1/B2 validity deltas (218/114/27/1, T-0089.2.1/2.4/B1, see history above) and
+    // release/v4's own independently-tracked deltas (BE-1's listTrash query, S1's changes query, and
+    // T-0089.2.1 lane A's supersede/retraction/cascade/updateEntryValidity scope-checked and scope-exempt
+    // sites) are independently-tracked deltas from the same base — recomputed against the real scanner
+    // output after combining rather than hand-reconciling the two.
+    // Deliberate: +1 query (220 -> 221) for R16 (T-0089.2.1): the superseded_by lookup is one shared
+    // fragment (src/memory/validity.ts supersededBySql), its own literal, pinned to the outer row's
+    // workspace; the four readers that spelled it out now interpolate it.
+    ).toEqual({ queries: 221, exempt: 114, checked: 28, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

@@ -110,6 +110,7 @@ describe("GET /insights/dry-run", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     sqlite.seed({
       id: "a-1", createdAt: NOW - 120 * DAY, tags: ["pricing"],
       content: "Decision: price the first tier flat at nine dollars a month for predictability.",
@@ -247,6 +248,7 @@ describe("GET /insights/dry-run — mirrors what the weekly pass actually enforc
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   });
 
   afterEach(() => sqlite.close());
@@ -389,6 +391,7 @@ describe("GET /insights/dry-run — ordering and the write cap across many candi
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     // Seeded out of score order on purpose: inserting tier 0 first would let
     // an ORDER BY bug hide behind insertion order happening to already match.
     const tiersInInsertionOrder: [tier: number, score: number][] = [

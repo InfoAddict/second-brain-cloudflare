@@ -19,8 +19,10 @@ import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/
 import { auditEvent } from "../lib/audit";
 import { resolveConfig } from "../config";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
+import { parseSupersededBy, validitySummary } from "../recall/validity-view";
 import { getTagVocabulary } from "../tags/vocabulary";
 import { projectRowsOf } from "../projects/registry";
+import { supersededBySql } from "../memory/validity";
 
 /** Most entries GET /tags?counts=1 reads; matches the /projects counts cap. */
 const TAG_COUNTS_SCAN_LIMIT = 5000;
@@ -90,7 +92,7 @@ export async function handleEntriesRoutes(
     const scope = scopeWhere(auth);
 
     const { results: entryRows } = await env.DB.prepare(
-      `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries WHERE ${scope.clause} ORDER BY created_at ASC`
+      `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses, valid_from, valid_until FROM entries WHERE ${scope.clause} ORDER BY created_at ASC`
     ).bind(...scope.bindings).all() as { results: Record<string, any>[] };
     const { results: edgeRows } = await env.DB.prepare(
       `SELECT source_id, target_id, type, weight, provenance, created_at FROM edges WHERE ${scope.clause}`
@@ -123,6 +125,9 @@ export async function handleEntriesRoutes(
       importance_score: r.importance_score ?? 0,
       contradiction_wins: r.contradiction_wins ?? 0,
       contradiction_losses: r.contradiction_losses ?? 0,
+      // T-0089.2.1: the raw columns, so a restore tells a stated start from "since created_at".
+      valid_from: r.valid_from ?? null,
+      valid_until: r.valid_until ?? null,
     }));
     const edges = edgeRows.map(r => ({
       source_id: r.source_id,
@@ -223,7 +228,7 @@ export async function handleEntriesRoutes(
       entryId: id, actorId: auth.userId, event: "deleted",
       payload: { deletedVectors: result.vectorCount, channel: "rest", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
     });
-    return json({ ok: true, id, deletedVectors: result.vectorCount, trash: result.trashed, retention_days: cfg.TRASH_RETENTION_DAYS });
+    return json({ ok: true, id, deletedVectors: result.vectorCount, trash: result.trashed, retention_days: cfg.TRASH_RETENTION_DAYS, validity: result.validity });
   }
 
   // POST /restore — bring a memory back from the trash, with its links and index.
@@ -254,7 +259,7 @@ export async function handleEntriesRoutes(
       entryId: id, actorId: auth.userId, event: "restored",
       payload: { channel: "rest", edgesRestored: result.edgesRestored, trashedReason: result.trashedReason },
     });
-    return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount });
+    return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount, validity: result.validity });
   }
 
   // GET /trash (BE-2, T-0101.2.1, contract 4.3) — the dashboard trash view's page reader.
@@ -328,7 +333,7 @@ export async function handleEntriesRoutes(
     switch (result.status) {
       case "reverted":
         return json({
-          ok: true, id, status: "reverted", targetSeq: result.targetSeq, message: revertedMessage(id, result),
+          ok: true, id, status: "reverted", targetSeq: result.targetSeq, message: revertedMessage(id, result), validity: result.validity,
           ...(result.recreatedIncomingId ? { recreatedIncomingId: result.recreatedIncomingId } : {}),
           ...(result.incomingTruncated ? { incomingTruncated: true } : {}),
           ...(result.keptIncoming ? { keptIncoming: result.keptIncoming } : {}),
@@ -336,7 +341,7 @@ export async function handleEntriesRoutes(
         });
       case "restored":
         return json({
-          ok: true, id, status: "restored", message: restoredMessage(id, result),
+          ok: true, id, status: "restored", message: restoredMessage(id, result), validity: result.validity,
           ...(result.mirrorSource ? { mirrorWarning: true } : {}),
         });
       case "no_change":
@@ -380,10 +385,13 @@ export async function handleEntriesRoutes(
     // Scoped like the list above it: an id outside the caller's readable set
     // reads as a missing entry rather than someone else's memory.
     const scope = scopeWhere(auth);
+    // validity: any: GET /entry is a listing/detail view, not a current-facts answer (5.9)
+    // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by the caller's clause above
     const row = await env.DB.prepare(
       `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated,
               importance_score, recall_count, contradiction_wins, contradiction_losses, vector_ids,
-              workspace_id, actor_id, when_at, when_kind, when_source
+              workspace_id, actor_id, when_at, when_kind, when_source, valid_from, valid_until,
+              ${supersededBySql("entries")} AS superseded_by_json
        FROM entries WHERE id = ? AND ${scope.clause}`
     ).bind(id, ...scope.bindings).first() as Record<string, any> | null;
     if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
@@ -411,13 +419,21 @@ export async function handleEntriesRoutes(
       viewerId: auth.userId,
       source: row.source as string,
     });
+    const tags = JSON.parse(row.tags ?? "[]");
+    const validity = validitySummary({
+      createdAt: row.created_at as number,
+      validFrom: row.valid_from as number | null | undefined,
+      validUntil: row.valid_until as number | null | undefined,
+      tags,
+      supersededBy: parseSupersededBy(row.superseded_by_json as string | null | undefined),
+    });
 
     return json({
       ok: true,
       entry: {
         id: row.id,
         content: row.content,
-        tags: JSON.parse(row.tags ?? "[]"),
+        tags,
         source: row.source,
         created_at: row.created_at,
         updated_at: row.last_updated ?? row.created_at,
@@ -433,6 +449,12 @@ export async function handleEntriesRoutes(
         when_source: row.when_source ?? null,
         workspace: layer,
         actor_name: actorName,
+        valid_from: validity.validFrom,
+        valid_from_stated: validity.validFromStated,
+        valid_until: validity.validUntil,
+        validity_state: validity.validityState,
+        superseded_by: validity.supersededBy,
+        retracted_source: validity.retractedSource,
         // Whether this caller may edit or forget it, answered by the very
         // predicate the mutation routes enforce with — so the dashboard stops
         // offering an action it will be refused for. One flag rather than two
@@ -551,7 +573,7 @@ export async function handleEntriesRoutes(
     }
 
     auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { status, channel: "rest" } });
-    return json({ ok: true, id, status, indexed: result.indexed });
+    return json({ ok: true, id, status, indexed: result.indexed, validity: result.validity });
   }
 
   return null;

@@ -3,6 +3,7 @@ import type { Identity } from "../lib/identity";
 import type { EmbeddingQueryMode } from "./query-profile";
 import type { RankMultipliers } from "./math";
 import type { RootView } from "./root-selector";
+import type { SupersededBy, ValidityState } from "./validity-view";
 
 export interface CompoundStaleSignal {
   count: number;
@@ -60,6 +61,15 @@ export interface RecallMatch {
   why?: WhyTrace;
   /** Recurring notices this row's near-duplicate collapse absorbed, newest first, up to 5 (4.4). */
   similar?: { id: string; createdAt: number }[];
+  /** Effective start: COALESCE(valid_from, created_at) (T-0089.2.1). */
+  validFrom: number;
+  /** Whether valid_from was stated, not defaulted from createdAt. */
+  validFromStated: boolean;
+  validUntil: number | null;
+  validityState: ValidityState;
+  /** The live closer, when validityState is "replaced"; null otherwise. */
+  supersededBy: SupersededBy | null;
+  retractedSource: boolean;
 }
 
 export interface RecallSearchResult {

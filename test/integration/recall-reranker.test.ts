@@ -25,6 +25,8 @@ describe("recall reranker step", () => {
     const sqlite = makeSqliteD1();
     open.push(sqlite);
     await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN updated_at INTEGER`).run();
+    await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+    await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     IDS.forEach((id, i) => sqlite.seed({ id, content: CONTENT[id], createdAt: 1000 + i, tags: ["work"] }));
     const kv = makeMemoryKV();
     await kv.put(TAG_VOCABULARY_KEY, JSON.stringify({ tags: ["work"], rebuiltAt: Date.now() }));

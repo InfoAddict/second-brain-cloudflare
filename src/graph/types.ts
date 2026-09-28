@@ -25,6 +25,8 @@ export interface GraphNeighbor {
   viaProvenance: EdgeProvenance; // how the traversed edge was created: explicit (you) / inferred (auto) / system
   viaLinkedAt: number;           // when the traversed edge was formed (edge created_at)
   viaFrom: string;               // id of the node this neighbor was reached from
+  /** T-0089.2.1: null means still current, a replaced fact keeps the date it stopped. */
+  validUntil?: number | null;
 }
 
 export interface Connection {
@@ -38,6 +40,8 @@ export interface Connection {
   weight: number;
   provenance: EdgeProvenance; // explicit (you linked) / inferred (auto) / system
   linkedAt: number;           // when the edge was formed (edge created_at)
+  /** T-0089.2.1: null means still current, a replaced fact keeps the date it stopped. */
+  validUntil: number | null;
 }
 
 export interface GraphNode {
@@ -63,6 +67,8 @@ export interface GraphNode {
    * does not report authors".
    */
   actor_name: string | null;
+  /** T-0089.2.1: null means still current, a replaced fact keeps the date it stopped. */
+  validUntil: number | null;
 }
 
 export interface GraphView {

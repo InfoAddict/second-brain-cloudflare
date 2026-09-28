@@ -280,6 +280,11 @@ const ENTRIES_COLUMNS: Record<string, string> = {
   // the first 80 characters of raw content. NULL on the explicit and regex
   // paths, which never generate one.
   when_label: `ALTER TABLE entries ADD COLUMN when_label TEXT`,
+  // Validity windows (T-0089.2.1). Never backfilled: readers coalesce valid_from to
+  // created_at and read a NULL valid_until as "still true". No index: every validity
+  // predicate runs on rows another predicate already selected.
+  valid_from: `ALTER TABLE entries ADD COLUMN valid_from INTEGER`,
+  valid_until: `ALTER TABLE entries ADD COLUMN valid_until INTEGER`,
 };
 
 /**

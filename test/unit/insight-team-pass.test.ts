@@ -165,6 +165,7 @@ describe("runWeeklyInsights — the workspace slice", () => {
     // here gets a brand-new :memory: database.
     resetDatabaseInit();
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   });
 
   afterEach(() => sqlite.close());
@@ -399,6 +400,7 @@ describe("runWeeklyInsights — the workspace slice", () => {
     const runB = async (withOtherCompany: boolean) => {
       resetDatabaseInit();
       const db = makeSqliteD1();
+      db.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
       const seedWritten = (id: string, ws: string, text: string) => {
         db.seed({
           id, createdAt: NOW - DAY, tags: ["auto-insight"],
@@ -696,7 +698,7 @@ describe("runWeeklyInsights — the workspace slice", () => {
 describe("companyWorkspaceIds()", () => {
   let sqlite: SqliteD1;
 
-  beforeEach(() => { resetDatabaseInit(); sqlite = makeSqliteD1(); });
+  beforeEach(() => { resetDatabaseInit(); sqlite = makeSqliteD1(); sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run(); });
   afterEach(() => sqlite.close());
 
   const seedWorkspace = (id: string, kind: string) =>

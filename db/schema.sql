@@ -13,8 +13,9 @@ CREATE TABLE IF NOT EXISTS entries (
   contradiction_losses INTEGER DEFAULT 0,
   workspace_id     TEXT NOT NULL DEFAULT '',     -- owning workspace ('' = legacy owner-private rows pending backfill)
   actor_id         TEXT NOT NULL DEFAULT ''      -- user who wrote it ('' = the owner, pre-team writes)
-  -- Runtime ALTER columns (see src/db/init.ts): updated_at, staleness_checked_at,
-  -- when_at, when_kind, when_source, when_label
+  -- Runtime ALTER columns (see src/db/init.ts): updated_at, staleness_checked_at, when_at, when_kind, when_source, when_label, valid_from, valid_until
+  -- valid_from:  when the fact became true (ms). NULL means "since created_at".
+  -- valid_until: when it stopped being true (ms). NULL means "still true".
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at DESC);

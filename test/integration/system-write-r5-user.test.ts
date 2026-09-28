@@ -57,23 +57,24 @@ describe("user capture whose conflict row moved mid-capture", () => {
   }
 });
 
-describe("user capture deprecation is pinned to the writer's workspace", () => {
-  it("a non-canonical conflict row that moved after the snapshot is not deprecated in its new workspace", async () => {
+describe("user capture supersede is pinned to the writer's workspace", () => {
+  it("a non-canonical conflict row that moved after the snapshot is not superseded in its new workspace", async () => {
     const { sqlite, env } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
     sqlite.db.prepare(`UPDATE entries SET content = 'I live in Paris', tags = '["home"]', source = 'api', actor_id = 'u2' WHERE id = 'old'`).run();
     const db = env.DB as any; const prepare = db.prepare.bind(db); let raced = false;
     db.prepare = (sql: string) => {
-      // After the snapshot read and the newcomer INSERT: the row moves just before the deprecation.
-      if (!raced && sql.startsWith("SELECT tags, vector_ids FROM entries WHERE id = ?")) {
+      // After the snapshot read and the newcomer INSERT: the row moves just before the supersede batch.
+      if (!raced && sql.startsWith("INSERT INTO entry_versions")) {
         raced = true;
         sqlite.db.prepare("UPDATE entries SET workspace_id = 'company-ws' WHERE id = 'old'").run();
       }
       return prepare(sql);
     };
     await captureEntry("I live in Berlin", [], "api", env, ctx, undefined, { workspaceId: "", actorId: "u1" }, undefined, { channel: "rest" });
-    const old = await env.DB.prepare("SELECT tags FROM entries WHERE id = 'old'").first() as any;
+    const old = await env.DB.prepare("SELECT tags, valid_until FROM entries WHERE id = 'old'").first() as any;
     expect(raced).toBe(true);
     expect(JSON.parse(old.tags)).not.toContain("status:deprecated");
+    expect(old.valid_until).toBeNull();
     sqlite.close();
   });
 });

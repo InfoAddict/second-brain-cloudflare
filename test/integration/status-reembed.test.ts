@@ -36,7 +36,7 @@ const row = async () => (await sqlite.db.prepare(`SELECT * FROM entries WHERE id
 describe("applyStatus() leaving deprecated", () => {
   it("deprecated to canonical re-embeds and is found by recall", async () => {
     const result = await applyStatus("entry-1", "canonical", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toEqual({ status: "ok", indexed: true });
+    expect(result).toEqual({ status: "ok", indexed: true, validity: expect.any(Object) });
     expect(upsertMock).toHaveBeenCalled();
 
     const r = await row();
@@ -61,7 +61,7 @@ describe("applyStatus() leaving deprecated", () => {
   it("keyword-only when Vectorize is missing, indexed false", async () => {
     env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: undefined as any });
     const result = await applyStatus("entry-1", "draft", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toEqual({ status: "ok", indexed: false });
+    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object) });
 
     const r = await row();
     const tags: string[] = JSON.parse(r.tags);
@@ -73,7 +73,7 @@ describe("applyStatus() leaving deprecated", () => {
   it("canonical to draft does not embed", async () => {
     await sqlite.db.prepare(`UPDATE entries SET tags = ? WHERE id = 'entry-1'`).bind(JSON.stringify(["work", "status:canonical"])).run();
     const result = await applyStatus("entry-1", "draft", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toEqual({ status: "ok", indexed: false });
+    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object) });
     expect(upsertMock).not.toHaveBeenCalled();
 
     const r = await row();

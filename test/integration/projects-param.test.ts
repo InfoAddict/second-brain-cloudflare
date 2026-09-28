@@ -538,7 +538,7 @@ describe("GET /recall with project", () => {
     expect(ids).toEqual(["aliased", "member"]);
     sqlite.issued.length = 0;
     await call("GET", "/recall?query=site%20hosting%20notes&project=site&topK=10&hops=1", ALICE);
-    const hydration = sqlite.issued.filter(s => /created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN/.test(s));
+    const hydration = sqlite.issued.filter(s => s.includes("superseded_by_json") && /FROM entries WHERE id IN/.test(s));
     expect(hydration.length).toBeGreaterThan(0);
     for (const sql of hydration) expect(sql).toMatch(/tags LIKE \? ESCAPE/);
   });

@@ -173,7 +173,7 @@ describe("upgrade from a 3.7.0-shaped database", () => {
 
     const change = { actorId: roots.ownerUserId, channel: "rest" as const };
     const result = await applyStatus("e1", "deprecated", env, change, DEFAULTS, roots.ownerPersonalWorkspaceId);
-    expect(result).toEqual({ status: "ok", indexed: false });
+    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object) });
 
     const versions = (await (d1.db as any).prepare(`SELECT * FROM entry_versions WHERE entry_id = 'e1' ORDER BY seq`).all()).results as any[];
     expect(versions).toHaveLength(1);
@@ -441,11 +441,14 @@ describe("the 3.7.0 d1-mock probe shape", () => {
     // (test/unit/db-init.test.ts's "migrates a genuinely empty database"), not a new one Task 11
     // introduced. MOVED (T-0089.1.1, adv-final MAJOR 1): entries_trash.nonce joins
     // prior_length_utf16 in this list.
+    // MOVED (T-0089.2.1): a 3.7.0 brain is also owed the two validity ALTERs, and nothing else.
     expect(execd.map(target)).toEqual([
       "entry_versions",
       "idx_entry_versions_entry",
       "entries_trash",
       "idx_entries_trash_deleted",
+      "entries.valid_from",
+      "entries.valid_until",
       "entry_versions.prior_length_utf16",
       "entries_trash.nonce",
     ]);

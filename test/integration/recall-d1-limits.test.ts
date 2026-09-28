@@ -93,7 +93,10 @@ const edgeScanStatements = (executed: Executed[]) =>
   executed.filter(e => /FROM edges WHERE/.test(e.sql));
 
 const hydrationStatements = (executed: Executed[]) =>
-  executed.filter(e => e.sql.includes("created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN"));
+  // "superseded_by_json" (T-0089.2.1) is unique to the full hydration
+  // projection; the narrower candidateSignalProjection read also matches
+  // "FROM entries WHERE id IN" alone.
+  executed.filter(e => e.sql.includes("superseded_by_json") && e.sql.includes("FROM entries WHERE id IN"));
 
 describe("recall stays inside D1's statement limits", () => {
   let sqlite: SqliteD1;
@@ -102,10 +105,13 @@ describe("recall stays inside D1's statement limits", () => {
   beforeEach(async () => {
     sqlite = makeSqliteD1();
     executed = [];
-    // `updated_at` is one of the columns src/db/init.ts adds by ALTER at
-    // runtime rather than in schema.sql, and that path goes through `exec`,
-    // which this facade does not implement. Recall's hydration selects it.
+    // `updated_at`, `valid_from` and `valid_until` are columns src/db/init.ts
+    // adds by ALTER at runtime rather than in schema.sql, and that path goes
+    // through `exec`, which this facade does not implement. Recall's
+    // hydration selects all three, and the validity predicate reads valid_until.
     await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN updated_at INTEGER`).run();
+    await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+    await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   });
 
   afterEach(() => sqlite.close());
@@ -118,7 +124,9 @@ describe("recall stays inside D1's statement limits", () => {
 
   describe("the keyword clause, on an empty brain (#276)", () => {
     it("scopes both existing candidate reads to one explicit date", async () => {
-      const day = new Date(2026, 7, 17).getTime();
+      // parseTimePhrase anchors in the brain's TIMEZONE (UTC by default, T-0089.2.2),
+      // not the test runner's host zone.
+      const day = Date.UTC(2026, 7, 17);
       sqlite.seed({ id: "in-range", content: "quartz ledger record", createdAt: day + 1 });
       sqlite.seed({ id: "out-of-range", content: "quartz ledger record", createdAt: day + 86400000 + 1 });
       const env = envWith(undefined, {
@@ -138,9 +146,10 @@ describe("recall stays inside D1's statement limits", () => {
       expect(frequency?.sql).toContain("WHERE created_at >= ? AND created_at < ?");
       expect(keyword.sql).toContain("AND created_at >= ? AND created_at < ?");
       expect(frequency?.params.slice(-2)).toEqual([day, day + 86400000]);
-      // the limit is followed by the terms the statement scores (bound once each)
+      // the current-validity bound (T-0089.2.1) sits between the time filter
+      // and the limit, which is followed by the terms the statement scores (bound once each)
       const terms = (keyword.sql.match(/ AS p\d+/g) ?? []).length;
-      expect(keyword.params.slice(-3 - terms, -1 - terms)).toEqual([day, day + 86400000]);
+      expect(keyword.params.slice(-4 - terms, -2 - terms)).toEqual([day, day + 86400000]);
     });
 
     it("answers a 120-word query with no memories stored", async () => {
@@ -197,11 +206,13 @@ describe("recall stays inside D1's statement limits", () => {
       expect(long.status).toBe(200);
       // Distillation still puts its three rarest terms first, while bounded
       // retrieval anchors use the remainder of the existing 16-token budget.
-      // The final parameter remains the row limit; between them sit the three
-      // workspace-scope bindings (personal, company, legacy '') that v3 adds
-      // whenever an Identity is in play — 16 + 3 + 1 = 20 — and then the 16 terms the statement scores for the notes it
-      // selects, each bound once and referenced by number: 36, far under D1's 100.
-      expect(keywordStatements(executed)[0].params.length).toBe(36);
+      // Next come the three workspace-scope bindings (personal, company,
+      // legacy '') that v3 adds whenever an Identity is in play, then the
+      // current-validity bound (T-0089.2.1), then the row limit — 16 + 3 + 1
+      // + 1 = 21 — and then the 16 terms the statement scores for the notes
+      // it selects, each bound once and referenced by number: 37, far under
+      // D1's 100.
+      expect(keywordStatements(executed)[0].params.length).toBe(37);
 
       executed.length = 0;
       const short = await worker.fetch(req("GET", "/recall?query=topic0"), env, ctx);
@@ -247,7 +258,10 @@ describe("recall stays inside D1's statement limits", () => {
 
       const hydration = hydrationStatements(executed);
       expect(hydration.length).toBe(2);
-      expect(hydration.map(h => h.params.length)).toEqual([100, 50]);
+      // Was [100, 50] before the current-validity bound (T-0089.2.1) joined
+      // filterBindings: idBatchSize drops by 1, so 99 ids (+1 filter binding)
+      // fill the first chunk and the remaining 51 (+1) land in the second.
+      expect(hydration.map(h => h.params.length)).toEqual([100, 52]);
       expect(Math.max(...hydration.map(h => h.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
     });
 
@@ -275,7 +289,9 @@ describe("recall stays inside D1's statement limits", () => {
 
       expect(matches.length).toBe(N);
       const hydration = hydrationStatements(executed);
-      expect(hydration.map(h => h.params.length)).toEqual([100, 54]);
+      // Was [100, 54] before the current-validity bound (T-0089.2.1) joined
+      // filterBindings alongside after/before: idBatchSize drops by 1 more.
+      expect(hydration.map(h => h.params.length)).toEqual([100, 56]);
       expect(Math.max(...hydration.map(h => h.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
     });
 
