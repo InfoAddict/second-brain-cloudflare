@@ -45,7 +45,8 @@ const SEEDED_AT = Date.parse("2024-01-17T00:00:00Z");
 /** Vectorize with real insert/upsert/delete semantics, so "what is indexed" is observable. */
 function makeStatefulVectorize(seed: { id: string; content: string }[], overrides: Partial<VectorizeIndex> = {}) {
   const store = new Map<string, any>();
-  for (const v of seed) store.set(v.id, { id: v.id, values: [], metadata: { content: v.content } });
+  // Real vectors name their entry in metadata.parentId (deleteEntryVectors checks it, T-0089.1.1).
+  for (const v of seed) store.set(v.id, { id: v.id, values: [], metadata: { content: v.content, parentId: v.id.replace(/-chunk-\d+$/, "") } });
   const index = makeVectorizeMock({
     insert: vi.fn(async (vectors: any[]): Promise<any> => {
       for (const v of vectors) if (!store.has(v.id)) store.set(v.id, v);
@@ -59,6 +60,7 @@ function makeStatefulVectorize(seed: { id: string; content: string }[], override
       for (const id of ids) store.delete(id);
       return { mutationId: "m" };
     }),
+    getByIds: vi.fn(async (ids: string[]): Promise<any> => ids.filter(id => store.has(id)).map(id => store.get(id))),
     ...overrides,
   });
   return { store, index };
@@ -194,11 +196,16 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
   async function capture(store: Map<string, any>): Promise<Snapshot> {
     const row = await d1.prepare(`SELECT * FROM entries WHERE id = ?`).bind(ENTRY_ID).first();
     const versions = (await d1.prepare(`SELECT * FROM entry_versions WHERE entry_id = ? ORDER BY seq`).bind(ENTRY_ID).all()).results as Record<string, unknown>[];
+    // Vector ids are minted per upload (T-0089.1.1): a fresh one is compared as `<entry>~<chunk>`, so two
+    // callers that did the same thing produce the same snapshot; 3.7's ids stay as they are.
+    const canon = (id: string) => id.replace(/:[0-9a-f]{8}:(\d+)$/, "~$1");
+    const r = (row as Record<string, unknown> | null) ?? null;
+    if (r && typeof r.vector_ids === "string") r.vector_ids = JSON.stringify((JSON.parse(r.vector_ids) as string[]).map(canon));
     return {
       versions,
-      row: (row as Record<string, unknown> | null) ?? null,
+      row: r,
       vectors: [...store.values()]
-        .map(v => ({ id: v.id as string, content: v.metadata?.content }))
+        .map(v => ({ id: canon(v.id as string), content: v.metadata?.content }))
         .sort((a, b) => a.id.localeCompare(b.id)),
     };
   }
@@ -254,9 +261,9 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
       content: "I live in Lisbon",
       expect: (s) => {
         expect(s.row!.content).toBe("I live in Lisbon");
-        // The vector the entry is keyed by holds the new text, not the old.
-        expect(s.vectors).toEqual([{ id: ENTRY_ID, content: "I live in Lisbon" }]);
-        expect(JSON.parse(s.row!.vector_ids as string)).toEqual([ENTRY_ID]);
+        // The row lists one fresh upload holding the new text; the old vector is retired.
+        expect(s.vectors).toEqual([{ id: `${ENTRY_ID}~0`, content: "I live in Lisbon" }]);
+        expect(JSON.parse(s.row!.vector_ids as string)).toEqual([`${ENTRY_ID}~0`]);
       },
     },
     {
@@ -370,7 +377,7 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
       },
     },
     {
-      name: "a multi-chunk entry shrinking to one chunk retires only the orphan",
+      name: "a multi-chunk entry shrinking to one chunk retires every old vector",
       world: {
         seed: { content: "long original", tags: ["work"], vectorIds: [ENTRY_ID, `${ENTRY_ID}-chunk-1`] },
         vectors: [
@@ -380,9 +387,9 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
       },
       content: "short replacement",
       expect: (s) => {
-        // The re-embed reuses the entry id, so that vector must survive its own cleanup.
-        expect(s.vectors).toEqual([{ id: ENTRY_ID, content: "short replacement" }]);
-        expect(JSON.parse(s.row!.vector_ids as string)).toEqual([ENTRY_ID]);
+        // A fresh upload (per-upload ids, T-0089.1.1): both of 3.7's old vectors go, the new one stays.
+        expect(s.vectors).toEqual([{ id: `${ENTRY_ID}~0`, content: "short replacement" }]);
+        expect(JSON.parse(s.row!.vector_ids as string)).toEqual([`${ENTRY_ID}~0`]);
       },
     },
     {
@@ -400,7 +407,7 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
         // The new vectors are already in place, so the leftover orphan is a tidiness
         // problem, not a correctness one — rolling the content back would be worse.
         expect(s.row!.content).toBe("short replacement");
-        expect(JSON.parse(s.row!.vector_ids as string)).toEqual([ENTRY_ID]);
+        expect(JSON.parse(s.row!.vector_ids as string)).toEqual([`${ENTRY_ID}~0`]);
       },
     },
     {
@@ -444,7 +451,7 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
       await client.close();
     }
 
-    expect(reply).toMatch(/No entry found with ID: nope/);
+    expect(reply).toMatch(/No memory found with ID: nope/);
     expect(normalize(await capture(mcpStore))).toEqual(normalize(httpSnapshot));
   });
 
@@ -477,11 +484,11 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
 
     const http = await viaHttp(world, "I live in Lisbon");
     expect(http.status).toBe(500);
-    expect(http.reply).toMatch(/Your memory is unchanged/);
+    expect(http.reply).toMatch(/The memory is unchanged/);
 
     const mcp = await viaMcp(world, "I live in Lisbon");
     expect(mcp.reply).not.toMatch(/^Updated entry/);
-    expect(mcp.reply).toMatch(/Your memory is unchanged/);
+    expect(mcp.reply).toMatch(/The memory is unchanged/);
   });
 
   it("the MCP tool flags the keyword-only degrade instead of claiming a re-index", async () => {
@@ -489,8 +496,8 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
       { seed: { content: "I live in Berlin", tags: ["home"] }, vectorizeDown: true },
       "I live in Lisbon",
     );
-    expect(mcp.reply).toMatch(/Updated entry x1/);
-    expect(mcp.reply).toMatch(/not re-indexed for semantic search/);
+    expect(mcp.reply).toMatch(/Updated memory x1/);
+    expect(mcp.reply).toMatch(/Search by meaning is unavailable/);
     expect(mcp.reply).toMatch(/wrangler vectorize create/);
   });
 

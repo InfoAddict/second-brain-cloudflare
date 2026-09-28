@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import worker from "../../src/index"; import { SB_VERSION } from "../../src/env";
-import { makeTestEnv, makeTestDb, makeVectorizeMock } from "../helpers/make-env";
+import { makeTestEnv, makeTestDb, makeVectorizeMock, makeMemoryKV } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
 import { D1Mock } from "../helpers/d1-mock";
+import { VERSIONS_SINCE_KV_KEY } from "../../src/constants";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
 
@@ -48,5 +49,50 @@ describe("GET /health", () => {
     expect(data.ok).toBe(false);
     expect(data.vectorize.ok).toBe(false);
     expect(data.vectorize.error).toContain("index not found");
+  });
+
+  it("includes history_since when the marker exists and omits it otherwise", async () => {
+    const envNoMarker = makeTestEnv(db, {
+      VECTORIZE: makeVectorizeMock({ describe: vi.fn().mockResolvedValue({ dimensions: 384 }) }),
+    });
+    const resNoMarker = await worker.fetch(req("GET", "/health"), envNoMarker, ctx);
+    const dataNoMarker = await resNoMarker.json() as any;
+    expect(dataNoMarker.history_since).toBeUndefined();
+
+    const kv = makeMemoryKV();
+    await kv.put(VERSIONS_SINCE_KV_KEY, "1789500000000");
+    const envWithMarker = makeTestEnv(db, {
+      VECTORIZE: makeVectorizeMock({ describe: vi.fn().mockResolvedValue({ dimensions: 384 }) }),
+      OAUTH_KV: kv,
+    });
+    const resWithMarker = await worker.fetch(req("GET", "/health"), envWithMarker, ctx);
+    const dataWithMarker = await resWithMarker.json() as any;
+    expect(dataWithMarker.history_since).toBe(1789500000000);
+  });
+
+  it("adds no D1 statement for history_since", async () => {
+    // Each env gets its own db and a warm-up call first, so schema-init
+    // statements (paid once per db) never pollute the comparison below.
+    const dbWithMarker = makeTestDb();
+    const kv = makeMemoryKV();
+    await kv.put(VERSIONS_SINCE_KV_KEY, "1789500000000");
+    const env = makeTestEnv(dbWithMarker, {
+      VECTORIZE: makeVectorizeMock({ describe: vi.fn().mockResolvedValue({ dimensions: 384 }) }),
+      OAUTH_KV: kv,
+    });
+    await worker.fetch(req("GET", "/health"), env, ctx);
+    const prepare = vi.spyOn(env.DB, "prepare");
+    await worker.fetch(req("GET", "/health"), env, ctx);
+    const withMarkerCalls = prepare.mock.calls.length;
+
+    const dbNoMarker = makeTestDb();
+    const envNoMarker = makeTestEnv(dbNoMarker, {
+      VECTORIZE: makeVectorizeMock({ describe: vi.fn().mockResolvedValue({ dimensions: 384 }) }),
+      OAUTH_KV: makeMemoryKV(),
+    });
+    await worker.fetch(req("GET", "/health"), envNoMarker, ctx);
+    const prepare2 = vi.spyOn(envNoMarker.DB, "prepare");
+    await worker.fetch(req("GET", "/health"), envNoMarker, ctx);
+    expect(withMarkerCalls).toBe(prepare2.mock.calls.length);
   });
 });

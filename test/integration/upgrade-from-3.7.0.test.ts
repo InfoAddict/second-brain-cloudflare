@@ -102,6 +102,32 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     expect(setCount).toBe(25);
   });
 
+  it("creates idx_entries_ledger and idx_entries_standing on a 3.7.0 upgrade, both empty", async () => {
+    // A pre-4.0 brain never wrote either marker tag, so migrating it must not reinterpret
+    // anything: both indexes are created and both start empty (T-0089.7.1, T-0089.7.2).
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'an ordinary pre-4.0 memory', '["decision","standing"]', 'api', 1000, '[]')`);
+    env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
+
+    await initializeDatabase(env);
+
+    const objects = (await (d1.db as any).prepare(
+      `SELECT name, type FROM sqlite_master WHERE name IN ('idx_entries_ledger','idx_entries_standing')`,
+    ).all()).results as { name: string; type: string }[];
+    expect(objects.map((o) => o.name).sort()).toEqual(["idx_entries_ledger", "idx_entries_standing"]);
+    expect(objects.every((o) => o.type === "index")).toBe(true);
+
+    // The pre-4.0 row's plain "decision"/"standing" tags are ordinary tags (P7.2), not the
+    // reserved "ledger:decision"/"standing:active" markers, so neither index picks it up.
+    const ledgerCount = (await (d1.db as any).prepare(
+      `SELECT COUNT(*) AS n FROM entries WHERE instr(lower(tags), '"ledger:decision"') > 0`,
+    ).first()).n as number;
+    const standingCount = (await (d1.db as any).prepare(
+      `SELECT COUNT(*) AS n FROM entries WHERE instr(lower(tags), '"standing:active"') > 0`,
+    ).first()).n as number;
+    expect(ledgerCount).toBe(0);
+    expect(standingCount).toBe(0);
+  });
+
   it("a second cold start issues only the probe, no more CREATEs", async () => {
     env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
     await initializeDatabase(env);
@@ -142,7 +168,7 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     await (d1.db as any).prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'e1'`).bind(roots.ownerPersonalWorkspaceId, roots.ownerUserId).run();
 
     const change = { actorId: roots.ownerUserId, channel: "rest" as const };
-    const ok = await appendToEntry(env, "e1", "Notes:", "met Sam", [], "api", DEFAULTS, undefined, { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId }, change, undefined, roots.ownerPersonalWorkspaceId);
+    const ok = (await appendToEntry(env, "e1", "Notes:", "met Sam", [], "api", DEFAULTS, undefined, { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId }, change, undefined, roots.ownerPersonalWorkspaceId)).indexed;
     expect(ok).toBe(true);
 
     const row = await (d1.db as any).prepare(`SELECT content FROM entries WHERE id = 'e1'`).first();
@@ -172,8 +198,8 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     await (d1.db as any).prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'e1'`).bind(roots.ownerPersonalWorkspaceId, roots.ownerUserId).run();
 
     const change = { actorId: roots.ownerUserId, channel: "rest" as const };
-    const ok = await applyStatus("e1", "deprecated", env, change, DEFAULTS, roots.ownerPersonalWorkspaceId);
-    expect(ok).toBe(true);
+    const result = await applyStatus("e1", "deprecated", env, change, DEFAULTS, roots.ownerPersonalWorkspaceId);
+    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object) });
 
     const versions = (await (d1.db as any).prepare(`SELECT * FROM entry_versions WHERE entry_id = 'e1' ORDER BY seq`).all()).results as any[];
     expect(versions).toHaveLength(1);
@@ -340,7 +366,7 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     const bob = (await resolveIdentityFromToken(token, env))!;
 
     const history = await readEntryHistory(env, bob, "p1");
-    const events = (history?.timeline ?? []).map((e) => e.event);
+    const events = (history?.history.items.filter((i: any) => i.kind === "event") ?? []).map((e: any) => e.event);
     expect(events).not.toContain("created");
     expect(events).toContain("shared");
     expect(events).toContain("updated");
@@ -432,19 +458,25 @@ describe("the 3.7.0 d1-mock probe shape", () => {
 
     await initializeDatabase(mockEnv);
 
-    // The four new objects, in SCHEMA_OBJECTS's own declaration order, plus one harmless
-    // artifact: applySchema probes once up front and never again, so the freshly-created
-    // entry_versions table's own prior_length_utf16 column (baked into its CREATE) still gets
-    // an ALTER attempted against the stale pre-creation probe. D1 (and real SQLite) reject it as
-    // a duplicate column, caught by isDuplicateColumn — the same routine, non-fatal collision a
-    // brand-new brain hits on every cold start (test/unit/db-init.test.ts's "migrates a
-    // genuinely empty database"), not a new one Task 11 introduced.
+    // The four new objects, in SCHEMA_OBJECTS's own declaration order, plus two harmless
+    // artifacts: applySchema probes once up front and never again, so the freshly-created
+    // entry_versions and entries_trash tables' own prior_length_utf16 and nonce columns (baked
+    // into their CREATEs) still get an ALTER attempted against the stale pre-creation probe. D1
+    // (and real SQLite) reject it as a duplicate column, caught by isDuplicateColumn — the same
+    // routine, non-fatal collision a brand-new brain hits on every cold start
+    // (test/unit/db-init.test.ts's "migrates a genuinely empty database"), not a new one Task 11
+    // introduced. MOVED (T-0089.1.1, adv-final MAJOR 1): entries_trash.nonce joins
+    // prior_length_utf16 in this list.
+    // MOVED (T-0089.2.1): a 3.7.0 brain is also owed the two validity ALTERs, and nothing else.
     expect(execd.map(target)).toEqual([
       "entry_versions",
       "idx_entry_versions_entry",
       "entries_trash",
       "idx_entries_trash_deleted",
+      "entries.valid_from",
+      "entries.valid_until",
       "entry_versions.prior_length_utf16",
+      "entries_trash.nonce",
     ]);
     expect(execd[0]).toContain("prior_length_utf16"); // created already the wide way, not by a later ALTER
     expect(prepared).toEqual([expect.stringMatching(PROBE)]);

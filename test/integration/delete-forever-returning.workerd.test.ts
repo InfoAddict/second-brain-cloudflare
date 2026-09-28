@@ -15,7 +15,7 @@ import type { Env } from "../../src/env";
 afterAll(cleanTemp);
 
 describe.runIf(process.env.EVAL_WORKERD === "1")("Delete forever RETURNING on workerd", () => {
-  it("surfaces the live row's vector_ids and the trashed row's content", async () => {
+  it("surfaces the trash row's stored vector_ids and content, and never deletes a live row", async () => {
     const d1 = await openD1("workerd");
     try {
       resetDatabaseInit();
@@ -28,13 +28,24 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("Delete forever RETURNING on wo
       ).bind(id, `content ${id}`, vectorIds, roots.ownerPersonalWorkspaceId, roots.ownerUserId).run();
       const change = { actorId: roots.ownerUserId, channel: "rest" as const };
 
+      const trash = async (id: string) => env.DB.batch(trashManyStatements(env, planTrash(await readTrashCandidates(env, [id])), { reason: "forget", change, now: Date.now() }));
+      const nonce = async (id: string) => (await env.DB.prepare(`SELECT nonce FROM entries_trash WHERE id = ?`).bind(id).first<{ nonce: string }>())!.nonce;
+
+      // A live row is never deleted forever, only its trash row, pinned by nonce.
       await seed("live1", '["live1","live1-update-9"]');
-      expect(await deleteForever(env, "live1", change)).toEqual({ status: "deleted", from: "live", deletedVectors: 2 });
-      expect(deleteByIds).toHaveBeenLastCalledWith(["live1", "live1-update-9"]);
+      expect(await deleteForever(env, "live1", change, roots.ownerPersonalWorkspaceId, "")).toEqual({ status: "not_found" });
+      expect(await env.DB.prepare(`SELECT id FROM entries WHERE id = 'live1'`).first()).not.toBeNull();
+
+      // The stored vector ids (id-update-<ts>) come back through RETURNING on workerd too.
+      await env.DB.prepare(`DELETE FROM entries WHERE id = 'live1'`).run();
+      await seed("tr0", '["tr0","tr0-update-9"]');
+      await trash("tr0");
+      expect(await deleteForever(env, "tr0", change, roots.ownerPersonalWorkspaceId, await nonce("tr0"))).toEqual({ status: "deleted", deletedVectors: 2 });
+      expect(deleteByIds).toHaveBeenLastCalledWith(["tr0", "tr0-update-9"]);
 
       await seed("tr1", "[]");
-      await env.DB.batch(trashManyStatements(env, planTrash(await readTrashCandidates(env, ["tr1"])), { reason: "forget", change, now: Date.now() }));
-      expect(await deleteForever(env, "tr1", change)).toEqual({ status: "deleted", from: "trash", deletedVectors: 1 });
+      await trash("tr1");
+      expect(await deleteForever(env, "tr1", change, roots.ownerPersonalWorkspaceId, await nonce("tr1"))).toEqual({ status: "deleted", deletedVectors: 1 });
       expect(deleteByIds).toHaveBeenLastCalledWith(["tr1"]);
       const ev = await env.DB.prepare(`SELECT actor_id FROM entry_events WHERE entry_id = 'tr1' AND event = 'purged'`).first<{ actor_id: string }>();
       expect(ev?.actor_id).toBe(roots.ownerUserId);

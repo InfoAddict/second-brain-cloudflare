@@ -34,6 +34,7 @@ const EXPECTED_TOOLS = [
   "update",
   "set_status",
   "forget",
+  "undo",
   "share",
   "link",
   "unlink",
@@ -279,6 +280,16 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
       expect((await schemaFor("recall")).query?.description).toMatch(/resolve references/i);
     });
 
+    it("teaches as_of: what was true at a past date, corrections applied, a belief never the answer (T-0089.2.2)", async () => {
+      const recall = (await descriptions()).recall;
+      expect(recall).toMatch(/AS OF\./);
+      expect(recall).toMatch(/as_of/);
+      expect(recall).toMatch(/what was actually true then/i);
+      expect(recall).toMatch(/later corrections applied/i);
+      expect(recall).toMatch(/never the answer/i);
+      expect((await schemaFor("recall")).as_of?.description).toMatch(/past date/i);
+    });
+
     it("chooses on fit rather than on recency, score, or length", async () => {
       const recall = (await descriptions()).recall;
       expect(recall).toMatch(/most directly answers the question/i);
@@ -312,8 +323,12 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
     });
 
     it("stays short enough to work as a tool contract", async () => {
-      // 2200 before the Projects paragraph; that paragraph is the four-axis contract.
-      expect((await descriptions()).recall.length).toBeLessThan(2500);
+      // 2200 before the Projects paragraph; that paragraph is the four-axis contract. 2500 before the one-sentence EXPLAIN paragraph (T-0089.5.1). 3000 before the AS OF paragraph (T-0089.2.2).
+      expect((await descriptions()).recall.length).toBeLessThan(3000);
+    });
+
+    it("says when to ask for an explanation", async () => {
+      expect((await descriptions()).recall).toMatch(/explain: true when the user asks why a memory came back, or when results look wrong/);
     });
   });
 
@@ -423,7 +438,44 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
       // T-0089.1.2: forget moves to the trash, so it no longer claims to be permanent or unrecoverable.
       expect(forget).not.toMatch(/cannot be undone|permanently/i);
       expect(forget).toMatch(/trash/i);
-      expect(forget).toMatch(/removed for good after the retention period \(14 days/i);
+      expect(forget).toMatch(/retention period \(14 days/i);
+      expect(forget).toMatch(/undo brings it back/i);
+    });
+  });
+
+  describe("undo", () => {
+    it("matches the approved description word for word (T-0089.6.6, S3 adds the group sentence)", async () => {
+      const undo = (await descriptions()).undo;
+      expect(undo).toBe(
+        "Reverse the most recent change to a memory, or restore a memory from the trash. Call when the user says a change was wrong or asks to put something back. Every undo can itself be undone. Pass group (from brief) only when the user asks to undo that whole group.",
+      );
+    });
+
+    it("has no parameter that can delete permanently", async () => {
+      const schema = await schemaFor("undo");
+      expect(schema).not.toHaveProperty("permanent");
+      expect(schema).not.toHaveProperty("confirm");
+      expect(Object.keys(schema).sort()).toEqual(["group", "id", "to_version"]);
+    });
+
+    // S3 (T-0089.4.3, 5.9): group is a single string, never an array -- the schema itself is the
+    // guard against an agent trying to build an id list rather than copy a group key verbatim.
+    it("group is a single string, never an id list", async () => {
+      const schema = await schemaFor("undo");
+      expect(schema.group.type).toBe("string");
+    });
+
+    it("is honest that a hard delete is irreversible and history beyond the cap is gone", async () => {
+      const undo = (await descriptions()).undo;
+      // The top-level description only promises "the most recent change" or "from the trash" — it
+      // never claims universal reversibility, so a tier-3 hard delete (no trash row at all) and a
+      // pruned older version are already outside what it offers.
+      expect(undo).not.toMatch(/undo (any|every) (change|deletion)/i);
+      expect(undo).not.toMatch(/always (restore|recover)/i);
+      // to_version is the one parameter that could be read as reaching arbitrarily far back; its
+      // own description says plainly that pruned history is out of reach.
+      const schema = await schemaFor("undo");
+      expect(schema.to_version.description).toMatch(/age out|no longer (kept|available|reachable)/i);
     });
   });
 

@@ -85,7 +85,13 @@ describe("system-write races", () => {
     console.log("workspace race:", result.status, old, vectors.get("old"));
     expect(result.status).not.toBe("merged");
     expect(old.content).toBe("Old digest");
-    expect(vectors.get("old")?.workspace_id).toBe("other-workspace");
+    // Per-upload vector ids (T-0089.1.1): the lost merge's own upload (stamped for the old workspace) is
+    // deleted, and the row lists none of it.
+    const oldRow = await env.DB.prepare("SELECT vector_ids FROM entries WHERE id = 'old'").first() as any;
+    const mergeUpload = [...vectors.entries()].filter(([, m]) => m.parentId === "old" && String(m.content).includes("new system text")).map(([k]) => k);
+    const deletedIds = (env.VECTORIZE.deleteByIds as any).mock.calls.flatMap((c: any) => c[0]);
+    for (const id of mergeUpload) expect(deletedIds).toContain(id);
+    expect((JSON.parse(oldRow.vector_ids) as string[]).some(id => mergeUpload.includes(id))).toBe(false);
     sqlite.close();
   });
   it("moving after scoped hydration but before merge snapshot must not cross workspaces", async () => {
@@ -108,11 +114,11 @@ describe("system-write races", () => {
     sqlite.close();
   });
 
-  it("moving after scoped hydration but before contradiction snapshot must not deprecate across workspaces", async () => {
+  it("moving after scoped hydration but before contradiction snapshot must not supersede across workspaces", async () => {
     const { sqlite, env } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
     const db = env.DB as any; const prepare = db.prepare.bind(db); let raced = false;
     db.prepare = (sql: string) => {
-      if (!raced && sql.startsWith("SELECT content, tags, source, actor_id, workspace_id, vector_ids FROM entries WHERE id = ?")) {
+      if (!raced && sql.startsWith("SELECT content, tags, source, actor_id, workspace_id, vector_ids, created_at")) {
         raced = true;
         sqlite.db.prepare("UPDATE entries SET workspace_id = 'other-workspace' WHERE id = 'old'").run();
       }
@@ -120,11 +126,12 @@ describe("system-write races", () => {
     };
     const result = await captureEntry("New conflicting digest", ["synthesized"], "system", env, ctx, undefined,
       { workspaceId: "", actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
-    const old = await env.DB.prepare("SELECT workspace_id, tags FROM entries WHERE id = 'old'").first() as any;
+    const old = await env.DB.prepare("SELECT workspace_id, tags, valid_until FROM entries WHERE id = 'old'").first() as any;
     console.log("early contradiction move", result.status, old);
     expect(raced).toBe(true);
     expect(result.status).toBe("contradiction_protected");
     expect(JSON.parse(old.tags)).not.toContain("status:deprecated");
+    expect(old.valid_until).toBeNull();
     sqlite.close();
   });
 
@@ -154,11 +161,12 @@ describe("system-write races", () => {
     expect(old.contradiction_losses).toBe(0);
     expect(newcomer.contradiction_wins).toBe(0);
     expect(events).toHaveLength(0);
-    expect(vectors.get(result.id)?.tags).toEqual(JSON.parse(row.tags));
+    // Vector ids are per upload (T-0089.1.1): read the fallback draft's vector through its parentId.
+    expect([...vectors.values()].filter(m => m.parentId === result.id).pop()?.tags).toEqual(JSON.parse(row.tags));
     sqlite.close();
   });
 
-  it("successful conditional deprecation keeps counters and audit aligned", async () => {
+  it("successful conditional supersede keeps counters and audit aligned", async () => {
     const { sqlite, env } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
     const pending: Promise<unknown>[] = [];
     const awaitCtx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); } } as unknown as ExecutionContext;
@@ -169,14 +177,15 @@ describe("system-write races", () => {
     console.log("conditional capture D1 calls", sqlite.issued.length);
     expect(result.status).toBe("contradiction");
     if (result.status !== "contradiction") return;
-    const old = await env.DB.prepare("SELECT tags, vector_ids, contradiction_losses FROM entries WHERE id = 'old'").first() as any;
-    const newcomer = await env.DB.prepare("SELECT contradiction_wins FROM entries WHERE id = ?").bind(result.id).first() as any;
+    const old = await env.DB.prepare("SELECT tags, vector_ids, valid_until, contradiction_losses FROM entries WHERE id = 'old'").first() as any;
+    const newcomer = await env.DB.prepare("SELECT created_at, contradiction_wins FROM entries WHERE id = ?").bind(result.id).first() as any;
     const events = (await env.DB.prepare("SELECT event, payload FROM entry_events WHERE entry_id = 'old'").all()).results as any[];
-    expect(JSON.parse(old.tags)).toContain("status:deprecated");
-    expect(old.vector_ids).toBe("[]");
+    // T-0089.2.1: superseded, not deprecated: the digest keeps its status and vectors, and its window closes.
+    expect(JSON.parse(old.tags)).not.toContain("status:deprecated");
+    expect(old.valid_until).toBe(newcomer.created_at);
     expect(old.contradiction_losses).toBe(1);
     expect(newcomer.contradiction_wins).toBe(1);
-    expect(events.map(x => x.event)).toEqual(["status_changed"]);
+    expect(events.map(x => x.event)).toEqual(["superseded"]);
     expect(JSON.parse(events[0].payload).channel).toBe("system:digest");
     sqlite.close();
   });

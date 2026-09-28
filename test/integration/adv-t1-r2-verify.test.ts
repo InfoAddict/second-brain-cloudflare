@@ -90,7 +90,7 @@ describe("R2-1: short append does not stamp prior_length_utf16 from a stale read
       } }) };
     } } } as unknown as Env;
     await appendToEntry(racing, "p2", "", "A addition", [], "api", DEFAULTS, undefined, wctx, change, undefined, owner.personalWorkspaceId);
-    const undo = await revertEntry(env, owner, "p2", change, DEFAULTS);
+    const undo = await revertEntry(env, owner, "p2", change, DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(undo.status).toBe("reverted");
     const after = (await live("p2")).content as string;
     expect(after).not.toContain("A addition");
@@ -278,7 +278,7 @@ describe("R2-7: revertEntry writes into the author's personal memory after an un
       }
       return raw.prepare(sql);
     } } } as unknown as Env;
-    await revertEntry(racing, admin, "u9", { actorId: admin.userId, channel: "rest" }, DEFAULTS);
+    await revertEntry(racing, admin, "u9", { actorId: admin.userId, channel: "rest" }, DEFAULTS, undefined, companyWs);
     const row = await live("u9");
     expect(row.workspace_id).toBe(author.personalWorkspaceId);
     expect(row.content).toBe("v2 text");
@@ -297,7 +297,7 @@ describe("R3-2: an admin's unshare can take a member's already-private memory", 
     let fired = false;
     const racing = { ...env, DB: { ...raw, prepare(sql: string) {
       const st = raw.prepare(sql);
-      if (fired || !/^SELECT id, workspace_id, actor_id, vector_ids FROM entries WHERE id = \? AND/.test(sql)) return st;
+      if (fired || !/^SELECT id, workspace_id, actor_id, vector_ids, tags FROM entries WHERE id = \? AND/.test(sql)) return st;
       return { bind: (...a: unknown[]) => ({ first: async () => {
         const r = await st.bind(...a).first();
         fired = true;

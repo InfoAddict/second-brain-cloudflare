@@ -101,7 +101,7 @@ describe("GET /digest", () => {
     const res = await worker.fetch(req("GET", "/digest?tag=thin-tag"), env, ctx);
 
     const data = await res.json() as any;
-    expect(data.error).toBe("Could not create digest — tag may have fewer than 10 eligible entries or was recently compressed");
+    expect(data.error).toBe("Could not create digest: the tag may have fewer than 10 eligible entries, or it was recently compressed.");
     expect(data.source_count).toBe(0);
   });
 });

@@ -4,6 +4,8 @@ import { hashToken } from "./identity";
 import {
   D1_MAX_BOUND_PARAMS, MEMBER_HISTORY_CHUNK, MEMBER_HISTORY_MAX_CHUNKS, MEMBER_HISTORY_SLICE,
 } from "../constants";
+import type { OwnedVectors } from "../vectorize/batch";
+import { standingTouched } from "../standing/cache";
 
 /** Team membership, workspace, and offboarding operations. */
 
@@ -461,6 +463,8 @@ export interface RemovalProgress {
   done: boolean;
   removedEntries: number;
   vectorIds: string[];
+  /** The same ids grouped by the entry that listed them, for the parentId-checked delete (T-0089.1.1). */
+  ownedVectors: OwnedVectors[];
   /** Entry ids whose history is not fully cleaned yet (done: false only). */
   remaining?: number;
   /** Rows written by this call, for the nightly budget. */
@@ -489,7 +493,7 @@ export async function cleanupMemberData(
   env: Env,
   userId: string,
   personalWid: string,
-  opts: { rowsLeft?: number; allowOversize?: boolean } = {},
+  opts: { rowsLeft?: number; allowOversize?: boolean; ctx?: ExecutionContext } = {},
 ): Promise<RemovalProgress> {
   let rowsWritten = 0;
   const left = () => (opts.rowsLeft ?? Infinity) - rowsWritten;
@@ -546,29 +550,31 @@ export async function cleanupMemberData(
     if (n < chunk) units.shift();
   }
   if (units.length) {
-    return { done: false, removedEntries: 0, vectorIds: [], remaining: units.reduce((n, u) => n + u.ids.length, 0), rowsWritten };
+    return { done: false, removedEntries: 0, vectorIds: [], ownedVectors: [], remaining: units.reduce((n, u) => n + u.ids.length, 0), rowsWritten };
   }
 
   // Collect the doomed rows' vectors first: D1 rows go in one batch, the
   // Vectorize delete is the caller's (it may be absent entirely).
   const { results: vectorRows } = await env.DB.prepare(
-    `SELECT vector_ids FROM entries WHERE workspace_id = ? AND vector_ids != '[]'`,
-  ).bind(personalWid).all<{ vector_ids: string }>();
-  const vectorIds = (vectorRows ?? []).flatMap((r) => {
-    try { return JSON.parse(r.vector_ids) as string[]; } catch { return []; }
+    `SELECT id, vector_ids FROM entries WHERE workspace_id = ? AND vector_ids != '[]'`,
+  ).bind(personalWid).all<{ id: string; vector_ids: string }>();
+  const ownedVectors: OwnedVectors[] = (vectorRows ?? []).map((r) => {
+    try { return { entryId: r.id, vectorIds: JSON.parse(r.vector_ids) as string[] }; } catch { return { entryId: r.id, vectorIds: [] }; }
   });
+  const vectorIds = ownedVectors.flatMap((o) => [...o.vectorIds]);
 
   const count = await env.DB.prepare(
     `SELECT (SELECT COUNT(*) FROM entries WHERE workspace_id = ?1) AS entries,
             (SELECT COUNT(*) FROM entries_trash WHERE workspace_id = ?1) AS trashed,
-            (SELECT COUNT(*) FROM edges WHERE workspace_id = ?1) AS edges`,
-  ).bind(personalWid).first<{ entries: number; trashed: number; edges: number }>();
+            (SELECT COUNT(*) FROM edges WHERE workspace_id = ?1) AS edges,
+            (SELECT COUNT(*) FROM entries WHERE workspace_id = ?1 AND instr(lower(tags), '"standing:active"') > 0) AS standing`,
+  ).bind(personalWid).first<{ entries: number; trashed: number; edges: number; standing: number }>();
   const removedEntries = count?.entries ?? 0;
   // A final batch that would not fit the night's budget waits for a night when nothing else wrote,
   // unless it is the only thing left to do (the 3.7 route paid this cost at click time).
   const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0);
   if (opts.rowsLeft !== undefined && estimate > left() && !opts.allowOversize) {
-    return { done: false, removedEntries: 0, vectorIds: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten, blockedByBudget: true };
+    return { done: false, removedEntries: 0, vectorIds: [], ownedVectors: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten, blockedByBudget: true };
   }
 
   await env.DB.batch([
@@ -584,13 +590,16 @@ export async function cleanupMemberData(
       `DELETE FROM edges WHERE source_id IN (SELECT id FROM entries WHERE workspace_id = ?) OR target_id IN (SELECT id FROM entries WHERE workspace_id = ?)`,
     ).bind(personalWid, personalWid),
     // versioning: hard-delete: member removal
+    // validity: retraction-exempt: the member's own rows go together, closers and the rows they closed alike
     env.DB.prepare(`DELETE FROM entries WHERE workspace_id = ?`).bind(personalWid),
     env.DB.prepare(`DELETE FROM entries_trash WHERE workspace_id = ?`).bind(personalWid),
     env.DB.prepare(`DELETE FROM memberships WHERE user_id = ?`).bind(userId),
     env.DB.prepare(`DELETE FROM workspaces WHERE id = ?`).bind(personalWid),
   ]);
 
-  return { done: true, removedEntries, vectorIds, rowsWritten: rowsWritten + estimate };
+  // Bulk: once for the whole workspace, not per row (spec 15 2.6) — it no longer exists to narrow further.
+  if (opts.ctx && (count?.standing ?? 0) > 0) standingTouched(env, opts.ctx, await resolveConfig(env), [personalWid]);
+  return { done: true, removedEntries, vectorIds, ownedVectors, rowsWritten: rowsWritten + estimate };
 }
 
 /**

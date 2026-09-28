@@ -741,42 +741,12 @@
         gap: 9px;
       }
 
-      #recall-welcome {
-        gap: 10px;
-      }
-
       /* ============================================================
        CONVERSATION: .ex-q a user bubble, .ex-a an answer on paper
        ============================================================ */
       #recall-messages {
         gap: 14px;
         padding: 20px 20px 10px;
-      }
-
-      /* opening hero */
-      .recall-hero {
-        padding: 6px 0 2px;
-        animation: bubble-in 0.4s var(--ease) both;
-      }
-
-      .recall-hero .eyebrow {
-        font-size: 11px;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-        color: var(--accent-ink);
-        margin-bottom: 13px;
-      }
-
-      .recall-hero .hero-line {
-        font-family: var(--font-sans);
-        font-size: 19px;
-        line-height: 1.5;
-        color: var(--text-primary);
-        max-width: 26em;
-      }
-
-      .recall-hero .hero-line .hashtag {
-        color: var(--accent-ink);
       }
 
       /* The user's own message: a bubble with one square lower corner (the
@@ -812,6 +782,42 @@
 
       .ex-q .q-text {
         overflow-wrap: anywhere;
+      }
+
+      /* T7-E Task 14 (15-t7-wow-spec.md 7.3): a standing instruction that
+         fired, above the results it fired for. Accent-bordered so it reads
+         as a different KIND of thing from the answer card below it, not
+         another candidate to weigh. */
+      .standing-card {
+        max-width: 92%;
+        padding: 12px 15px;
+        background: var(--bg-card);
+        border: 1px solid var(--accent-ink);
+        border-radius: var(--r-card);
+        margin-bottom: 10px;
+        animation: bubble-in 0.36s var(--ease) both;
+      }
+
+      .standing-card-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12.5px;
+        font-weight: 600;
+        color: var(--accent-ink);
+        margin-bottom: 6px;
+      }
+
+      .standing-card-text {
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--text-primary);
+        margin-bottom: 10px;
+      }
+
+      .standing-card-actions {
+        display: flex;
+        gap: 8px;
       }
 
       /* The assistant's answer: paper, a hairline border and the system's
@@ -1182,6 +1188,21 @@
         border-color: var(--accent-ink);
       }
 
+      /* T7-E Task 14: same accent-ink treatment as the shared chip, since
+         both say "this row behaves differently" rather than naming a topic. */
+      .tag-chip--standing {
+        color: var(--accent-ink);
+        border-color: var(--accent-ink);
+      }
+
+      /* T3/T4 lane S5: --warn, not --danger - a held memory is a calm,
+         reviewable state (this is a common, expected outcome, not an error),
+         and never color alone: the icon plus "Held" label carry the meaning. */
+      .tag-chip--held {
+        color: var(--warn);
+        border-color: var(--warn);
+      }
+
       .tag-chip--hop {
         background: var(--accent-soft);
         color: var(--accent-ink);
@@ -1258,6 +1279,58 @@
         display: flex;
         flex-direction: column;
         gap: 10px;
+      }
+
+      /* T7-E Task 14: the "Standing instructions" filter's own rows -
+         content and firing state side by side, one row per item, so the
+         state is never ambiguous about which instruction it describes. */
+      .standing-filter-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--r-card);
+        margin-bottom: 10px;
+        cursor: pointer;
+      }
+
+      .standing-filter-content {
+        font-size: 14px;
+        line-height: 1.4;
+        color: var(--text-primary);
+        min-width: 0;
+      }
+
+      .standing-filter-state {
+        flex-shrink: 0;
+        font-size: 12px;
+        color: var(--text-secondary);
+        white-space: nowrap;
+      }
+
+      .standing-filter-state--active {
+        color: var(--accent-ink);
+        font-weight: 500;
+      }
+
+      /* A long state phrase (Italian's translations run longer than English's)
+         squeezed the content column so narrow it wrapped to many lines, with
+         the vertically-centered state label landing mid-way through them
+         rather than beside a single line. Below content instead, never
+         beside it, once a row is narrow enough for that to happen. */
+      @media (max-width: 480px) {
+        .standing-filter-row {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 6px;
+        }
+
+        .standing-filter-state {
+          white-space: normal;
+        }
       }
 
       #recent-list .card-content,
@@ -1707,21 +1780,6 @@
         color: var(--text-secondary);
       }
 
-      .first-run-steps {
-        margin: 14px 0 0;
-        padding-left: 20px;
-        text-align: left;
-        font-family: var(--font-sans);
-        font-size: 14px;
-        line-height: 1.65;
-        color: var(--text-secondary);
-        max-width: 460px;
-      }
-
-      .first-run-steps li {
-        margin-bottom: 8px;
-      }
-
       /* ============ BOTTOM SHEETS ============ */
       #confirm-dialog,
       #append-sheet,
@@ -1732,6 +1790,7 @@
       #stale-sheet,
       #loops-sheet,
       #due-sheet,
+      #ledger-sheet,
       #install-guide-sheet,
       #view-sheet {
         display: none;
@@ -1772,6 +1831,7 @@
       #stale-sheet.open,
       #loops-sheet.open,
       #due-sheet.open,
+      #ledger-sheet.open,
       #install-guide-sheet.open,
       #view-sheet.open {
         display: flex;
@@ -2274,6 +2334,45 @@
         box-shadow: var(--shadow-card);
       }
 
+      /* T7-E: the loops sheet's "You owe / Owed to you" tabs. Same raised-pill
+         language as .theme-toggle above, its only other segmented control. */
+      .loops-tabs {
+        display: flex;
+        gap: 3px;
+        background: var(--surface-2);
+        border-radius: var(--radius-pill);
+        padding: 3px;
+        margin-bottom: 14px;
+      }
+
+      .loops-tab {
+        flex: 1;
+        border: none;
+        background: none;
+        cursor: pointer;
+        padding: 8px 13px;
+        border-radius: var(--radius-pill);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        min-height: 36px;
+        transition:
+          background 0.18s,
+          color 0.18s;
+      }
+
+      .loops-tab.active {
+        background: var(--bg-card);
+        color: var(--accent-ink);
+        box-shadow: var(--shadow-card);
+      }
+
+      .loops-tab:focus-visible {
+        outline: 2px solid var(--accent-ink);
+        outline-offset: 2px;
+      }
+
       .menu-item {
         display: flex;
         align-items: center;
@@ -2512,6 +2611,22 @@
         color: var(--text-primary);
       }
 
+      /* Track 7 lane B's decision rows: a small localized cue, not text baked
+         into the stored label. */
+      .due-review-cue {
+        display: inline-block;
+        font-size: 10.5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--accent-ink);
+        background: var(--accent-soft);
+        border-radius: var(--r-chip);
+        padding: 2px 6px;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+
       .due-tags {
         margin-bottom: 8px;
       }
@@ -2520,6 +2635,26 @@
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
+      }
+
+      /* T7-E: the decision row's optional note, expanded by "Add a note"
+         (Design 7.2) before the outcome buttons. Never required, so it stays
+         a plain one-line field rather than the memory sheet's own textarea.
+         display:block would otherwise outrank the [hidden] attribute's own
+         UA-stylesheet rule (an element selector, lower specificity than this
+         class), so the collapsed state is scoped to :not([hidden]) instead of
+         setting display unconditionally. */
+      .due-note-input:not([hidden]) {
+        display: block;
+        width: 100%;
+        margin: 0 0 8px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-input);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        color: var(--text-primary);
+        background: transparent;
       }
 
       .pattern-row {
@@ -4167,6 +4302,7 @@
         #stale-sheet,
         #loops-sheet,
         #due-sheet,
+        #ledger-sheet,
         #install-guide-sheet,
         #view-sheet {
           align-items: center;
@@ -4675,6 +4811,21 @@
       .app-toast.visible {
         opacity: 1;
         pointer-events: auto;
+        transform: translateX(-50%) translateY(0);
+      }
+
+      /* UI review: on a narrow screen with a bottom sheet open, the toast
+         moves to the top of the viewport instead of fighting the sheet's own
+         fixed action row for the bottom edge. The safe-area offset keeps it
+         clear of a notch/status bar; env() with a fallback degrades to a
+         plain 12px on a browser that does not support it. */
+      .app-toast--top {
+        top: calc(env(safe-area-inset-top, 0px) + 12px);
+        bottom: auto;
+        transform: translateX(-50%) translateY(-12px);
+      }
+
+      .app-toast--top.visible {
         transform: translateX(-50%) translateY(0);
       }
 

@@ -82,7 +82,7 @@ describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, t
     const { DEFAULTS } = await import("../../src/config");
     const { store, vec, deleteByIds } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     await seed("u1", "Original content");
     store.set("u1", { content: "Original content" });
     const raw = env.DB as any;
@@ -106,7 +106,9 @@ describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, t
     const r = await updateEntryContent(racing, "u1", "Updated content", DEFAULTS, undefined, undefined, wctx, change, ws);
     expect(r.status).toBe("updated");
     await assertLiveVectorsMatchContent("u1", store);
-    expect(deleteByIds.mock.calls.flatMap((c: any) => c[0])).not.toContain("u1");
+    // Per-upload vector ids (T-0089.1.1): nothing this call deleted is an id the row lists now.
+    const listedU1 = JSON.parse((await live("u1")).vector_ids) as string[];
+    for (const id of listedU1) expect(deleteByIds.mock.calls.flatMap((c: any) => c[0])).not.toContain(id);
   });
 
   it("appendToEntry, long branch: a concurrent tag write loses the first attempt's oversized re-embed", async () => {
@@ -114,7 +116,7 @@ describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, t
     const { DEFAULTS } = await import("../../src/config");
     const { store, vec, deleteByIds } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     const longBody = "x".repeat(1700);
     await seed("u2", longBody);
     store.set("u2", { content: longBody });
@@ -138,7 +140,8 @@ describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, t
     // append re-embeds a chunked result, and deleting IT is correct, not the bug. "u2-chunk-0" is
     // the id both the lost first attempt and the eventual winner compute identically (same
     // content, same deterministic scheme) — a blind delete of it on the loss is the R2-2 mistake.
-    expect(deleteByIds.mock.calls.flatMap((c: any) => c[0])).not.toContain("u2-chunk-0");
+    const listedU2 = JSON.parse((await live("u2")).vector_ids) as string[];
+    for (const id of listedU2) expect(deleteByIds.mock.calls.flatMap((c: any) => c[0])).not.toContain(id);
   });
 });
 
@@ -148,7 +151,7 @@ describe("CLASS 2 structural: a thrown commit batch re-embeds the row as it stan
     const { DEFAULTS } = await import("../../src/config");
     const { store, vec } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     await seed("t1", "Original content");
     store.set("t1", { content: "Original content" });
     const raw = env.DB as any;
@@ -168,7 +171,7 @@ describe("CLASS 2 structural: a thrown commit batch re-embeds the row as it stan
     const { DEFAULTS } = await import("../../src/config");
     const { store, vec, deleteByIds } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     await seed("t2", "Original content");
     store.set("t2", { content: "Original content" });
     const raw = env.DB as any;
@@ -185,7 +188,7 @@ describe("CLASS 2 structural: a thrown commit batch re-embeds the row as it stan
     // controls and must not leave dangling: never added to any row's vector_ids (the batch never
     // committed), so nothing else will ever ask Vectorize to delete it.
     const chunkId = (vec.insert as any).mock.calls[0][0][0].id as string;
-    expect(chunkId).toMatch(/^t2-update-\d+$/);
+    expect(chunkId).toMatch(/^t2:[0-9a-f]{8}:0$/);
     expect(store.has(chunkId), `${chunkId}: orphaned in Vectorize, retireChunk did not run on the thrown batch`).toBe(false);
     expect(deleteByIds.mock.calls.flatMap((c: any) => c[0])).toContain(chunkId);
     await assertLiveVectorsMatchContent("t2", store);

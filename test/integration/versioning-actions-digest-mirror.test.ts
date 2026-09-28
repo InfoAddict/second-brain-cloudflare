@@ -94,7 +94,7 @@ describe("versioning: resolve actions (loops, still_true, due)", () => {
     expect(result.ok).toBe(true);
     const [v] = await versions("d1");
     expect(v.reason).toBe("due");
-    expect(JSON.parse(v.state)).toEqual({ when_at: 5000, when_kind: "event", when_source: "regex", when_label: "old label" });
+    expect(JSON.parse(v.state)).toEqual({ when_at: 5000, when_kind: "event", when_source: "regex", when_label: "old label", valid_from: null, valid_until: null });
     expect(JSON.parse(v.meta)).toMatchObject({ due_action: "snooze" });
   });
 
@@ -103,7 +103,7 @@ describe("versioning: resolve actions (loops, still_true, due)", () => {
     const result = await resolveEntryAction(env, ctx, owner, "d2", "clear_date", undefined, { actorId: owner.userId, channel: "rest" });
     expect(result.ok).toBe(true);
     const [v] = await versions("d2");
-    expect(JSON.parse(v.state)).toEqual({ when_at: 5000, when_kind: "due", when_source: "explicit", when_label: "call bob" });
+    expect(JSON.parse(v.state)).toEqual({ when_at: 5000, when_kind: "due", when_source: "explicit", when_label: "call bob", valid_from: null, valid_until: null });
     expect(JSON.parse(v.meta)).toEqual({ due_action: "clear" });
     expect(row("d2").when_source).toBe("cleared");
   });

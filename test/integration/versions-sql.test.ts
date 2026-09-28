@@ -125,7 +125,7 @@ describe("snapshot SQL", () => {
     await seedRow("e1", "call bob", { when_at: 500, when_kind: "due" });
     await d1.db.prepare(`UPDATE entries SET when_source = 'model', when_label = 'call bob' WHERE id = 'e1'`).run();
     await edit({ id: "e1", next: "call bob", content: { kind: "unchanged" }, reason: "due", when: { when_at: 900 } });
-    expect(JSON.parse((await versions("e1"))[0].state)).toEqual({ when_at: 500, when_kind: "due", when_source: "model", when_label: "call bob" });
+    expect(JSON.parse((await versions("e1"))[0].state)).toEqual({ when_at: 500, when_kind: "due", when_source: "model", when_label: "call bob", valid_from: null, valid_until: null });
     expect((await row("e1")).when_at).toBe(900);
   });
 

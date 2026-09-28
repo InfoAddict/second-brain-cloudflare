@@ -6,12 +6,16 @@ import { readableWorkspaces } from "../lib/scope";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { VERSIONS_SINCE_KV_KEY } from "../constants";
 
-export type VersionReason = "update" | "append" | "merge" | "replace" | "rollup" | "status" | "due" | "mirror" | "revert";
+export type VersionReason = "update" | "append" | "merge" | "replace" | "rollup" | "status" | "due" | "mirror" | "revert" | "validity";
 export type ContentChange = { kind: "unchanged" } | { kind: "suffix" } | { kind: "next"; content: string };
 /** when_* columns the batch's UPDATE writes, and to what; omitted keys are untouched. */
 export type WhenChange = Partial<{ when_at: number | null; when_kind: string | null; when_source: string | null; when_label: string | null }>;
+/** Every non-text column a version's `state` records: when_* plus the validity window (T-0089.2.1). */
+export type StateChange = WhenChange & Partial<{ valid_from: number | null; valid_until: number | null }>;
+/** meta.cause on a `validity` version (spec 14 P7). */
+export type ValidityCause = "supersede" | "explicit" | "retraction" | "unretraction" | "propagate";
 
-const WHEN_COLUMNS = ["when_at", "when_kind", "when_source", "when_label"] as const;
+const STATE_COLUMNS = ["when_at", "when_kind", "when_source", "when_label", "valid_from", "valid_until"] as const;
 
 /**
  * Dense placeholder allocator. D1 rejects a statement whose numbered placeholders have gaps
@@ -40,8 +44,11 @@ export interface SnapshotInput {
   reason: VersionReason;
   change: ChangeContext;
   content: ContentChange;
-  nextTags: string[];
+  /** "unchanged": a write that leaves tags alone (validity writes), so the no-op check needs no tag read. */
+  nextTags: string[] | "unchanged";
   nextWhen?: WhenChange;
+  /** The validity columns the batch's UPDATE writes; merged over nextWhen for the no-op check. */
+  nextState?: StateChange;
   meta?: Record<string, unknown>;
   /** This write's own prior content, read moments ago in JS — its native UTF-16 length, so a later
    * reconstruction never has to re-derive the boundary by scanning (ADV-10). Ignored (and left NULL)
@@ -79,7 +86,7 @@ const INSERT_COLUMNS = `INSERT INTO entry_versions (entry_id, workspace_id, seq,
  */
 function selectList(
   p: Params, delta: string,
-  s: { reason: VersionReason; change: ChangeContext; meta?: Record<string, unknown>; now: number; priorLengthUtf16?: number },
+  s: { reason: VersionReason; change: ChangeContext; meta?: Record<string, unknown>; metaSql?: string; now: number; priorLengthUtf16?: number },
 ): string {
   // scope-exempt: by-id: callers authorize the entry (or entries) before building the batch
   return `SELECT e.id, e.workspace_id,
@@ -88,8 +95,8 @@ function selectList(
        CASE WHEN ${delta} THEN length(e.content) ELSE NULL END,
        CASE WHEN ${delta} THEN ${s.priorLengthUtf16 !== undefined ? p.add(s.priorLengthUtf16) : "NULL"} ELSE NULL END,
        e.tags,
-       json_object('when_at', e.when_at, 'when_kind', e.when_kind, 'when_source', e.when_source, 'when_label', e.when_label),
-       ${p.add(s.change.actorId)}, ${p.add(s.change.channel)}, ${p.add(s.reason)}, ${p.add(JSON.stringify(s.meta ?? {}))},
+       json_object('when_at', e.when_at, 'when_kind', e.when_kind, 'when_source', e.when_source, 'when_label', e.when_label, 'valid_from', e.valid_from, 'valid_until', e.valid_until),
+       ${p.add(s.change.actorId)}, ${p.add(s.change.channel)}, ${p.add(s.reason)}, ${s.metaSql ?? p.add(JSON.stringify(s.meta ?? {}))},
        COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id AND v.seq = (SELECT MAX(x.seq) FROM entry_versions x WHERE x.entry_id = e.id)),
                 COALESCE(e.updated_at, e.created_at)),
        MAX(${p.add(s.now)}, COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id AND v.seq = (SELECT MAX(x.seq) FROM entry_versions x WHERE x.entry_id = e.id)),
@@ -100,24 +107,24 @@ function selectList(
 export function buildSnapshot(s: SnapshotInput): BuiltStatement {
   const p = new Params();
   const noNul = `instr(e.content, char(0)) = 0`;
-  const tags = JSON.stringify([...new Set(s.nextTags)].sort());
+  const state: StateChange | undefined = s.nextWhen || s.nextState ? { ...s.nextWhen, ...s.nextState } : undefined;
   // Allocated only when used: a placeholder that never reaches the SQL leaves a gap D1 rejects.
-  const whenSame = () => s.nextWhen
-    ? WHEN_COLUMNS.filter(c => c in s.nextWhen!).map(c => `${p.add(s.nextWhen![c as keyof WhenChange] ?? null)} IS e.${c}`).join(" AND ") || "1"
+  const stateSame = () => state
+    ? STATE_COLUMNS.filter(c => c in state).map(c => `${p.add(state[c] ?? null)} IS e.${c}`).join(" AND ") || "1"
     : "1";
-  const tagsSame = () => `${p.add(tags)} = ${SORTED_TAGS}`;
+  const tagsSame = () => s.nextTags === "unchanged" ? "1" : `${p.add(JSON.stringify([...new Set(s.nextTags)].sort()))} = ${SORTED_TAGS}`;
   let delta: string;
   let skip: () => string;
   if (s.content.kind === "next") {
     const next = p.add(s.content.content);
     delta = `${noNul} AND instr(${next}, char(0)) = 0 AND substr(${next}, 1, length(e.content)) = e.content`;
-    skip = () => `${next} IS e.content AND ${tagsSame()} AND ${whenSame()}`;
+    skip = () => `${next} IS e.content AND ${tagsSame()} AND ${stateSame()}`;
   } else if (s.content.kind === "suffix") {
     delta = noNul;
     skip = () => "0";
   } else {
     delta = noNul;
-    skip = () => `${tagsSame()} AND ${whenSame()}`;
+    skip = () => `${tagsSame()} AND ${stateSame()}`;
   }
   const list = selectList(p, delta, s);
   const conditions = [`e.id = ${p.add(s.entryId)}`];
@@ -152,6 +159,28 @@ export function buildSnapshotMany(s: SnapshotManyInput): BuiltStatement {
     sql: `${INSERT_COLUMNS}\n${list}\n WHERE e.id IN (SELECT value FROM json_each(${p.add(JSON.stringify(s.entryIds))}))`,
     bindings: p.values(),
   };
+}
+
+export interface DerivedSnapshotInput {
+  reason: VersionReason;
+  change: ChangeContext;
+  now: number;
+  /** A SQL expression over the row `e` for its meta JSON (json_object(...)); values only through p. */
+  meta: (p: Params) => string;
+  /** Everything after the snapshot's own FROM over entries (alias e): the rows to snapshot (WHERE ...); values only through p. */
+  where: (p: Params) => string;
+}
+
+/**
+ * Content-unchanged snapshots of every row `where` selects, each with its own meta, in one statement.
+ * The Track 2 retraction hooks (validity.ts) use it: the rows are found in SQL, inside the batch of
+ * the write that retracted their closer, so no read runs first. Never skips a no-op.
+ */
+export function buildDerivedSnapshot(s: DerivedSnapshotInput): BuiltStatement {
+  const p = new Params();
+  const metaSql = s.meta(p);
+  const list = selectList(p, `instr(e.content, char(0)) = 0`, { reason: s.reason, change: s.change, now: s.now, metaSql });
+  return { sql: `${INSERT_COLUMNS}\n${list}\n ${s.where(p)}`, bindings: p.values() };
 }
 
 export function snapshotManyStatement(env: Env, s: SnapshotManyInput): D1PreparedStatement {
@@ -453,10 +482,10 @@ export async function loadHistory(
 ): Promise<VersionChain> {
   const capped = Math.min(500, Math.max(1, Math.floor(limit)));
   const { results } = await env.DB.prepare(
-    // scope-checked: readability enforced per row by buildChain (D-SH). loadHistory's only
-    // caller is revertEntry (memory/undo.ts), which itself has no caller yet: POST /undo and the
-    // MCP undo tool (T-0089.6.6) are still backlog, so today this read runs from tests only, not
-    // from any live request. When T-0089.6.6 wires it up, that route resolves identity first.
+    // scope-checked: readability enforced per row by buildChain (D-SH). Callers are revertEntry
+    // (memory/undo.ts), reached from POST /undo and the MCP undo tool (T-0089.6.6), and
+    // buildEntryHistory (memory/history-view.ts, T-0101.1.1) — all resolve identity before calling
+    // it, so `reader` here is never undefined on a live request.
     `SELECT ${HISTORY_COLUMNS} FROM entry_versions WHERE entry_id = ? ORDER BY seq DESC LIMIT ?`,
   ).bind(row.id, capped).all<VersionRow>();
   const rows = results ?? [];

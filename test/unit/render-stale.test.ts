@@ -17,6 +17,12 @@ function match(partial: Partial<RecallMatch> & Pick<RecallMatch, "id">): RecallM
     isUpdate: partial.isUpdate ?? false,
     hop: partial.hop ?? 0,
     staleAsOf: partial.staleAsOf ?? false,
+    validFrom: partial.validFrom ?? agedAt,
+    validFromStated: partial.validFromStated ?? false,
+    validUntil: partial.validUntil ?? null,
+    validityState: partial.validityState ?? "current",
+    supersededBy: partial.supersededBy ?? null,
+    retractedSource: partial.retractedSource ?? false,
     ...partial,
   };
 }

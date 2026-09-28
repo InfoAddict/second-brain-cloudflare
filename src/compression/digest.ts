@@ -7,6 +7,7 @@ import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { MAX_PROJECT_PATTERNS, expandProjectFilter, projectFilterSql } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
 import { PROJECT_TAG_PREFIX } from "../tags/system";
+import { excludeHeld } from "../quarantine/tags";
 import {
   compressionEligibilitySql,
   isTopicTag,
@@ -310,8 +311,9 @@ export async function compressTag(
     const member = workspaceRows
       ? projectFilterSql(workspaceRows)
       : { clause: `tags LIKE ? ${TAG_LIKE_ESCAPE}`, bindings: [tagLikePattern(tag)] };
-    const { results: rawEntries } = await env.DB.prepare(`
-      SELECT id, content, COALESCE(updated_at, created_at) AS row_version FROM entries
+    // validity: current: a replaced memory is not digest source material (5.5)
+    const { results: rawEntriesRead } = await env.DB.prepare(`
+      SELECT id, content, tags, COALESCE(updated_at, created_at) AS row_version FROM entries
       WHERE ${member.clause}
         AND tags NOT LIKE '%"synthesized"%'
         AND tags NOT LIKE '%"auto-pattern"%'
@@ -320,10 +322,14 @@ export async function compressTag(
         AND tags NOT LIKE '%"capsule:%'
         AND tags NOT LIKE '%"capsule-slot:%'
         AND ${compressionEligibilitySql("", cfg)}
+        AND (valid_until IS NULL OR valid_until > ${Date.now()})
         AND workspace_id = ?
       ORDER BY created_at DESC
       LIMIT 50
     `).bind(...member.bindings, Date.now() - cfg.COMPRESSION_MIN_AGE_MS, workspaceId).all();
+    // Codex review class E (T-0089.4.2): a held row's content is unreviewed and must never reach
+    // synthesizeDigest's prompt, whatever score or age otherwise qualifies it as source material.
+    const rawEntries = excludeHeld(rawEntriesRead as { id: string; content: string; tags: string; row_version: number }[]);
 
     if (rawEntries.length < 10) {
       continue;
@@ -347,11 +353,12 @@ export async function compressTag(
     const result = await captureEntry(content, ["synthesized", tag], SYSTEM_SOURCE, env, ctx, cfg,
       { workspaceId, actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
 
-    // Only a blocked capture wrote nothing. Every other status (flagged, contradiction,
-    // contradiction_protected, merged, replaced) left a row that holds these sources'
-    // digest, so they roll up onto it; skipping them would re-digest the same sources
-    // into a fresh near-duplicate every cooldown.
-    if (result.status === "blocked") {
+    // Only a blocked capture (or a t7_refused one — never reachable here, a system job
+    // never passes Track 7 parameters) wrote nothing. Every other status (flagged,
+    // contradiction, contradiction_protected, merged, replaced) left a row that holds
+    // these sources' digest, so they roll up onto it; skipping them would re-digest the
+    // same sources into a fresh near-duplicate every cooldown.
+    if (result.status === "blocked" || result.status === "t7_refused") {
       continue;
     }
     // A protected draft is not a live digest: rolling sources up onto it would penalise and

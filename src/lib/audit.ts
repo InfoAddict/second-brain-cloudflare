@@ -21,13 +21,24 @@ export type EntryEventName =
   | "insight_dismissed"
   | "reverted"
   | "restored"
-  | "purged";
+  | "purged"
+  // Track 2 (T-0089.2.1, T-0089.2.4): a supersede closed this row's window, a retraction or an
+  // explicit write moved it, or a retraction flagged a memory built on the retracted one.
+  | "superseded"
+  | "validity_changed"
+  | "flagged"
+  // Track 4 (16-t3-t4-trust-spec.md 5.4, 5.6): a write's scorer quarantined it out of recall, or a
+  // person or agent released a hold via undo.
+  | "held"
+  | "released";
 
 /** Where a change came from. Recorded on every version and on the events the domain layer writes. */
 export type AuditChannel = "rest" | "mcp" | `system:${string}` | "unspecified";
 
-/** Who changed a memory and through which surface. Required on every content, tag or due-date writer. */
-export interface ChangeContext { actorId: string; channel: AuditChannel }
+/** Who changed a memory and through which surface. Required on every content, tag or due-date
+ * writer. `client` (BE-5, T-0101.5.1) is the resolved MCP client label — Claude, Cursor, and so
+ * on — set only for `channel: "mcp"`; absent for REST and system writes. */
+export interface ChangeContext { actorId: string; channel: AuditChannel; client?: string }
 
 export interface AuditEventInput {
   entryId: string;

@@ -21,6 +21,8 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     const sqlite = makeSqliteD1();
     open.push(sqlite);
     await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN updated_at INTEGER`).run();
+    await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+    await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     sqlite.seed({ id: "root", content: "atlas ledger changed", createdAt: 1000, tags: ["work"] });
     if (hops) {
       sqlite.seed({ id: "neighbor", content: "reconciliation rationale", createdAt: 1001, tags: ["work"] });
@@ -77,7 +79,10 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
       // keyword arm checks fts:ready on every non-tag recall. The answer is
       // cached per isolate for FTS_READY_CACHE_MS in both directions, so a
       // cold isolate pays one read per recall window, not per request.
-      kvReads: 2,
+      // Deliberate +1 (Track 7 lane D Task 11): readStandingCaches's own bulk KV get, one call for
+      // every readable workspace (here, the single '' legacy workspace this identity-less caller
+      // reads), started alongside distillation and paid whether or not a standing cache exists.
+      kvReads: 3,
       kvWrites: 0,
       graphSeeds: 0,
       expandedNodes: 0,

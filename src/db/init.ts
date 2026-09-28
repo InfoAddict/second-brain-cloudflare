@@ -214,12 +214,21 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // device replaces rather than duplicates it.
   push_subscriptions: `CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', endpoint_hash TEXT NOT NULL, subscription_json TEXT NOT NULL, content_free INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_ok_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0, UNIQUE(endpoint_hash))`,
   idx_push_subscriptions_workspace: `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id)`,
+  // Sampled recall log (T-0089.5.2 Part A). Additive, like push_subscriptions above: old
+  // code never reads this table and rollback is a no-op. Opt-in and sampled, so a brain
+  // that never turns RECALL_LOG on never writes a row here.
+  recall_log: `CREATE TABLE IF NOT EXISTS recall_log (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, created_at INTEGER NOT NULL, channel TEXT NOT NULL, query TEXT NOT NULL, params TEXT NOT NULL, returned_ids TEXT NOT NULL, followed_ids TEXT NOT NULL DEFAULT '[]')`,
+  idx_recall_log_ws: `CREATE INDEX IF NOT EXISTS idx_recall_log_ws ON recall_log(workspace_id, created_at DESC)`,
   // Content history and soft delete (4.0). Additive: old code never reads either table,
   // so rollback is a no-op. Never backfilled.
   entry_versions: `CREATE TABLE IF NOT EXISTS entry_versions (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT '', seq INTEGER NOT NULL, content TEXT, prior_length INTEGER, prior_length_utf16 INTEGER, tags TEXT NOT NULL, state TEXT NOT NULL DEFAULT '{}', actor_id TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', valid_from INTEGER, created_at INTEGER NOT NULL, CHECK ((content IS NULL) <> (prior_length IS NULL)), CHECK (prior_length_utf16 IS NULL OR prior_length IS NOT NULL))`,
   idx_entry_versions_entry: `CREATE UNIQUE INDEX IF NOT EXISTS idx_entry_versions_entry ON entry_versions(entry_id, seq)`,
-  entries_trash: `CREATE TABLE IF NOT EXISTS entries_trash (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', actor_id TEXT NOT NULL DEFAULT '', content TEXT NOT NULL, row_json TEXT NOT NULL, edges_json TEXT NOT NULL DEFAULT '[]', vector_ids TEXT NOT NULL DEFAULT '[]', deleted_at INTEGER NOT NULL, deleted_by TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT 'forget')`,
+  entries_trash: `CREATE TABLE IF NOT EXISTS entries_trash (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', actor_id TEXT NOT NULL DEFAULT '', content TEXT NOT NULL, row_json TEXT NOT NULL, edges_json TEXT NOT NULL DEFAULT '[]', vector_ids TEXT NOT NULL DEFAULT '[]', deleted_at INTEGER NOT NULL, deleted_by TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT 'forget', nonce TEXT NOT NULL DEFAULT '')`,
   idx_entries_trash_deleted: `CREATE INDEX IF NOT EXISTS idx_entries_trash_deleted ON entries_trash(deleted_at)`,
+  // R5 (budget audit, MINOR): listTrash scopes by workspace_id and orders by deleted_at DESC;
+  // without this, SQLite's only path is the deleted_at index above, so it walks the whole trash
+  // table filtering every row for a workspace match — see db/schema.sql for the measured cost.
+  idx_entries_trash_workspace_deleted: `CREATE INDEX IF NOT EXISTS idx_entries_trash_workspace_deleted ON entries_trash(workspace_id, deleted_at DESC)`,
   // entries_fts and its three sync triggers are NOT here (v2.2 ownership
   // rule): they are created together, in one dedicated batch, below in
   // applySchema — never as independent SCHEMA_OBJECTS/POST_COLUMN_OBJECTS
@@ -271,6 +280,11 @@ const ENTRIES_COLUMNS: Record<string, string> = {
   // the first 80 characters of raw content. NULL on the explicit and regex
   // paths, which never generate one.
   when_label: `ALTER TABLE entries ADD COLUMN when_label TEXT`,
+  // Validity windows (T-0089.2.1). Never backfilled: readers coalesce valid_from to
+  // created_at and read a NULL valid_until as "still true". No index: every validity
+  // predicate runs on rows another predicate already selected.
+  valid_from: `ALTER TABLE entries ADD COLUMN valid_from INTEGER`,
+  valid_until: `ALTER TABLE entries ADD COLUMN valid_until INTEGER`,
 };
 
 /**
@@ -340,6 +354,19 @@ const ENTRY_VERSIONS_COLUMNS: Record<string, string> = {
 };
 
 /**
+ * Columns added to `entries_trash` after the table shipped (T-0089.1.1, adv-final MAJAOR 1).
+ *
+ * nonce is a per-row identity independent of id and of SQLite's own reused rowid: additive,
+ * idempotent, never backfilled. A row already in the trash when this column arrives keeps
+ * reading '' forever — every trash mutation treats that as "cannot safely match this row",
+ * never as a value to match against, so an old row fails closed (conflict) instead of being
+ * silently trusted the way id or rowid alone were.
+ */
+const ENTRIES_TRASH_COLUMNS: Record<string, string> = {
+  nonce: `ALTER TABLE entries_trash ADD COLUMN nonce TEXT NOT NULL DEFAULT ''`,
+};
+
+/**
  * Objects that can only be built once the ALTERs above have run — an index over a
  * column that arrives via ALTER. These must NOT live in SCHEMA_OBJECTS: that loop
  * runs before the ALTERs on every pass, so on an upgraded brain (table exists,
@@ -362,6 +389,11 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
   idx_entries_task: `CREATE INDEX IF NOT EXISTS idx_entries_task ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"task"') > 0`,
   idx_entries_insight: `CREATE INDEX IF NOT EXISTS idx_entries_insight ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"auto-insight"') > 0`,
   idx_entries_stale: `CREATE INDEX IF NOT EXISTS idx_entries_stale ON entries(workspace_id, id) WHERE instr(lower(tags), '"stale:as-of"') > 0`,
+  // Track 7 (T-0089.7.1, T-0089.7.2): the decision log and standing-memory cache build each
+  // scan only their own marker. Post-column like the three above: workspace_id arrives by
+  // ALTER on older brains. Neither writes a row on upgrade — both tags are new.
+  idx_entries_ledger: `CREATE INDEX IF NOT EXISTS idx_entries_ledger ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"ledger:decision"') > 0`,
+  idx_entries_standing: `CREATE INDEX IF NOT EXISTS idx_entries_standing ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"standing:active"') > 0`,
   prompt_capsule_entry_insert: `CREATE TRIGGER IF NOT EXISTS prompt_capsule_entry_insert
     AFTER INSERT ON entries
     WHEN instr(lower(NEW.tags), '"capsule:') > 0 OR instr(lower(NEW.tags), '"capsule-slot:') > 0
@@ -434,7 +466,8 @@ const PROBE_SQL =
   `UNION ALL SELECT 'edge_column' AS kind, name, NULL AS definition FROM pragma_table_info('edges')` +
   `UNION ALL SELECT 'user_column' AS kind, name, NULL AS definition FROM pragma_table_info('users')` +
   `UNION ALL SELECT 'admin_event_column' AS kind, name, NULL AS definition FROM pragma_table_info('admin_events')` +
-  `UNION ALL SELECT 'entry_version_column' AS kind, name, NULL AS definition FROM pragma_table_info('entry_versions')`;
+  `UNION ALL SELECT 'entry_version_column' AS kind, name, NULL AS definition FROM pragma_table_info('entry_versions')` +
+  `UNION ALL SELECT 'entries_trash_column' AS kind, name, NULL AS definition FROM pragma_table_info('entries_trash')`;
 
 type ObjectKind = "table" | "index" | "trigger";
 /**
@@ -443,7 +476,7 @@ type ObjectKind = "table" | "index" | "trigger";
  * the name alone would let a user table called `idx_entries_source` stand in for the index,
  * which resolves init successfully and silently never creates it.
  */
-type ExistingSchema = { definitions: Map<string, string>; objects: Map<string, ObjectKind>; columns: Set<string>; edgeColumns: Set<string>; userColumns: Set<string>; adminEventColumns: Set<string>; entryVersionColumns: Set<string> };
+type ExistingSchema = { definitions: Map<string, string>; objects: Map<string, ObjectKind>; columns: Set<string>; edgeColumns: Set<string>; userColumns: Set<string>; adminEventColumns: Set<string>; entryVersionColumns: Set<string>; entriesTrashColumns: Set<string> };
 
 /** Which kind of object a CREATE statement makes, so the probe can be asked about it. */
 const kindOf = (ddl: string): ObjectKind => {
@@ -488,6 +521,7 @@ async function probeSchema(env: Env): Promise<ExistingSchema | null> {
   const userColumns = new Set<string>();
   const adminEventColumns = new Set<string>();
   const entryVersionColumns = new Set<string>();
+  const entriesTrashColumns = new Set<string>();
   for (const row of rows as { kind?: unknown; name?: unknown; definition?: unknown }[]) {
     if (typeof row?.name !== "string") continue;
     if (row.kind === "column") columns.add(row.name);
@@ -495,12 +529,13 @@ async function probeSchema(env: Env): Promise<ExistingSchema | null> {
     else if (row.kind === "user_column") userColumns.add(row.name);
     else if (row.kind === "admin_event_column") adminEventColumns.add(row.name);
     else if (row.kind === "entry_version_column") entryVersionColumns.add(row.name);
+    else if (row.kind === "entries_trash_column") entriesTrashColumns.add(row.name);
     else if (row.kind === "table" || row.kind === "index" || row.kind === "trigger") {
       objects.set(row.name, row.kind);
       if (typeof row.definition === "string") definitions.set(row.name, row.definition);
     }
   }
-  return { definitions, objects, columns, edgeColumns, userColumns, adminEventColumns, entryVersionColumns };
+  return { definitions, objects, columns, edgeColumns, userColumns, adminEventColumns, entryVersionColumns, entriesTrashColumns };
 }
 
 /**
@@ -722,6 +757,14 @@ async function applySchema(env: Env): Promise<boolean> {
   }
   for (const [column, ddl] of Object.entries(ENTRY_VERSIONS_COLUMNS)) {
     if (existing?.entryVersionColumns.has(column)) continue;
+    try {
+      await env.DB.exec(ddl);
+    } catch (e) {
+      if (!isDuplicateColumn(e)) throw e;
+    }
+  }
+  for (const [column, ddl] of Object.entries(ENTRIES_TRASH_COLUMNS)) {
+    if (existing?.entriesTrashColumns.has(column)) continue;
     try {
       await env.DB.exec(ddl);
     } catch (e) {

@@ -6,7 +6,7 @@ import {
 } from "../constants";
 import { writeAdminEvent } from "../lib/admin-audit";
 import { cleanupMemberData, findPendingRemoval } from "../lib/team-admin";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import { purgeTrash } from "./trash";
 
 export interface NightlyCleanupResult {
@@ -36,7 +36,7 @@ const REMOVAL_DEFERRED_KV_KEY = "cleanup:removal-deferred";
  * resume of one pending member removal with what is left. An ordinary night costs two D1
  * executions: the purge's candidate read and the removal probe.
  */
-export async function runNightlyCleanup(env: Env): Promise<NightlyCleanupResult> {
+export async function runNightlyCleanup(env: Env, ctx?: ExecutionContext): Promise<NightlyCleanupResult> {
   // Resolved only if the purge finds something old enough to need the retention window.
   let cfg: Promise<Readonly<Config>> | null = null;
   const config = () => (cfg ??= resolveConfig(env));
@@ -75,6 +75,7 @@ export async function runNightlyCleanup(env: Env): Promise<NightlyCleanupResult>
       const res = await cleanupMemberData(env, pending.userId, pending.personalWid, {
         rowsLeft: NIGHTLY_CLEANUP_ROWS - purgeRows,
         allowOversize: purgeRows === 0 || forceOversize,
+        ctx,
       });
       removalRows += res.rowsWritten ?? 0;
       try {
@@ -85,7 +86,7 @@ export async function runNightlyCleanup(env: Env): Promise<NightlyCleanupResult>
       }
       if (!res.done) break;
       if (res.vectorIds.length) {
-        try { await deleteVectorIds(env, res.vectorIds); } catch (e) { console.error("Vectorize deleteByIds failed during member removal resume (non-fatal):", e); }
+        try { await deleteEntryVectors(env, res.ownedVectors); } catch (e) { console.error("Vectorize deleteByIds failed during member removal resume (non-fatal):", e); }
       }
       await writeAdminEvent(env, {
         actorId: "",

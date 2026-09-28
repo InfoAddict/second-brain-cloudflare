@@ -78,9 +78,13 @@ export function bootstrapStandardError(deltas: readonly number[], clusterKeys: r
 }
 
 /**
- * Smallest true mean delta detectable at 80% power, two-sided 95% (z = 1.96 + 0.84): 2.8 x the standard error of the
- * mean delta, taken from the same bootstrap the gate's interval uses, so the two cannot disagree about the unit
- * (whole clusters) or the weighting (clusters count by their queries). Without keys each delta is its own cluster.
+ * Smallest true mean delta detectable at 80% power for the gate's actual decision: is the LOWER bound of a
+ * two-sided 95% bootstrap CI above zero (z = 1.96 + 0.84 = 2.8 x the standard error). That decision only reads
+ * one tail, so it is a one-sided test at its 2.5% alpha, not a two-sided 95% test in the usual sense (which would
+ * also need the upper tail to clear a symmetric bound); "two-sided 95%" here names how the CI itself is built,
+ * not the shape of the test the gate runs on it. Same bootstrap the gate's interval uses, so the two cannot
+ * disagree about the unit (whole clusters) or the weighting (clusters count by their queries). Without keys each
+ * delta is its own cluster.
  */
 export function minimumDetectableEffect(deltas: readonly number[], clusterKeys: readonly string[] = deltas.map((_, i) => String(i)), opts: BootstrapOptions = {}): number {
   return 2.8 * bootstrapStandardError(deltas, clusterKeys, opts);

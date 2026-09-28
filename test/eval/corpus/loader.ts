@@ -9,13 +9,32 @@ import { makeMemoryKV } from "../../helpers/make-env";
 import { EMBEDDING_DIMS, type ReplayAi } from "../ai-replay";
 import { openD1, type EvalD1 } from "../d1";
 import { ExactVectorize } from "../vectorize-emulator";
-import type { CorpusSpec } from "./types";
+import type { CorpusEntry, CorpusSpec } from "./types";
 
 // The classifier's own fallback (src/capture/classify.ts); 0 would switch off a live ranking signal.
 const DEFAULT_IMPORTANCE = 3;
 
 /** Index-time variant hook: a variant that changes how entries are indexed supplies its own storeEntry here. */
 export interface IndexVariant { id: string; storeEntry: typeof storeEntry }
+
+export type TemporalMetadataWriter = (env: Env, entries: readonly CorpusEntry[]) => Promise<void>;
+
+/**
+ * Writes the validity a corpus declares (validFrom, validUntil, retractedAt) into the columns the schema has today. The entries
+ * table has no valid_from/valid_until columns yet, so this is a no-op until Track 2 adds them; supersedes edges and updated_at are
+ * loaded unconditionally elsewhere. Only entries that declare validity are touched, so core corpora are never affected.
+ */
+export const applySupportedTemporalMetadata: TemporalMetadataWriter = async (env, entries) => {
+  const declared = entries.filter(e => e.validFrom !== undefined || e.validUntil !== undefined || e.retractedAt !== undefined);
+  if (!declared.length) return;
+  const columns = new Set(((await env.DB.prepare("PRAGMA table_info(entries)").all<{ name: string }>()).results ?? []).map(c => c.name));
+  if (!columns.has("valid_from") || !columns.has("valid_until")) return;
+  for (let i = 0; i < declared.length; i += 100) {
+    await env.DB.batch(declared.slice(i, i + 100).map(e =>
+      env.DB.prepare("UPDATE entries SET valid_from = ?, valid_until = ? WHERE id = ?")
+        .bind(e.validFrom ?? e.createdAt, Math.min(e.validUntil ?? Infinity, e.retractedAt ?? Infinity) === Infinity ? null : Math.min(e.validUntil ?? Infinity, e.retractedAt ?? Infinity), e.id)));
+  }
+};
 
 export interface LoadedCorpus {
   id: string;
@@ -28,6 +47,7 @@ export interface LoadedCorpus {
   replay: ReplayAi;
   workspaceOf: Map<string, string>;
   entryCount: number;
+  standingIds: string[];
   close(): Promise<void>;
 }
 
@@ -38,6 +58,8 @@ export async function loadCorpus(o: {
   embeddingModel: string;
   index?: IndexVariant;
   concurrency?: number;
+  /** Extension point for Track 2's write path: called once entries and edges are in, with the declared validity metadata. */
+  temporalMetadata?: TemporalMetadataWriter;
   onProgress?: (done: number, total: number) => void;
 }): Promise<LoadedCorpus> {
   const dimensions = EMBEDDING_DIMS[o.embeddingModel];
@@ -65,7 +87,7 @@ export async function loadCorpus(o: {
       await env.DB.batch(entries.slice(i, i + 100).map(e =>
         env.DB.prepare(
           `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, importance_score, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, ?)`,
-        ).bind(e.id, e.content, JSON.stringify(e.tags), e.source, e.createdAt, e.createdAt, e.importanceScore ?? DEFAULT_IMPORTANCE, e.workspaceId, e.actorId)));
+        ).bind(e.id, e.content, JSON.stringify(e.tags), e.source, e.createdAt, e.updatedAt ?? e.createdAt, e.importanceScore ?? DEFAULT_IMPORTANCE, e.workspaceId, e.actorId)));
     }
 
     // The real write path: chunking, embedding, Vectorize metadata, entries.vector_ids.
@@ -87,6 +109,8 @@ export async function loadCorpus(o: {
         ).bind(x.id, x.sourceId, x.targetId, x.type, x.weight, x.provenance, x.workspaceId)));
     }
 
+    await (o.temporalMetadata ?? applySupportedTemporalMetadata)(env, entries);
+
     // Parity first, then the ready flag: the index and counters must equal the table before recall trusts them.
     const parity = await env.DB.prepare(
       `SELECT (SELECT count(*) FROM entries) AS e, (SELECT count(*) FROM entries_fts) AS f, (SELECT COALESCE(SUM(n), 0) FROM entry_counts) AS c`,
@@ -101,6 +125,7 @@ export async function loadCorpus(o: {
       id: o.spec.id, dataFingerprint: o.spec.dataFingerprint, indexId: o.index?.id ?? "shipped", env, d1, vectorize, replay: o.replay,
       workspaceOf: new Map(entries.map(e => [e.id, e.workspaceId] as const)),
       entryCount: entries.length,
+      standingIds: entries.filter(e => e.tags.includes("standing")).map(e => e.id),
       close: () => d1.close(),
     };
   } catch (e) {

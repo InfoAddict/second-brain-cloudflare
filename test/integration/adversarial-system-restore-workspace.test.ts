@@ -14,7 +14,17 @@ const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p); } } as Execution
 
 afterEach(async () => { await Promise.allSettled(pending); vi.restoreAllMocks(); pending.length = 0; });
 
-it("does not clear vectors in another workspace after a lost system merge and embed failure", async () => {
+// R4-V3 (T-0089.1.1) supersedes T-0089.4.4's own fix: pinning the failure branch's clear to
+// writeCtx.workspaceId (the caller's ORIGINAL, now-stale attempt) rather than the row's CURRENT
+// workspace (read moments earlier in the very same call) is exactly what let an unshare mid-edit
+// commit a dangling vector_ids reference — the clear missed on the stale pin, yet the delete ran
+// unconditionally anyway, deleting a live vector while vector_ids still named it. Pinning to the
+// row's current workspace instead means the clear lands wherever the row actually is, so a race
+// into another workspace now empties vector_ids there (self-healing via /vectorize-pending)
+// instead of leaving a reference to a vector this call just deleted.
+// Round 6 (per-upload vector ids): a lost merge deletes only its own upload; the row's listed vectors
+// are never touched, so there is no clear to pin and no dangling reference to create.
+it("a lost system merge into a row that moved leaves the row's own vectors listed and undeleted", async () => {
   resetDatabaseInit();
   const sqlite = makeSqliteD1();
   let restoreEmbedFails = false;
@@ -52,6 +62,8 @@ it("does not clear vectors in another workspace after a lost system merge and em
   const target = sqlite.rows().find(r => r.id === "target")!;
   expect(raced).toBe(true);
   expect(target.workspace_id).toBe("other-private");
-  expect(target.vector_ids).not.toBe("[]");
+  expect(target.vector_ids).toBe('["old-vector"]');
+  const deletedIds = (env.VECTORIZE.deleteByIds as any).mock.calls.flatMap((c: any) => c[0]);
+  expect(deletedIds).not.toContain("old-vector");
   sqlite.close();
 });

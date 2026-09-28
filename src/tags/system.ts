@@ -14,6 +14,14 @@
 // additionally hides machine identifiers (`#5118`, `#fd540a`). That extra rule is
 // deliberately absent here: hiding a junk tag costs nothing, but treating it as
 // unowned would let an edit silently delete a tag that is genuinely stored.
+import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX, isHoldReasonValue, isEditedCanonicalDateValue } from "../quarantine/tags";
+import {
+  T7_TAG_PREFIXES, OWED_TO_ME_TAG,
+  STANDING_TAG_PREFIX, LEDGER_TAG_PREFIX, CONFIDENCE_TAG_PREFIX, CONFIDENCE_SOURCE_TAG_PREFIX,
+  OUTCOME_TAG_PREFIX, REVIEW_REARMS_TAG_PREFIX, COUNTERPARTY_TAG_PREFIX,
+  isStandingValue, isLedgerValue, isConfidenceValue, isConfidenceSourceValue,
+  isOutcomeValue, isReviewRearmsValue, isCounterpartyValue,
+} from "./t7";
 
 /** Prompt Capsule bookkeeping prefixes shared by selection and pipeline guards. */
 export const CAPSULE_TAG_PREFIX = "capsule:";
@@ -36,6 +44,8 @@ export const USER_EDITED_TAG = "user-edited";
  * no source is rolled up onto it. Keep in step with public/utils.js.
  */
 export const CONFLICT_HELD_TAG = "conflict-held";
+/** A memory built on one that was later retracted (T-0089.2.4): flagged for a check, never blocked. */
+export const RETRACTED_SOURCE_TAG = "retracted-source";
 
 /** Tags that make a row a system job's output, by job. */
 export const SYSTEM_JOB_TAGS = { digest: "synthesized", insight: "auto-insight" } as const;
@@ -51,13 +61,16 @@ export function withUserEditMarker(tags: string[]): string[] {
 }
 
 /** Namespaces the Worker writes and owns; `prefix:value` shaped. */
-const RESERVED_TAG_PREFIXES = [
+export const RESERVED_TAG_PREFIXES = [
   "kind:",
   "status:",
   "volatility:",
   "stale:",
   CAPSULE_TAG_PREFIX,
   CAPSULE_SLOT_TAG_PREFIX,
+  QUARANTINE_TAG_PREFIX,
+  EDITED_CANONICAL_TAG_PREFIX,
+  ...T7_TAG_PREFIXES,
 ];
 
 /**
@@ -80,7 +93,27 @@ const PIPELINE_TAG_NAMES = new Set([
   // and no system job may merge into or replace it. See markUserEdited.
   USER_EDITED_TAG,
   CONFLICT_HELD_TAG,
+  // The inbound-commitment marker (Track 7); a bare word, not a namespace (P7.3).
+  OWED_TO_ME_TAG,
+  // Built on a memory that was later retracted (Track 2 cascade, T-0089.2.4). Cleared by undo or Keep.
+  RETRACTED_SOURCE_TAG,
 ]);
+
+/**
+ * The one normalization every caller-, import- or sync-supplied tag list must pass through
+ * before it is ever written (Codex review class B, T-0089.4.2): trims each tag and drops any
+ * that become empty. A stored tag with a leading or trailing space still matches
+ * `isWorkerOwnedTag`/`isHeld` (both trim before checking), but never matches the literal LIKE
+ * patterns (NOT_HELD_SQL, INDEXABLE_SQL) those same tags drive at the SQL layer — a held row
+ * with a stray space around its `quarantine:` tag would then read as excluded in application
+ * code but still surface through a raw SQL filter. Applied at every entry point tags can first
+ * reach storage from outside this Worker's own write paths (capture already trims via
+ * normalizeCaptureInput; this covers the ones that do not): import, trash restore, and mirror
+ * sync. Idempotent, so calling it more than once on the same list is harmless.
+ */
+export function normalizeTagList(tags: readonly unknown[]): string[] {
+  return tags.filter((t): t is string => typeof t === "string").map(t => t.trim()).filter(Boolean);
+}
 
 /** True when the tag is the brain's own bookkeeping rather than the user's word. */
 export function isWorkerOwnedTag(tag: string): boolean {
@@ -89,6 +122,86 @@ export function isWorkerOwnedTag(tag: string): boolean {
   if (!t) return false;
   if (PIPELINE_TAG_NAMES.has(t)) return true;
   return RESERVED_TAG_PREFIXES.some((p) => t.startsWith(p));
+}
+
+/**
+ * Every namespace THIS contract reserved on top of the pre-4.0 set: the trust
+ * tags (quarantine:, edited-canonical:) and the Track 7 tags (standing:,
+ * ledger:, confidence:, confidence-source:, outcome:, review-rearms:,
+ * counterparty:, owed-to-me).
+ *
+ * The pre-4.0 namespaces (kind:, status:, capsule:, capsule-slot:) have a
+ * separate, pre-existing gap: a caller-supplied one is neither stripped nor
+ * rejected on capture or replacement (see the module comment above). That
+ * gap predates this contract and is unchanged here; this guard is scoped to
+ * what this contract added, so a forged `quarantine:` or `standing:active`
+ * can never enter through a caller's own tags.
+ */
+const NEW_RESERVED_PREFIXES = [QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX, ...T7_TAG_PREFIXES];
+const NEW_RESERVED_NAMES = new Set<string>([OWED_TO_ME_TAG]);
+
+/** True for a tag in a namespace this contract reserved (see NEW_RESERVED_PREFIXES above). */
+export function isNewReservedTag(tag: string): boolean {
+  if (typeof tag !== "string") return false;
+  const t = tag.trim().toLowerCase();
+  if (!t) return false;
+  if (NEW_RESERVED_NAMES.has(t)) return true;
+  return NEW_RESERVED_PREFIXES.some(p => t.startsWith(p));
+}
+
+/**
+ * Drops any caller-supplied tag in a namespace this contract reserved. Used
+ * at every write path that takes caller tags: capture (normalizeCaptureInput,
+ * src/capture/entry.ts) and replacement (applyTagReplacement below). Reports
+ * what it dropped so the caller can be told honestly.
+ */
+export function stripNewReservedTags(tags: readonly string[]): { kept: string[]; ignored: string[] } {
+  const kept: string[] = [];
+  const ignored: string[] = [];
+  for (const tag of tags) {
+    if (typeof tag !== "string") continue;
+    const t = tag.trim();
+    if (!t) continue;
+    (isNewReservedTag(t) ? ignored : kept).push(t);
+  }
+  return { kept, ignored };
+}
+
+/** One plain line naming what was not saved; empty when nothing was dropped. */
+export function reservedTagsNote(ignored: readonly string[]): string {
+  if (!ignored.length) return "";
+  return ignored.length === 1
+    ? `Left off a tag Second Brain sets itself: ${ignored[0]}.`
+    : `Left off tags Second Brain sets itself: ${ignored.join(", ")}.`;
+}
+
+/**
+ * True when a tag in a namespace this contract reserved ALSO matches the
+ * system's own value format for that namespace -- not just the prefix.
+ *
+ * Codex cross-vendor review, MINOR (T-0102): a pre-existing user tag that
+ * merely looks like one of these (a genuine `outcome:won` or
+ * `confidence:high` someone tagged before 4.0) must not vanish from the
+ * dashboard. isNewReservedTag alone is deliberately broad (prefix-only), so
+ * the write-time guard errs toward stripping; this function is stricter
+ * on purpose, for display only -- public/utils.js's isSystemTag mirrors it
+ * (utils.js cannot import TypeScript) to decide what to hide as a system
+ * chip versus show as an ordinary one. Stored data is never rewritten by
+ * either side; this only changes what the dashboard hides.
+ */
+export function isRecognizedReservedTagFormat(tag: string): boolean {
+  if (typeof tag !== "string") return false;
+  const t = tag.trim().toLowerCase();
+  if (t.startsWith(QUARANTINE_TAG_PREFIX)) return isHoldReasonValue(t.slice(QUARANTINE_TAG_PREFIX.length));
+  if (t.startsWith(EDITED_CANONICAL_TAG_PREFIX)) return isEditedCanonicalDateValue(t.slice(EDITED_CANONICAL_TAG_PREFIX.length));
+  if (t.startsWith(STANDING_TAG_PREFIX)) return isStandingValue(t.slice(STANDING_TAG_PREFIX.length));
+  if (t.startsWith(LEDGER_TAG_PREFIX)) return isLedgerValue(t.slice(LEDGER_TAG_PREFIX.length));
+  if (t.startsWith(CONFIDENCE_SOURCE_TAG_PREFIX)) return isConfidenceSourceValue(t.slice(CONFIDENCE_SOURCE_TAG_PREFIX.length));
+  if (t.startsWith(CONFIDENCE_TAG_PREFIX)) return isConfidenceValue(t.slice(CONFIDENCE_TAG_PREFIX.length));
+  if (t.startsWith(OUTCOME_TAG_PREFIX)) return isOutcomeValue(t.slice(OUTCOME_TAG_PREFIX.length));
+  if (t.startsWith(REVIEW_REARMS_TAG_PREFIX)) return isReviewRearmsValue(t.slice(REVIEW_REARMS_TAG_PREFIX.length));
+  if (t.startsWith(COUNTERPARTY_TAG_PREFIX)) return isCounterpartyValue(t.slice(COUNTERPARTY_TAG_PREFIX.length));
+  return false;
 }
 
 /** The grammar error for a project slug, or null when it is valid. One string, everywhere. */
@@ -142,7 +255,11 @@ export function hasCapsuleTag(tags: readonly unknown[]): boolean {
  * names none leaves the definition exactly as it was.
  */
 export function applyTagReplacement(existing: string[], replacement: string[]): string[] {
-  const cleaned = replacement.map((t) => t.trim()).filter(Boolean);
+  // A caller cannot forge a namespace this contract reserved through a
+  // replacement list either -- see stripNewReservedTags above. An existing,
+  // legitimately-set reserved tag still survives through `kept` below,
+  // exactly like status: or capsule: do.
+  const { kept: cleaned } = stripNewReservedTags(replacement.map((t) => t.trim()).filter(Boolean));
   const redefinesCapsule = cleaned.some(isCapsuleTag);
   const kept = existing.filter((t) => isWorkerOwnedTag(t) && !(redefinesCapsule && isCapsuleTag(t)));
   return [...kept, ...cleaned];

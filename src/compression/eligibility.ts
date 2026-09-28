@@ -6,7 +6,10 @@ import { STATUS_PREFIX } from "../memory/status";
 import { KIND_PREFIX } from "../memory/kind";
 import { VOLATILITY_PREFIX } from "../memory/volatility";
 import { STALE_AS_OF } from "../memory/stale";
+import { RETRACTED_SOURCE_TAG } from "../tags/system";
 import { CAPSULE_SLOT_TAG_PREFIX, CAPSULE_TAG_PREFIX, PROJECT_TAG_PREFIX } from "../tags/system";
+import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX } from "../quarantine/tags";
+import { T7_TAG_PREFIXES, OWED_TO_ME_TAG, STANDING_TAG } from "../tags/t7";
 
 export const COMPRESSION_IMPORTANCE_THRESHOLD = 4;   // importance >= this → protected
 export const COMPRESSION_MIN_RECALL = 2;             // recalled >= this many times → protected
@@ -39,7 +42,7 @@ export const COMPRESSION_MIN_AGE_MS = 60 * 86400000; // entries with fewer than 
  * The two directions are not symmetric. Wrongly reserving a user's `Status:Active` costs one
  * tag that never gets a digest. Wrongly admitting it costs up to 50 memories, irreversibly.
  */
-const RESERVED_TAG_PREFIXES = [
+export const RESERVED_TAG_PREFIXES = [
   STATUS_PREFIX,
   KIND_PREFIX,
   VOLATILITY_PREFIX,
@@ -47,11 +50,14 @@ const RESERVED_TAG_PREFIXES = [
   CAPSULE_SLOT_TAG_PREFIX,
   // Membership, not a topic: project digests come from the registry, not tag frequency.
   PROJECT_TAG_PREFIX,
+  QUARANTINE_TAG_PREFIX,
+  EDITED_CANONICAL_TAG_PREFIX,
+  ...T7_TAG_PREFIXES,
 ];
 const RESERVED_TAGS = [STALE_AS_OF];
 
 /** Bookkeeping tags that mark an entry's role in compression rather than its subject. */
-const NON_TOPIC_TAGS = ["synthesized", "auto-pattern", "auto-insight", "duplicate-candidate", "contradiction-resolved", "rolled-up", "user-edited", "conflict-held"];
+const NON_TOPIC_TAGS = ["synthesized", "auto-pattern", "auto-insight", "duplicate-candidate", "contradiction-resolved", "rolled-up", "user-edited", "conflict-held", OWED_TO_ME_TAG, RETRACTED_SOURCE_TAG];
 
 export function isReservedTag(tag: string): boolean {
   const t = tag.toLowerCase();
@@ -87,6 +93,13 @@ export function isTopicTagSql(column = "value"): string {
 // Returns a SQL boolean fragment for "this entry is eligible for compression".
 // Contains exactly one `?` placeholder — bind `Date.now() - COMPRESSION_MIN_AGE_MS`.
 // columnPrefix: "" for bare columns (compressTag), "entries." for json_each-joined queries.
+//
+// standing:active is excluded here, not just from the topic-tag candidate list above: a
+// standing instruction that is low-importance and never recalled would otherwise be a
+// perfectly ordinary rollup candidate under some OTHER topic tag it also carries, folding
+// its own row into the digest's synthesized text and silently ending its firing (spec 15
+// Track 7 lane D). isTopicTagSql alone only stops standing:active from being CHOSEN as the
+// tag to compress; it says nothing about a standing row being SWEPT UP by a different one.
 export function compressionEligibilitySql(
   columnPrefix = "",
   config: Readonly<Config> = DEFAULTS,
@@ -94,5 +107,6 @@ export function compressionEligibilitySql(
   const p = columnPrefix;
   return `(${p}importance_score IS NULL OR ${p}importance_score < ${config.COMPRESSION_IMPORTANCE_THRESHOLD})
       AND (${p}recall_count = 0 OR (${p}recall_count < ${config.COMPRESSION_MIN_RECALL} AND ${p}created_at < ?))
-      AND (${p}contradiction_wins IS NULL OR ${p}contradiction_wins = 0)`;
+      AND (${p}contradiction_wins IS NULL OR ${p}contradiction_wins = 0)
+      AND ${p}tags NOT LIKE '%"${STANDING_TAG}"%'`;
 }

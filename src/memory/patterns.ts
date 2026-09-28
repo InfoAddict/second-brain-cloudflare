@@ -1,3 +1,4 @@
+import { currentValidityAt, SQL_NOW_MS } from "./validity";
 // The insight review queue, in one predicate.
 //
 // The weekly insight pass proposes observations it drew from two memories, and
@@ -13,8 +14,11 @@
 // behind them. Whoever asks "what still needs a decision?" needs both halves,
 // which is why they live here together.
 
-/** Proposed by the weekly insight pass, and not yet ruled on. */
-export const PENDING_INSIGHT_SQL = `tags LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+/**
+ * Proposed by the weekly insight pass, and not yet ruled on. A replaced insight is history, not a
+ * proposal still waiting (T-0089.2.1); read against the database clock, like STALE_REVIEW_SQL.
+ */
+export const PENDING_INSIGHT_SQL = `tags LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%' AND ${currentValidityAt("", SQL_NOW_MS)}`;
 
 /**
  * Every insight the pass has ever written, whatever the reviewer did with it.

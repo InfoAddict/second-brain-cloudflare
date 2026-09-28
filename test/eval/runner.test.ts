@@ -68,6 +68,48 @@ async function corpus(dryOther?: (model: string, input: unknown) => unknown): Pr
 const run = (c: LoadedCorpus, name = "no-rerank", isolate: "warm" | "cold" = "warm") =>
   runVariant({ corpus: c, variant: getVariant(name), queries, isolate, embeddingModel: MODEL });
 
+it("uses a query's as-of clock and excludes later documents without changing the next query's clock", async () => {
+  const c = await corpus();
+  const at = EVAL_NOW - 3 * 86_400_000;
+  const dated: GoldenQuery[] = [
+    { ...queries[0], id: "dated", asOf: at },
+    { ...queries[0], id: "undated" },
+  ];
+  await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: dated, isolate: "cold", embeddingModel: MODEL });
+  expect(seen.find(call => call.params.query === "xylo alpha" && call.now === at)?.params.before).toBe(at + 1);
+  expect(seen.some(call => call.params.query === "xylo alpha" && call.now === EVAL_NOW && call.params.before === undefined)).toBe(true);
+});
+
+it("passes asOf only for a query carrying asOfParam (T-0089.2.6), ahead of B3 adding the param to recallEntries", async () => {
+  const c = await corpus();
+  const at = EVAL_NOW - 5 * 86_400_000;
+  const withAsOfParam: GoldenQuery[] = [
+    { ...queries[0], id: "with-asof-param", asOfParam: at },
+    { ...queries[0], id: "without-asof-param" },
+  ];
+  await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: withAsOfParam, isolate: "cold", embeddingModel: MODEL });
+  const withCall = seen.find(call => call.params.query === "xylo alpha" && (call.params as { asOf?: number }).asOf === at);
+  expect(withCall).toBeDefined();
+  const withoutCall = seen.find(call => call.params.query === "xylo alpha" && !("asOf" in call.params));
+  expect(withoutCall).toBeDefined();
+});
+
+it("measures standing cosine from the embedding used by recall", async () => {
+  const q: GoldenQuery = { id: "standing-probe", category: "standing", text: "arranging a flight", gold: [{ id: "st-one", grade: 2 }], viewer: "avery", tags: ["standing:yes", "split:dev"] };
+  const c = await loadCorpus({
+    spec: { id: "standing-probe", intent: "tie", entries: [{ ...row("st-one", "When arranging a flight, check the calendar"), tags: ["standing"] }], edges: [], queries: [q] },
+    backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore([]), mode: "dry" }), embeddingModel: MODEL,
+  });
+  open.push(c);
+  const report = await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: [q], isolate: "cold", embeddingModel: MODEL });
+  expect(report.standing?.memories).toBe(1);
+  expect(report.standing?.groups.yes).toBe(1);
+  // Deliberate: Task 2 (T-0089.7.1) moved the reported grid from THRESHOLD_GRID (13) to THRESHOLD_GRID_FINE (21).
+  expect(report.standing?.inputs.distilled.curve).toHaveLength(21);
+  expect(report.standing?.inputs.raw.curve).toHaveLength(21);
+  expect(report.results[0].error).toBeUndefined();
+});
+
 describe("runVariant", () => {
   it("returns per-query results with real cost fields and no cross-workspace leaks", async () => {
     const report = await run(await corpus());

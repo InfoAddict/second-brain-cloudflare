@@ -4,38 +4,62 @@ import type { ChangeContext } from "../lib/audit";
 import { writeAuditEvents } from "../lib/audit";
 import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { ensureTenantBootstrap } from "../lib/tenancy";
-import { getStatus } from "./status";
+import { getStatus, withStatus } from "./status";
 import { withUserEditMarker } from "../tags/system";
-import { deleteVectorIds } from "../vectorize/batch";
-import { restoreRowVectors, upsertEntryVectors, type StoredEntry } from "../capture/store";
+import { isHeld, QUARANTINE_TAG_PREFIX } from "../quarantine/tags";
+import { deleteEntryVectors } from "../vectorize/batch";
+import { discardUpload, upsertEntryVectors, type StoredEntry } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
-import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
+import { OWNER_WRITE_CONTEXT, readScopeWorkspaces, type WriteContext } from "../lib/scope";
+import { groupCandidates, safeClient, UNDO_GROUP_PAGE, type ChangeFamily, type DecodedGroup } from "../brief/changes";
 import type { Config } from "../config";
-import { VERSION_ROW_BUDGET_BYTES } from "../constants";
+import { VERSION_ROW_BUDGET_BYTES, UNDO_MERGE_REEMBED_INLINE } from "../constants";
 import { getTrashedEntry, restoreEntry } from "./trash";
+import { isManagedMirror, mirrorRestoreWarning } from "../integrations/mirror";
 import {
   buildCasGuard, canRevert, changesOf, loadHistory, ownSnapshotLandedSql, pruneStatement, snapshotStatement, Params,
-  type VersionRow, type WhenChange,
+  type StateChange, type VersionChain, type VersionRow, type WhenChange,
 } from "./versions";
+import { NO_VALIDITY_CHANGE, outcomeOf, retractionHook, unretractionHook, validityEvents, validityReplySuffix, type ValidityOutcome } from "./validity";
+import { standingTouched } from "../standing/cache";
 
 export type UndoResult =
-  | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true; keptIncoming?: { id: string; reason: string }[] }
-  | { status: "restored" }
+  | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true; keptIncoming?: { id: string; reason: string }[]; deferredIncoming?: number; validity: ValidityOutcome }
+  | { status: "restored"; mirrorSource?: string; validity: ValidityOutcome }
+  // Track 4 (5.6): undo on a currently-held row releases it instead of reverting a change.
+  | { status: "released" }
   | { status: "no_change" }
   | { status: "nothing_to_undo" }
-  | { status: "not_found" }
+  // `gone` is set whenever entry_events, read once and only for a caller who is on record as an
+  // actor for this id, can say truthfully why: purged after the trash retention window, hard
+  // deleted for being too large for the trash (tier 3), or deleted forever. Absent means either
+  // the id never existed, it belongs to a workspace this caller cannot read, or its cause could
+  // not be told apart from those; never a guess, and never another member's history (T-0089.6.6).
+  | { status: "not_found"; gone?: { reason: "purged" | "tier3" | "deleted_forever"; at: number } }
   | { status: "forbidden" }
+  // A version outside the caller's visible chain. Split from `pruned` below (T-0089.6.6): an
+  // author sees the whole chain, so for them this can only mean the shared-history cut hid it;
+  // never revealed, so a teammate's "no earlier version" reads the same whether or not history
+  // predating a share exists.
   | { status: "unreadable" }
+  // The requested version once existed but aged out past VERSION_KEEP. Only reachable for the
+  // entry's own author (T-0089.6.6): a non-author gets `unreadable` instead, so this never tells
+  // them apart from a version merely hidden from them.
+  | { status: "pruned"; oldestKept: number }
   | { status: "stale" }
-  | { status: "reembed_failed" };
+  | { status: "reembed_failed" }
+  // The live row is a connected mirror (T-0089.6.6): the next sync would overwrite any revert, so
+  // nothing here is written at all, unlike every other refusal above which at least read history.
+  | { status: "mirrored"; source: string };
 
 interface EntryRow {
   id: string; workspace_id: string; actor_id: string; content: string; tags: string; source: string;
   vector_ids: string; when_at: number | null; when_kind: string | null; when_source: string | null; when_label: string | null;
+  valid_from: number | null; valid_until: number | null;
   content_bytes: number; tags_bytes: number;
 }
 
-const ENTRY_COLUMNS = "id, workspace_id, actor_id, content, tags, source, vector_ids, when_at, when_kind, when_source, when_label, "
+const ENTRY_COLUMNS = "id, workspace_id, actor_id, content, tags, source, vector_ids, when_at, when_kind, when_source, when_label, valid_from, valid_until, "
   + "length(CAST(content AS BLOB)) AS content_bytes, length(CAST(tags AS BLOB)) AS tags_bytes";
 
 /** Which merge (by its version seq) a re-created row's fact came from. No content, no owner fields:
@@ -47,11 +71,19 @@ const isRecordedIncoming = (v: unknown): v is RecordedIncoming =>
 const asRecordedIncoming = (v: unknown): RecordedIncoming[] => Array.isArray(v) ? v.filter(isRecordedIncoming) : [];
 
 const sortedTagJson = (tags: string[]) => JSON.stringify([...new Set(tags)].sort());
+/** A `reason: "status"` version whose meta records a hold (5.4) — D4.1 means there is at most one
+ * per unbroken held streak, since an already-held row is never rescored. */
+function isHoldVersion(v: Pick<VersionRow, "reason" | "meta">): boolean {
+  if (v.reason !== "status") return false;
+  try { return !!(JSON.parse(v.meta || "{}") as Record<string, unknown>).hold; } catch { return false; }
+}
 const whenEqual = (a: WhenChange, b: WhenChange) =>
   (a.when_at ?? null) === (b.when_at ?? null)
   && (a.when_kind ?? null) === (b.when_kind ?? null)
   && (a.when_source ?? null) === (b.when_source ?? null)
   && (a.when_label ?? null) === (b.when_label ?? null);
+const validityEqual = (a: StateChange, b: StateChange) =>
+  (a.valid_from ?? null) === (b.valid_from ?? null) && (a.valid_until ?? null) === (b.valid_until ?? null);
 const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
 
 /**
@@ -59,12 +91,16 @@ const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
  * `UPDATE entries SET vector_ids` — a caller that already has an INSERT or UPDATE of its own to carry
  * the ids sets them there instead, so a batch never runs a second, redundant write for the same row
  * (U5, and U14's re-created rows).
+ *
+ * Budget auditor R20 (T-0089.4.2): always batchEmbeds — an undo can restore content of any size
+ * (the row's own history), so this must cost the same one-AI-call-per-batch as every other
+ * re-embed of existing content, not one call per chunk.
  */
 async function reembedForRevert(
   env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config>, writeCtx: WriteContext,
 ): Promise<StoredEntry | null> {
   try {
-    const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx);
+    const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx, { batchEmbeds: true });
     if (!stored.vectorIds.length) throw new Error("re-embed produced no vectors");
     return stored;
   } catch (e) {
@@ -75,44 +111,224 @@ async function reembedForRevert(
 }
 
 /**
+ * Codex review class A (T-0089.4.2): releasing a hold must NEVER degrade to keyword-only —
+ * `reembedForRevert`'s degrade-on-outage contract exists for an ordinary edit, where the row was
+ * already searchable and a transient Vectorize outage just means the update itself waits for
+ * indexing. A held row has NO index at all; committing its unheld state without one would leave
+ * it silently unsearchable with nothing to say so, and no signal to ever retry. Throws on every
+ * failure, Vectorize-unavailable included, so the caller always returns `reembed_failed` and the
+ * row stays held rather than releasing without ever becoming findable.
+ *
+ * Budget auditor R20 (T-0089.4.2, T-0089.5.9): always batchEmbeds — a held row can be up to the
+ * 128 KB content cap, and a single Release re-embeds all of it in one invocation. Without this,
+ * releasing one 128 KB note alone costs roughly one AI call per chunk (T-0089.5.9 measured 97 for
+ * a single note), which repeated across a night's worth of releases blew the 1,000-subrequest
+ * Workers Free ceiling; embedMany batches embedBatchSize() chunks per call instead.
+ */
+async function reembedForRelease(
+  env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config>, writeCtx: WriteContext,
+): Promise<StoredEntry> {
+  const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx, { batchEmbeds: true });
+  if (!stored.vectorIds.length) throw new Error("re-embed produced no vectors");
+  return stored;
+}
+
+/**
+ * 5.6, the "row was edited after the hold" case: the hold is not the newest version, so a plain
+ * revert-of-newest would restore the wrong thing (the tags-only state just before that LATER
+ * edit, which are still the held ones). This is a tags-only change instead: strip quarantine:*
+ * from the row's CURRENT tags (keeping whatever the later edit changed), and restore the status
+ * the hold version recorded as prior — but only if nothing else has moved the row off the draft
+ * the hold itself set. Content is never touched. Re-embeds first, fail-closed, same as leaving
+ * deprecated: a held row has no vectors, so this is the one path that adds them back.
+ */
+async function releaseHeldAfterEdit(
+  env: Env, id: string, row: EntryRow, currentTags: string[], chain: VersionChain,
+  change: ChangeContext, config: Readonly<Config>, authorizedWorkspaceId: string,
+): Promise<UndoResult> {
+  const holdVersion = chain.rows.find(isHoldVersion);
+  const priorStatus = holdVersion ? getStatus(JSON.parse(holdVersion.tags)) : null;
+  const strippedCurrent = currentTags.filter(t => typeof t === "string" && !t.trim().toLowerCase().startsWith(QUARANTINE_TAG_PREFIX));
+  const releasedTags = (getStatus(currentTags) === "draft" && priorStatus)
+    ? withStatus(strippedCurrent, priorStatus)
+    : strippedCurrent;
+  // The oldest kept version is the closest fact still on hand when the hold itself aged out of
+  // the visible chain (pruned or D-SH cut) — an approximation, stated here rather than guessed
+  // silently.
+  const ofSeq = holdVersion?.seq ?? chain.rows[chain.rows.length - 1].seq;
+
+  const embedCtx: WriteContext = { workspaceId: row.workspace_id, actorId: change.actorId || OWNER_WRITE_CONTEXT.actorId };
+  let newVectorIds: string[];
+  try {
+    // Codex review class A (T-0089.4.2): never degrades to keyword-only — see reembedForRelease.
+    newVectorIds = (await reembedForRelease(env, id, row.content, releasedTags, row.source, config, embedCtx)).vectorIds;
+  } catch (e) {
+    console.error("Release re-embed failed — the hold is left in place:", e);
+    return { status: "reembed_failed" };
+  }
+
+  const now = Date.now();
+  const casColumns = { tags: row.tags, workspace_id: authorizedWorkspaceId, vector_ids: row.vector_ids ?? null };
+  const p = new Params();
+  const tagsIdx = p.add(JSON.stringify(releasedTags));
+  const vectorIdsIdx = p.add(JSON.stringify(newVectorIds));
+  const nowIdx = p.add(now);
+  const idIdx = p.add(id);
+  let results;
+  try {
+    results = await env.DB.batch([
+      snapshotStatement(env, {
+        entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags: releasedTags,
+        meta: { release: { of_seq: ofSeq } }, now,
+        guard: p2 => buildCasGuard(p2, casColumns),
+      }),
+      // versioning: snapshot
+      env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}, vector_ids = ${vectorIdsIdx}, updated_at = MAX(${nowIdx}, COALESCE(e.updated_at, e.created_at) + 1) WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`)
+        .bind(...p.values()),
+      pruneStatement(env, id, config.VERSION_KEEP),
+    ]);
+  } catch (e) {
+    if (newVectorIds) await discardUpload(env, id, newVectorIds);
+    throw e;
+  }
+  if (changesOf(results[1]) === 0) {
+    if (newVectorIds) await discardUpload(env, id, newVectorIds);
+    return { status: "stale" };
+  }
+
+  await writeAuditEvents(env, [{
+    entryId: id, actorId: change.actorId, event: "released",
+    payload: { of_seq: ofSeq, channel: change.channel, ...(change.client ? { client: change.client } : {}) },
+  }]);
+  return { status: "released" };
+}
+
+/**
+ * Why an id is truly gone, for a caller who could have read it (T-0089.6.6). One read of its whole
+ * entry_events history (never more than a handful of rows per id): entry_events carries no
+ * workspace_id (it outlives the row it describes), so scoping falls back to something the events
+ * themselves prove: the caller's own userId appears as the actor on at least one of them, meaning
+ * they had read or write access to the row while it still existed. A teammate who never touched it
+ * gets the plain not_found instead of this, which under-informs rather than ever naming what
+ * happened to a row only someone else could see.
+ */
+async function describeGone(
+  env: Env, identity: Identity | undefined, id: string,
+): Promise<{ reason: "purged" | "tier3" | "deleted_forever"; at: number } | undefined> {
+  if (!identity) return undefined;
+  const { results } = await env.DB.prepare(
+    // scope-checked: entry_events has no workspace_id; readability is enforced below by requiring
+    // the caller's own userId among the actors this id's events recorded, not by this query.
+    `SELECT actor_id, event, payload, created_at FROM entry_events WHERE entry_id = ? ORDER BY created_at ASC, rowid ASC`,
+  ).bind(id).all<{ actor_id: string; event: string; payload: string; created_at: number }>();
+  const rows = results ?? [];
+  if (!rows.length || !rows.some(r => r.actor_id === identity.userId)) return undefined;
+  const last = rows[rows.length - 1];
+  let payload: Record<string, unknown>;
+  try { payload = JSON.parse(last.payload || "{}"); } catch { payload = {}; }
+  if (last.event === "purged" && payload.reason === "permanent") return { reason: "deleted_forever", at: last.created_at };
+  if (last.event === "purged") return { reason: "purged", at: last.created_at };
+  if (last.event === "deleted" && payload.trash === false) return { reason: "tier3", at: last.created_at };
+  return undefined;
+}
+
+/**
  * Reverses the most recent change to a memory, or a specific earlier version (`toVersion`), or
  * delegates to a trash restore when the row is gone. Design "Undo" (T-0089.1.3).
  */
 export async function revertEntry(
-  env: Env, identity: Identity | undefined, id: string, change: ChangeContext, config: Readonly<Config>, toVersion?: number,
-  /** Pins the CAS guard to the workspace the caller's own scoped read authorized (Task 15's route),
-   * rather than the read this function makes moments later. Falls back to that read when absent. */
-  authorizedWorkspaceId?: string,
+  env: Env, identity: Identity | undefined, id: string, change: ChangeContext, config: Readonly<Config>, toVersion: number | undefined,
+  /**
+   * Pins the CAS guard to the workspace the caller's own scoped read authorized (Class 1,
+   * T-0089.6.6's route and MCP tool), rather than the read this function makes moments later — an
+   * unshare landing in that gap must miss the guard, not silently authorize against wherever the
+   * row ended up. Required, not defaulted to this function's own read: a caller with no scoped
+   * read of its own has no business calling this at all. When there is no live row (the trash
+   * path), this value is never consumed — any string is fine, since restoreEntry has its own
+   * scoping through getTrashedEntry.
+   */
+  authorizedWorkspaceId: string,
+  /** Optional: the trash row the caller saw. Given, undo only restores that exact row, never reverts a live one. */
+  trashNonce?: string,
+  ctx?: ExecutionContext,
 ): Promise<UndoResult> {
   const row = await getReadableEntry(env, identity, id, ENTRY_COLUMNS) as EntryRow | null;
+  if (row && trashNonce !== undefined) return { status: "not_found" };
   if (!row) {
     // No live row: undo of a forget, if the trash row is readable (author or admin, same as forget itself).
-    const trashed = await getTrashedEntry(env, identity, id);
-    if (!trashed) return { status: "not_found" };
+    const found = await getTrashedEntry(env, identity, id);
+    const trashed = found && (trashNonce === undefined || found.nonce === trashNonce) ? found : null;
+    if (!trashed) {
+      const gone = await describeGone(env, identity, id);
+      return gone ? { status: "not_found", gone } : { status: "not_found" };
+    }
     // Same author lock POST /restore enforces (routes/entries.ts): visibility into the trash is not
     // itself permission to bring a company memory back.
     const denied = assertCanMutateEntry(identity, trashed);
     if (denied) return { status: "forbidden" };
-    const restored = await restoreEntry(env, trashed, change, config);
+    const restored = await restoreEntry(env, trashed, change, config, ctx);
     switch (restored.status) {
-      case "restored":
+      case "restored": {
         await writeAuditEvents(env, [{
           entryId: id, actorId: change.actorId, event: "restored",
           payload: { channel: change.channel, edgesRestored: restored.edgesRestored, trashedReason: restored.trashedReason },
         }]);
-        return { status: "restored" };
+        // A mirror row the integration itself removed still restores (T-0089.6.6): the integration
+        // never asked for this row back, so the next sync would remove it again unless the person
+        // also undoes it at the source.
+        let mirrorSource: string | undefined;
+        if (trashed.reason === "mirror") {
+          try {
+            const src = (JSON.parse(trashed.row_json) as { source?: string }).source;
+            if (src && (await isManagedMirror(src, env))) mirrorSource = src;
+          } catch { /* malformed row_json restores plain, same as everywhere else this is parsed */ }
+        }
+        return mirrorSource ? { status: "restored", mirrorSource, validity: restored.validity } : { status: "restored", validity: restored.validity };
+      }
       case "reembed_failed": return { status: "reembed_failed" };
       // A racing restore or purge already claimed the trash row between the read above and the batch.
       case "not_found": case "conflict": return { status: "not_found" };
     }
   }
 
+  const currentTagsList: string[] = JSON.parse(row.tags);
+  const wasHeld = isHeld(currentTagsList);
+
+  // A connected mirror row (T-0089.6.6): the next sync would overwrite any revert, so this refuses
+  // before reading history at all, the same as the edit and append routes refuse before writing.
+  // 5.6 exemption: releasing a hold changes tags only, and the next sync rewrites content, not
+  // tags, so a held mirror row can still be released.
+  if (!(wasHeld && toVersion === undefined) && await isManagedMirror(row.source, env)) {
+    return { status: "mirrored", source: row.source };
+  }
+
   const chain = await loadHistory(env, identity, { id, content: row.content }, config.VERSION_KEEP);
   if (!chain.rows.length) return { status: "nothing_to_undo" };
 
   const newest = chain.rows[0];
+
+  // 5.6: undo on a currently-held row releases it, whether or not the hold is the newest version.
+  // The common case (hold IS newest) needs no dedicated path: falling through to the ordinary
+  // revert-of-newest logic below already restores the hold version's recorded PRIOR tags (the
+  // write's own requested tags, before quarantine), which is exactly the release; the generalized
+  // needsReembed/nextVectorIds logic further down (wasHeld/willBeHeld) handles re-indexing it.
+  if (toVersion === undefined && wasHeld && !isHoldVersion(newest)) {
+    const ownerUserId = newest.workspace_id === "" ? (await ensureTenantBootstrap(env)).ownerUserId : undefined;
+    const verdict = canRevert(identity, { workspace_id: row.workspace_id, actor_id: row.actor_id }, newest, newest.seq, chain.rows.map(r => r.seq), { ownerUserId });
+    if (!verdict.ok) return { status: verdict.code };
+    return releaseHeldAfterEdit(env, id, row, currentTagsList, chain, change, config, authorizedWorkspaceId);
+  }
   const target: VersionRow | undefined = toVersion === undefined ? newest : chain.rows.find(r => r.seq === toVersion);
-  if (!target) return { status: "unreadable" };
+  if (!target) {
+    // toVersion named a seq outside the visible chain. The author sees the whole chain (up to
+    // VERSION_KEEP), so for them this can only mean it aged out (T-0089.6.6): the oldest kept
+    // version is offered instead of a bare refusal. A non-author's chain can also be cut short by
+    // the shared-history rule (D-SH), never told apart from pruning, so they get one neutral
+    // "unreadable" either way, which reveals nothing about history that might exist before the cut.
+    const isAuthor = identity !== undefined && row.actor_id !== "" && identity.userId === row.actor_id;
+    if (isAuthor) return { status: "pruned", oldestKept: chain.rows[chain.rows.length - 1].seq };
+    return { status: "unreadable" };
+  }
 
   const ownerUserId = target.workspace_id === "" ? (await ensureTenantBootstrap(env)).ownerUserId : undefined;
   const verdict = canRevert(identity, { workspace_id: row.workspace_id, actor_id: row.actor_id }, target, newest.seq, chain.rows.map(r => r.seq), { ownerUserId });
@@ -123,7 +339,7 @@ export async function revertEntry(
   const restoredTagsRaw: string[] = JSON.parse(target.tags);
   const restoredTags = isPerson ? withUserEditMarker(restoredTagsRaw) : restoredTagsRaw;
 
-  const targetState = JSON.parse(target.state || "{}") as WhenChange;
+  const targetState = JSON.parse(target.state || "{}") as StateChange;
   const targetMeta = JSON.parse(target.meta || "{}") as Record<string, unknown>;
 
   /**
@@ -185,23 +401,43 @@ export async function revertEntry(
     ? { when_at: targetState.when_at ?? null, when_kind: targetState.when_kind ?? null, when_source: targetState.when_source ?? null, when_label: targetState.when_label ?? null }
     : undefined;
 
+  // Validity (T-0089.2.1), by the same rule: a validity version, a revert that restored it (a redo),
+  // or a full rollback. Only from a state that recorded the keys: a version written before Track 2
+  // has none, and its columns are then left alone rather than read as "open since created_at".
+  const recordsValidity = "valid_until" in targetState;
+  const restoreValidity = recordsValidity && (toVersion !== undefined || target.reason === "validity" || targetMeta.validity === true);
+  const nextValidity: StateChange | undefined = restoreValidity
+    ? { valid_from: targetState.valid_from ?? null, valid_until: targetState.valid_until ?? null }
+    : undefined;
+
   const currentWhen: WhenChange = { when_at: row.when_at, when_kind: row.when_kind, when_source: row.when_source, when_label: row.when_label };
   const contentChanged = restoredContent !== row.content;
   const tagsChanged = sortedTagJson(restoredTags) !== sortedTagJson(JSON.parse(row.tags));
   const whenChanged = restoreWhen && !whenEqual(nextWhen!, currentWhen);
-  if (!contentChanged && !tagsChanged && !whenChanged) return { status: "no_change" };
+  const validityChanged = restoreValidity && !validityEqual(nextValidity!, { valid_from: row.valid_from, valid_until: row.valid_until });
+  if (!contentChanged && !tagsChanged && !whenChanged && !validityChanged) return { status: "no_change" };
 
   const currentStatus = getStatus(JSON.parse(row.tags));
   const targetStatus = getStatus(restoredTagsRaw);
   const undeprecating = currentStatus === "deprecated" && targetStatus !== "deprecated";
-  const needsReembed = targetStatus !== "deprecated" && (contentChanged || undeprecating);
+  // 5.6: "re-embed when content changes, or when the row leaves deprecated OR HELD." willBeHeld
+  // is also how a redo (undo of a release) re-enters held: it restores the release version's
+  // recorded prior tags, which are the still-held ones.
+  const willBeHeld = isHeld(restoredTagsRaw);
+  const releasing = wasHeld && !willBeHeld;
+  const needsReembed = targetStatus !== "deprecated" && !willBeHeld && (contentChanged || undeprecating || releasing);
   const embedCtx: WriteContext = { workspaceId: row.workspace_id, actorId: change.actorId || OWNER_WRITE_CONTEXT.actorId };
   const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
 
   let newVectorIds: string[] | null = null;
   if (needsReembed) {
     try {
-      newVectorIds = (await reembedForRevert(env, id, restoredContent, restoredTags, row.source, config, embedCtx))?.vectorIds ?? null;
+      // Codex review class A (T-0089.4.2): releasing a hold never degrades to keyword-only — see
+      // reembedForRelease's own reasoning. Every other reason needsReembed fires keeps the
+      // existing degrade-on-outage contract.
+      newVectorIds = releasing
+        ? (await reembedForRelease(env, id, restoredContent, restoredTags, row.source, config, embedCtx)).vectorIds
+        : (await reembedForRevert(env, id, restoredContent, restoredTags, row.source, config, embedCtx))?.vectorIds ?? null;
     } catch (e) {
       console.error("Undo re-embed failed — entry left unchanged:", e);
       return { status: "reembed_failed" };
@@ -210,15 +446,21 @@ export async function revertEntry(
   // Only set when this revert actually touched the vector index (re-embedded, or deprecating/
   // undeprecating). Otherwise leaving it out of the UPDATE, rather than rebinding this call's own
   // stale read, is what stops a re-index that lands mid-undo from being erased (U11).
-  const nextVectorIds = needsReembed ? (newVectorIds ? JSON.stringify(newVectorIds) : undefined) : targetStatus === "deprecated" ? "[]" : undefined;
+  const nextVectorIds = needsReembed ? (newVectorIds ? JSON.stringify(newVectorIds) : undefined) : (targetStatus === "deprecated" || willBeHeld) ? "[]" : undefined;
 
   const nonce = crypto.randomUUID();
   const now = Date.now();
-  // Pinned at authorization (the caller's own scoped read, or this function's read moments ago),
-  // never at the write: a share/unshare writes no version, so without this a concurrent move leaves
-  // MAX(seq) unchanged and an admin's undo can commit into the row after it left their reach (U3, R2-7).
-  const pinnedWorkspaceId = authorizedWorkspaceId ?? row.workspace_id;
-  const workspaceGuard = (guardP: Params) => buildCasGuard(guardP, { workspace_id: pinnedWorkspaceId });
+  // D-RET (T-0089.2.4): a revert into "wrong" hands back what this row had replaced; a revert out of it
+  // takes it again. Either lands only if this revert's own snapshot did.
+  const retracting = currentStatus !== "deprecated" && targetStatus === "deprecated";
+  const landed = (hp: Params) => ownSnapshotLandedSql(hp, id, newest.seq, nonce);
+  const hookRow = [{ id, workspaceId: authorizedWorkspaceId }];
+  const retraction = retracting ? retractionHook(env, hookRow, landed, change, config, now, { cascade: true }) : null;
+  const unretraction = undeprecating ? unretractionHook(env, hookRow, landed, change, config, now, { cascade: true }) : null;
+  // Pinned at authorization (the caller's own scoped read), never at the write: a share/unshare
+  // writes no version, so without this a concurrent move leaves MAX(seq) unchanged and an admin's
+  // undo can commit into the row after it left their reach (U3, R2-7, Class 1).
+  const workspaceGuard = (guardP: Params) => buildCasGuard(guardP, { workspace_id: authorizedWorkspaceId });
   const p = new Params();
   // The when_* columns are set only when this revert is actually restoring the date. Rebinding them
   // from this call's own stale JS read, as every other column here does, would silently erase a date
@@ -226,11 +468,18 @@ export async function revertEntry(
   const whenSet = restoreWhen
     ? `, when_at = ${p.add(nextWhen!.when_at ?? null)}, when_kind = ${p.add(nextWhen!.when_kind ?? null)}, when_source = ${p.add(nextWhen!.when_source ?? null)}, when_label = ${p.add(nextWhen!.when_label ?? null)}`
     : "";
+  const validitySet = restoreValidity
+    ? `, valid_from = ${p.add(nextValidity!.valid_from ?? null)}, valid_until = ${p.add(nextValidity!.valid_until ?? null)}`
+    : "";
   const vectorIdsSet = nextVectorIds !== undefined ? `, vector_ids = ${p.add(nextVectorIds)}` : "";
+  // Round 6: replacing vector_ids also pins the value this undo read, so the row decides which upload
+  // won and the old ids retired below are exactly the ones this commit replaced.
+  const readVectorIds = row.vector_ids ?? "[]";
+  const vectorIdsGuard = nextVectorIds !== undefined ? ` AND e.vector_ids = ${p.add(readVectorIds)}` : "";
   // updated_at clamped strictly past its own previous value (the digest mark guard trusts it
   // plus byte length; a same-millisecond, same-length revert with no clamp would leave it unmoved).
   // versioning: snapshot
-  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = MAX(${p.add(now)}, COALESCE(e.updated_at, e.created_at) + 1)${vectorIdsSet}${whenSet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
+  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = MAX(${p.add(now)}, COALESCE(e.updated_at, e.created_at) + 1)${vectorIdsSet}${whenSet}${validitySet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)}${vectorIdsGuard} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
   // Embedded before the batch, like the main content above, so the insert below can carry its own
   // vector_ids the way restoreEntry does (U14). Each insert is guarded by the SAME "this request's own
@@ -241,15 +490,26 @@ export async function revertEntry(
   const insertedAt = Date.now();
   const incomingInserts: { id: string; vectorIds: string[]; actorId: string }[] = [];
   const incomingStatements: D1PreparedStatement[] = [];
+  let deferredIncoming = 0;
   for (const create of mergesToCreate) {
     const incoming = String(create.meta.incoming ?? "");
     const incomingTags: string[] = Array.isArray(create.meta.incomingTags) ? create.meta.incomingTags as string[] : [];
     const incomingSource = String(create.meta.incomingSource ?? row.source);
     let vectorIds: string[] = [];
-    try {
-      vectorIds = (await reembedForRevert(env, create.id, incoming, incomingTags, incomingSource, config, { workspaceId: row.workspace_id, actorId: create.merge.actor_id }))?.vectorIds ?? [];
-    } catch (e) {
-      console.error("Undo-merge re-embed failed (non-fatal):", e);
+    // Only the first UNDO_MERGE_REEMBED_INLINE re-created rows are embedded in this request: a
+    // to_version rollback can cross hundreds of merges at once (up to VERSION_KEEP of them), and
+    // one AI plus one Vectorize call per row would blow past the per-invocation service subrequest
+    // limit long before D1 or KV even enter the count. The rest still get their own row here (the
+    // fact is never lost), just with vector_ids left at '[]', same as POST /import defers embedding
+    // (routes/entries.ts) — POST /vectorize-pending backfills them afterward.
+    if (incomingInserts.length < UNDO_MERGE_REEMBED_INLINE) {
+      try {
+        vectorIds = (await reembedForRevert(env, create.id, incoming, incomingTags, incomingSource, config, { workspaceId: row.workspace_id, actorId: create.merge.actor_id }))?.vectorIds ?? [];
+      } catch (e) {
+        console.error("Undo-merge re-embed failed (non-fatal):", e);
+      }
+    } else {
+      deferredIncoming++;
     }
     incomingInserts.push({ id: create.id, vectorIds, actorId: create.merge.actor_id });
     const ip = new Params();
@@ -268,10 +528,11 @@ export async function revertEntry(
   // above already carries — no extra statement — the same margin the merge writer uses (1024 bytes).
   const contentIsFullCopy = contentChanged
     && !(restoredContent.startsWith(row.content) && !row.content.includes("\0") && !restoredContent.includes("\0"));
-  const projectedStateBytes = utf8Bytes(JSON.stringify({ when_at: row.when_at, when_kind: row.when_kind, when_source: row.when_source, when_label: row.when_label }));
+  const projectedStateBytes = utf8Bytes(JSON.stringify({ when_at: row.when_at, when_kind: row.when_kind, when_source: row.when_source, when_label: row.when_label, valid_from: row.valid_from, valid_until: row.valid_until }));
   const metaCandidate = {
     nonce, target_seq: target.seq, reverted_reason: target.reason,
     ...(restoreWhen ? { when: true } : {}),
+    ...(restoreValidity ? { validity: true } : {}),
     ...(recreatedForMeta.length ? { recreated_incoming: recreatedForMeta } : {}),
   };
   const projectedRowBytes = (contentIsFullCopy ? row.content_bytes : 0) + row.tags_bytes + projectedStateBytes + utf8Bytes(JSON.stringify(metaCandidate)) + 1024;
@@ -291,7 +552,7 @@ export async function revertEntry(
       snapshotStatement(env, {
         entryId: id, reason: "revert", change,
         content: contentChanged ? { kind: "next", content: restoredContent } : { kind: "unchanged" },
-        nextTags: restoredTags, nextWhen, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
+        nextTags: restoredTags, nextWhen, nextState: nextValidity, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
         // Recorded whenever this revert restores the date, so a later undo of THIS version (a redo)
         // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
         // recreated_incoming carries only ids and which merge each belongs to (never content, never
@@ -303,17 +564,17 @@ export async function revertEntry(
       env.DB.prepare(updateSql).bind(...p.values()),
       ...incomingStatements,
       pruneStatement(env, id, config.VERSION_KEEP),
+      ...(retraction?.statements ?? []),
+      ...(unretraction?.statements ?? []),
     ]);
   } catch (e) {
-    // The re-embed above already pointed the row's deterministic vector ids at the restored text; a
-    // thrown batch means the row itself never committed, so the index and the row would disagree
-    // until the next write touched it. Re-embed from the row as it actually stands (U6) — never
-    // delete under those ids, which are the row's live vectors (the rule ADV proved broken elsewhere).
-    if (needsReembed) await restoreRowVectors(env, id, oldVectorIds, newVectorIds ?? [], row.source, config, embedCtx);
+    // A thrown batch: this undo's own upload never became the row's (ids are per upload, T-0089.1.1),
+    // so delete it; the row's listed vectors were never touched.
+    if (needsReembed) await discardUpload(env, id, newVectorIds);
     // The incoming rows never landed either (same batch, same guard, and now nothing to undo — the
-    // INSERTs are gone with the rest of the transaction). Their vectors are fresh, deterministic ids
-    // under no row, not a live row's own, so cleaning them up here breaks no rule (U18).
-    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteVectorIds(env, ins.vectorIds); } catch (e2) { console.error("Orphan vector cleanup failed (non-fatal):", e2); } } }
+    // INSERTs are gone with the rest of the transaction). Their vectors are fresh ids under no row,
+    // not a live row's own, so cleaning them up here breaks no rule (U18).
+    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteEntryVectors(env, [{ entryId: ins.id, vectorIds: ins.vectorIds }]); } catch (e2) { console.error("Orphan vector cleanup failed (non-fatal):", e2); } } }
     throw e;
   }
 
@@ -324,32 +585,49 @@ export async function revertEntry(
     const stillThere = await env.DB.prepare(`SELECT 1 AS ok FROM entries WHERE id = ?`).bind(id).first();
     if (!stillThere) {
       // The row is truly gone: the fresh vectors this undo wrote describe a row nothing owns now.
-      if (newVectorIds) { try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
+      if (newVectorIds) { try { await deleteEntryVectors(env, [{ entryId: id, vectorIds: newVectorIds }]); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
       // The incoming inserts share the UPDATE's own guard, so they missed too: nothing landed for
       // them either, and their fresh vectors are equally orphaned.
-      for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteVectorIds(env, ins.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
+      for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteEntryVectors(env, [{ entryId: ins.id, vectorIds: ins.vectorIds }]); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
       return { status: "not_found" };
     }
-    // The row is still there, committed by someone else. Never delete under the deterministic ids
-    // this undo re-embedded onto (the class rule R2-2 proved broken elsewhere): re-embed from the row
-    // as it actually stands instead, which restoreRowVectors does under those same ids.
-    if (needsReembed) await restoreRowVectors(env, id, oldVectorIds, newVectorIds ?? [], row.source, config, embedCtx);
+    // The row is still there, committed by someone else: its vectors are its own, and this undo's
+    // upload (per-upload ids) is deleted without touching them.
+    if (needsReembed) await discardUpload(env, id, newVectorIds);
     // Same shared guard, same miss: the incoming inserts landed nowhere, so their vectors are orphans.
-    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteVectorIds(env, ins.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
+    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteEntryVectors(env, [{ entryId: ins.id, vectorIds: ins.vectorIds }]); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
     return { status: "stale" };
   }
 
-  if (targetStatus === "deprecated" || needsReembed) {
-    const stale = targetStatus === "deprecated" ? oldVectorIds : oldVectorIds.filter(v => !(newVectorIds ?? []).includes(v));
-    try { if (stale.length) await deleteVectorIds(env, stale); } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
+  if (targetStatus === "deprecated" || willBeHeld || needsReembed) {
+    const stale = (targetStatus === "deprecated" || willBeHeld) ? oldVectorIds : oldVectorIds.filter(v => !(newVectorIds ?? []).includes(v));
+    try { if (stale.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds: stale }]); } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
   }
 
-  await writeAuditEvents(env, [{
+  const hookOffset = 3 + incomingStatements.length;
+  const hookResults = [retraction, unretraction].filter(h => h !== null).map(h => h!.read(results, hookOffset));
+  // 5.6: releasing a hold (the common case, hold is the newest version) gets its OWN event —
+  // "released", not "reverted" — so the changes line (5.8) and the agent-facing copy (5.5) can
+  // tell the two apart without inspecting tags.
+  await writeAuditEvents(env, [releasing ? {
+    entryId: id, actorId: change.actorId, event: "released",
+    payload: { of_seq: target.seq, channel: change.channel, ...(change.client ? { client: change.client } : {}) },
+  } : {
     entryId: id, actorId: change.actorId, event: "reverted",
     payload: { target_seq: target.seq, reverted_reason: target.reason, channel: change.channel },
-  }]);
+  }, ...validityEvents(change, ...hookResults)]);
 
-  const result: UndoResult = { status: "reverted", targetSeq: target.seq };
+  // Release (undo of a quarantine hold) also touches: spec 15 2.13 calls it out by name, and the
+  // gate is the same either way — whatever this revert restores the row TO is what decides.
+  if (ctx) {
+    const priorTags: string[] = (() => { try { return JSON.parse(row.tags); } catch { return []; } })();
+    if (priorTags.includes("standing:active") || restoredTags.includes("standing:active")) {
+      standingTouched(env, ctx, config, [row.workspace_id ?? ""]);
+    }
+  }
+  if (releasing) return { status: "released" };
+
+  const result: UndoResult = { status: "reverted", targetSeq: target.seq, validity: hookResults.length ? outcomeOf(...hookResults) : NO_VALIDITY_CHANGE };
 
   // Undo of a merge or replace re-creates the incoming memory it absorbed, as its own row — never
   // through captureEntry, which could merge it right back in. Fires for every merge a to_version
@@ -368,6 +646,235 @@ export async function revertEntry(
     (result as { recreatedIncomingId?: string }).recreatedIncomingId = incomingInserts[0].id;
   }
   if (keptIncoming.length) (result as { keptIncoming?: { id: string; reason: string }[] }).keptIncoming = keptIncoming;
+  if (deferredIncoming) (result as { deferredIncoming?: number }).deferredIncoming = deferredIncoming;
 
   return result;
+}
+
+// ── Undo/release a group (S3, 5.9) ──────────────────────────────────────────
+//
+// Membership is re-derived from the reader's own scoped read on every call
+// (changes.ts's groupCandidates), never trusted from the client. Paging is
+// stateless: UNDO_GROUP_PAGE members are taken from whichever candidates are
+// still "actionable" this call, where a member drops out of "actionable" the
+// moment its own current state shows it was already handled --
+//   - held family: it is no longer held (isHeld(tags) is false);
+//   - status/edit/revert families: its newest version's created_at, actor and
+//     client no longer match the group's own recorded actor/client/window --
+//     which is also true of a genuine third-party edit, so those two cases are
+//     told apart by whether the newest version was written by the identity now
+//     calling undo/group, after the window closed, with reason "revert" or a
+//     release's "status" (5.6) -- i.e. whether it looks like OUR own earlier
+//     page's write. A third-party edit that lands between two pages of the
+//     SAME undo/group call, before this heuristic's page reaches it, is
+//     reported as changed_since once and then (since nothing is written for
+//     it) can be re-offered on a later call if the caller keeps going past
+//     `remaining: 0` -- accepted: no write is ever duplicated or lost, only a
+//     rare race's status line could repeat.
+export interface UndoGroupResult {
+  results: { id: string; result: string }[];
+  done: boolean;
+  remaining: number;
+  group: string;
+  capped: boolean;
+  /** The group's total member count (after the UNDO_GROUP_MAX cap), stable across calls. */
+  total: number;
+  family: ChangeFamily;
+}
+
+function resultForStatus(status: UndoResult["status"]): string {
+  return status;
+}
+
+async function resolveHeldGroup(
+  env: Env, identity: Identity, ids: string[], change: ChangeContext, config: Readonly<Config>,
+  ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
+): Promise<UndoGroupResult> {
+  const { results: rows } = await env.DB.prepare(
+    // scope-checked: workspace_id IN (?2) narrows to the reader's own scope; ids already come
+    // from groupCandidates's own reader-scoped derivation, so this is defense in depth, not the
+    // only check.
+    `SELECT id, tags, workspace_id FROM entries WHERE id IN (SELECT value FROM json_each(?1)) AND workspace_id IN (SELECT value FROM json_each(?2))`,
+  ).bind(JSON.stringify(ids), JSON.stringify(scope)).all<{ id: string; tags: string; workspace_id: string }>();
+  const byId = new Map(rows.map(r => [r.id, r]));
+
+  const actionable = ids.filter(id => {
+    const row = byId.get(id);
+    if (!row) return false;
+    try { return isHeld(JSON.parse(row.tags) as string[]); } catch { return false; }
+  });
+  const page = actionable.slice(0, UNDO_GROUP_PAGE);
+
+  const results: { id: string; result: string }[] = [];
+  for (const id of page) {
+    const row = byId.get(id)!;
+    const outcome = await revertEntry(env, identity, id, change, config, undefined, row.workspace_id, undefined, ctx);
+    results.push({ id, result: resultForStatus(outcome.status) });
+  }
+  const remaining = actionable.length - page.length;
+  return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: "held" };
+}
+
+async function resolveTrashGroup(
+  env: Env, identity: Identity, ids: string[], change: ChangeContext, config: Readonly<Config>,
+  ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
+): Promise<UndoGroupResult> {
+  const { results: rows } = await env.DB.prepare(
+    // scope-checked: workspace_id IN (?2) narrows to the reader's own scope; ids already come
+    // from groupCandidates's own reader-scoped derivation, so this is defense in depth, not the
+    // only check.
+    `SELECT id, workspace_id, nonce FROM entries_trash WHERE id IN (SELECT value FROM json_each(?1)) AND workspace_id IN (SELECT value FROM json_each(?2))`,
+  ).bind(JSON.stringify(ids), JSON.stringify(scope)).all<{ id: string; workspace_id: string; nonce: string }>();
+  const byId = new Map(rows.map(r => [r.id, r]));
+  const actionable = ids.filter(id => byId.has(id));
+  const page = actionable.slice(0, UNDO_GROUP_PAGE);
+
+  const results: { id: string; result: string }[] = [];
+  for (const id of page) {
+    const row = byId.get(id)!;
+    const outcome = await revertEntry(env, identity, id, change, config, undefined, row.workspace_id, row.nonce, ctx);
+    results.push({ id, result: resultForStatus(outcome.status) });
+  }
+  const remaining = actionable.length - page.length;
+  return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: "trash" };
+}
+
+interface ChainRow {
+  seq: number; meta: string; reason: string; channel: string; actor_id: string; created_at: number; workspace_id: string;
+}
+
+type MemberVerdict =
+  | { kind: "pending"; toVersion: number; workspaceId: string }
+  | { kind: "done" }
+  | { kind: "changed_since" }
+  | { kind: "not_found" };
+
+/**
+ * Whether this one memory is still owed the group's own revert, told from a stable, seq-based
+ * cursor rather than a timestamp (reviewer MINOR: an undo landing in the group's own final
+ * millisecond used to read as still-eligible on the next page, and paging repeated it instead of
+ * advancing). `target_seq` is the "before this version" seq a plain revert always records
+ * (metaCandidate above); a later version carrying `reason: "revert"` and that exact target_seq is
+ * unambiguous proof this exact group-qualifying change was already undone, whatever time it
+ * landed at. Nothing happening after the qualifying version at all (newest === toVersion) is
+ * "pending"; anything else that happened since, and is not that proof, is a third party's edit
+ * (reviewer MAJOR, R21 follow-up: the qualifying version's own actor must equal the group's own
+ * actor, or a same-window edit by someone else using the same client label could be reverted).
+ */
+async function classifyMember(env: Env, id: string, decoded: DecodedGroup, cfg: Readonly<Config>, scope: string[]): Promise<MemberVerdict> {
+  const { results } = await env.DB.prepare(
+    // scope-checked: en.workspace_id IN (?2) narrows to the reader's own scope; `id` also already
+    // comes from groupCandidates's own reader-scoped derivation, so this is defense in depth.
+    `SELECT ev.seq, ev.meta, ev.reason, ev.channel, ev.actor_id, ev.created_at, en.workspace_id
+     FROM entry_versions ev JOIN entries en ON en.id = ev.entry_id
+     WHERE ev.entry_id = ?1 AND en.workspace_id IN (SELECT value FROM json_each(?2))
+     ORDER BY ev.seq ASC LIMIT 500`,
+  ).bind(id, JSON.stringify(scope)).all<ChainRow>();
+  if (!results.length) return { kind: "not_found" };
+
+  let toVersion: number | undefined;
+  let consumed = false;
+  for (const r of results) {
+    let meta: Record<string, unknown> = {};
+    try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no client / no target_seq */ }
+    if (toVersion === undefined) {
+      if (r.created_at >= decoded.start && r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
+        toVersion = r.seq;
+      }
+      continue;
+    }
+    if (r.reason === "revert" && meta.target_seq === toVersion) consumed = true;
+  }
+  if (toVersion === undefined) return { kind: "not_found" };
+  if (consumed) return { kind: "done" };
+  const newest = results[results.length - 1];
+  return newest.seq === toVersion ? { kind: "pending", toVersion, workspaceId: newest.workspace_id } : { kind: "changed_since" };
+}
+
+async function resolveVersionGroup(
+  env: Env, identity: Identity, decoded: DecodedGroup, ids: string[], change: ChangeContext, config: Readonly<Config>,
+  ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
+): Promise<UndoGroupResult> {
+  const results: { id: string; result: string }[] = [];
+  let doneCount = 0;
+  let i = 0;
+  for (; i < ids.length && results.length < UNDO_GROUP_PAGE; i++) {
+    const verdict = await classifyMember(env, ids[i], decoded, config, scope);
+    if (verdict.kind === "done") { doneCount++; continue; }
+    if (verdict.kind === "not_found" || verdict.kind === "changed_since") { results.push({ id: ids[i], result: verdict.kind }); continue; }
+    const outcome = await revertEntry(env, identity, ids[i], change, config, verdict.toVersion, verdict.workspaceId, undefined, ctx);
+    results.push({ id: ids[i], result: resultForStatus(outcome.status) });
+  }
+  // Everything from i onward is still unexamined and stays actionable for the next call.
+  const remaining = ids.length - doneCount - results.length;
+  return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: decoded.family };
+}
+
+/**
+ * "Undo all" / "release all" (5.9). Returns null when `groupKeyStr` does not decode to a group
+ * shape at all (a malformed or foreign string) -- the caller renders that as `not_found`, the
+ * same neutral response an unreadable id gets elsewhere in this file.
+ */
+export async function undoGroup(
+  env: Env, identity: Identity, groupKeyStr: string, change: ChangeContext, config: Readonly<Config>, ctx?: ExecutionContext,
+): Promise<UndoGroupResult | null> {
+  const candidates = await groupCandidates(env, identity, groupKeyStr, config);
+  if (!candidates) return null;
+  const { decoded, ids, capped } = candidates;
+  if (!ids.length) return { results: [], done: true, remaining: 0, group: groupKeyStr, capped, total: 0, family: decoded.family };
+
+  const scope = readScopeWorkspaces(identity);
+  if (decoded.family === "held") return resolveHeldGroup(env, identity, ids, change, config, ctx, groupKeyStr, capped, scope);
+  if (decoded.family === "trash") return resolveTrashGroup(env, identity, ids, change, config, ctx, groupKeyStr, capped, scope);
+  return resolveVersionGroup(env, identity, decoded, ids, change, config, ctx, groupKeyStr, capped, scope);
+}
+
+/** "Undid 5 of 14 changes in that group; call undo with the same group again to continue." (5.9). */
+export function undoGroupMcpReply(result: UndoGroupResult): string {
+  const verb = result.family === "held" ? "Released" : "Undid";
+  const noun = result.family === "held" ? "releases" : "changes";
+  const done = result.total - result.remaining;
+  if (result.remaining === 0) return `${verb} all ${result.total} ${noun} in that group.`;
+  return `${verb} ${done} of ${result.total} ${noun} in that group; call undo with the same group again to continue.`;
+}
+
+// ── Reply text (T-0089.6.6) ──────────────────────────────────────────────────
+//
+// One function per result, called from both POST /undo (routes/entries.ts) and the MCP undo tool
+// (mcp/server.ts), so the two surfaces' wording can never drift apart the way their rows and
+// versions are already guaranteed not to (see the file header above and undo-surfaces.test.ts).
+
+export function revertedMessage(id: string, result: Extract<UndoResult, { status: "reverted" }>): string {
+  let text = `Reverted entry ${id} to how it was before its last change (version ${result.targetSeq}). Undo again to put it back.`;
+  if (result.incomingTruncated) text += " The text that was merged in was too large to keep, so it could not be re-created.";
+  if (result.recreatedIncomingId) text += ` The text that was merged in is now its own memory, ${result.recreatedIncomingId}.`;
+  if (result.keptIncoming?.length) text += ` Memory ${result.keptIncoming.map(k => k.id).join(", ")}, which an earlier undo re-created, was kept.`;
+  if (result.deferredIncoming) {
+    text += ` ${result.deferredIncoming} of the memories this restored are still being indexed for semantic search (findable by keyword in the meantime); POST /vectorize-pending until remaining is 0.`;
+  }
+  return text + validityReplySuffix(result.validity, id, "undo");
+}
+
+export function restoredMessage(id: string, result: Extract<UndoResult, { status: "restored" }>): string {
+  return (result.mirrorSource ? mirrorRestoreWarning(id, result.mirrorSource) : `Restored entry ${id} from the trash.`)
+    + validityReplySuffix(result.validity, id, "undo");
+}
+
+/** `toVersion` is always defined here: `pruned` is only reachable when the caller named one. */
+export function prunedMessage(id: string, toVersion: number, oldestKept: number, versionKeep: number): string {
+  return `Only the last ${versionKeep} changes to entry ${id} are kept, and version ${toVersion} is older than that. The oldest kept is version ${oldestKept}.`;
+}
+
+/** Never distinguishes "aged out" from "hidden by the shared-history rule" (D-SH): see `pruned` above. */
+export function unreadableMessage(id: string): string {
+  return `No earlier version of entry ${id} is visible to you. Its author can undo older changes.`;
+}
+
+export function goneMessage(
+  id: string, gone: Extract<UndoResult, { status: "not_found" }>["gone"], retentionDays: number,
+): string {
+  const date = new Date(gone!.at).toDateString();
+  if (gone!.reason === "deleted_forever") return `Entry ${id} was deleted forever on ${date}.`;
+  if (gone!.reason === "tier3") return `Entry ${id} was too large for the trash and was deleted for good on ${date}.`;
+  return `Entry ${id} was in the trash for ${retentionDays} days and was removed for good on ${date}. It cannot be restored.`;
 }

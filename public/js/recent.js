@@ -378,7 +378,69 @@ async function maybeRevealActorFilter() {
   renderAuthorOptions()
 }
 
+/**
+ * "Standing instructions" in the Memories filter row (T7-E Task 14,
+ * 15-t7-wow-spec.md 7.3): a distinct source, GET /standing's firing state,
+ * not a narrowing of the ordinary list — so it gets its own load/render pair
+ * rather than joining apiList/applyRecentFilters' tag matching.
+ */
+const STANDING_FILTER_VALUE = 'standing:active'
+
+/**
+ * Copywriter final (18-copy-deck.md section 10): the over-limit line cites
+ * the workspace's configured STANDING_MAX ("only {max} can be active"),
+ * never a typed-in number - GET /standing's own top-level `max` field
+ * (src/routes/standing.ts), the same config value the route already reads
+ * to decide over_limit.
+ */
+function standingStateLabel(item, max) {
+  if (item.firing) return t('standing.stateActive')
+  if (item.reason === 'over_limit') return t('standing.stateOverLimit', { max })
+  if (item.reason === 'not_indexed_yet') return t('standing.stateNotIndexed')
+  if (item.reason === 'held') return t('standing.stateHeld')
+  return t('standing.statePendingRefresh') // pending_refresh, or a future reason an older dashboard has no label for
+}
+
+function standingFilterRow(item, max) {
+  const row = document.createElement('div')
+  row.className = 'standing-filter-row'
+  row.dataset.id = item.id
+  row.innerHTML = `
+    <div class="standing-filter-content">${escHtml(titleLine(item.content, 120))}</div>
+    <div class="standing-filter-state${item.firing ? ' standing-filter-state--active' : ''}">${escHtml(standingStateLabel(item, max))}</div>`
+  row.onclick = () => {
+    if (typeof openView === 'function') {
+      openView({ id: item.id, content: item.content, tags: ['standing:active'], created_at: item.created_at, workspace: item.workspace }, row)
+    }
+  }
+  return row
+}
+
+async function loadStandingFilter() {
+  const list = document.getElementById('recent-list')
+  list.innerHTML = `<div class="empty-state"><i class="ti ti-clock"></i><span>${escHtml(t('memories.loadingShort'))}</span></div>`
+  try {
+    const res = await fetch(`${WORKER_URL}/standing`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || 'failed')
+    const items = data.standing || []
+    if (!items.length) {
+      list.innerHTML = `<div class="empty-state"><i class="ti ti-pin"></i><span>${escHtml(t('standing.filterEmpty'))}</span></div>`
+      return
+    }
+    list.innerHTML = ''
+    items.forEach((item) => list.appendChild(standingFilterRow(item, data.max)))
+  } catch {
+    list.innerHTML =
+      `<div class="empty-state"><i class="ti ti-wifi-off"></i><span>${escHtml(t('standing.filterLoadFailed'))}</span></div>` +
+      `<button type="button" class="digest-more" onclick="loadStandingFilter()">${escHtml(t('standing.tryAgain'))}</button>`
+  }
+}
+
 async function loadRecent() {
+  // A different source entirely (GET /standing, not GET /list) with its own
+  // rendering (firing state, not date groups) — never apiList/applyRecentFilters.
+  if (selectedTag === STANDING_FILTER_VALUE) return loadStandingFilter()
   const list = document.getElementById('recent-list')
   // Only show the loading state on a cold list. A refresh after a capture
   // would otherwise blank out rows the user is reading and snap them back.
@@ -459,29 +521,11 @@ function onActorFilterChange(value) {
 
 // toggleEntryLayer lives in api.js (confirm + undo toast)
 
-// A brand-new brain has nothing to recall, so the usual prompt and its
-// suggestions would all come back empty. Say where things live instead.
+// A brand-new brain has nothing to recall, so the usual suggestions would all
+// come back empty - hide them rather than offer seven dead ends.
 function showFirstRunIfEmpty(isEmpty) {
-  const welcome = document.getElementById('recall-welcome')
   const suggestions = document.querySelector('.suggestions-row')
-  if (!welcome) return
-  if (!isEmpty) {
-    if (suggestions) suggestions.style.display = ''
-    welcome.classList.remove('first-run')
-    return
-  }
-  if (suggestions) suggestions.style.display = 'none'
-  welcome.classList.add('first-run')
-  welcome.innerHTML =
-    `<div class="eyebrow">${escHtml(t('home.firstRunEyebrow'))}</div>` +
-    `<div class="hero-line">${escHtml(t('home.firstRunHero'))}</div>` +
-    `<ol class="first-run-steps">` +
-    // Named after what is on screen. This used to point at a Remember tab and a
-    // Recall tab, both of which are now the one box above.
-    `<li>${escHtml(t('home.firstRunStep1'))}</li>` +
-    `<li>${escHtml(t('home.firstRunStep2'))}</li>` +
-    `<li>${escHtml(t('home.firstRunStep3'))}</li>` +
-    `</ol>`
+  if (suggestions) suggestions.style.display = isEmpty ? 'none' : ''
 }
 
 function renderRecent(entries) {
@@ -563,8 +607,14 @@ function makeRecentCard(entry, { selectable = true } = {}) {
   // a badge on every row is not a badge. The two that mean something — this
   // memory will not come back in recall, and this one is still being indexed —
   // now stand out because they are the only ones there.
+  //
+  // A hold empties vector_ids (src/quarantine/hold.ts), so "off" is every
+  // held row's permanent state, not a signal of its own — the Held chip
+  // already says "not in search" (UI review, S5), and showing both said it
+  // twice.
+  const held = typeof heldReason === 'function' ? heldReason(tags) : null
   const vecChip =
-    vec === 'on'
+    held || vec === 'on'
       ? ''
       : vec === 'pending'
         ? `<span class="tag-chip vec-chip vec-chip--pending" title="${escAttr(t('memories.vecPendingTitle'))}"><i class="ti ti-clock"></i></span>`
@@ -604,7 +654,7 @@ function makeRecentCard(entry, { selectable = true } = {}) {
     <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
     ${created ? `<span class="card-time" title="${escAttr(new Date(created).toLocaleString(localeTag()))}">${escHtml(relativeTime(created))}</span>` : ''}
   </div>
-  <div class="card-tags">${projectChipsHtml(tags)}${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}</div>
+  <div class="card-tags">${heldChipHtml(tags)}${standingBadgeHtml(tags)}${projectChipsHtml(tags)}${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}</div>
   <div class="card-actions">
     <button class="card-action-btn append-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
     <button class="card-action-btn edit-btn"><i class="ti ti-pencil"></i> ${escHtml(t('memories.edit'))}</button>

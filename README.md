@@ -82,13 +82,14 @@ Search now finds the hard things: exact names, ticket numbers, versions, and phr
 | `brief` | Show due items, open commitments, stale memories, and pending insights |
 | `resolve` | Settle one tracked task, date, insight, or stale fact |
 | `digest` | Read the latest existing automatic summary for a project or tag |
-| `history` | Read a memory’s change events and supersedes links |
+| `history` | Read a memory's recorded changes, with the text before each one |
 | `list_recent` | Browse recently saved memories |
 | `list_teams` | List shared teams you belong to (names and ids). In v3.0.0 this is one team; used by MCP clients for future multi-team support |
 | `list_projects` | List projects in scope, with display names, descriptions, and memory counts |
 | `get_prompt_capsule` | Read a deterministic core or project context projection for a gateway-controlled prompt prefix |
 | `get` | Read one memory by ID |
-| `forget` | Permanently delete a memory |
+| `forget` | Move a memory to the trash (undo brings it back) |
+| `undo` | Reverse the most recent change to a memory, or restore one from the trash |
 | `set_status` | Mark a memory `canonical`, `draft`, or `deprecated` |
 | `link` | Add an explicit relationship between two memories |
 | `unlink` | Remove a relationship between two memories |
@@ -250,6 +251,8 @@ https://YOUR-WORKER-URL/mcp
 
 Use OAuth where the client supports it, or an `Authorization: Bearer <token>` header for static clients. Query-string token authentication was removed in v3 because URLs can leak through browser history and logs.
 
+Add `?client=<name>` to the MCP URL so the dashboard can name the tool that made each change.
+
 Having connection issues? See [Connect to AI Clients → Troubleshooting](https://github.com/rahilp/second-brain-cloudflare/wiki/Connect-to-AI-Clients#troubleshooting) (Opera warnings, Cursor OAuth, Claude Code tool visibility).
 
 ### 3. Manual deployment
@@ -294,7 +297,13 @@ A successful response looks like `{"ok":true,"id":"..."}`.
 - **Calendar and email:** Google, Outlook, iCloud, and Gmail integrations
 - **iPhone and iPad:** Voice, text, and share-sheet shortcuts in [`integrations/ios-shortcuts/`](integrations/ios-shortcuts/)
 - **Claude Code:** session hooks that recall project context on start and save the conversation on exit — [`integrations/claude-code-hooks/`](integrations/claude-code-hooks/)
+- **Codex CLI:** session-start recall plus session-end capture ([`integrations/codex-cli-hooks/`](integrations/codex-cli-hooks/))
+- **Cursor:** session-start recall plus session-end capture; pair it with the MCP `recall` tool for reliable recall ([`integrations/cursor-hooks/`](integrations/cursor-hooks/))
+- **VS Code Copilot (Local harness):** session-start recall ([`integrations/vscode-copilot-hooks/`](integrations/vscode-copilot-hooks/))
+- **Gemini CLI:** session-start recall ([`integrations/gemini-cli-hooks/`](integrations/gemini-cli-hooks/))
 - **Dashboard:** Capture, recall, browse, graph, share, back up, and restore from the built-in web interface
+
+Not yet supported, revisit later: **Windsurf** (no documented session-start context injection event, only a post-response hook); **OpenCode** and **Oh My Pi** (plugin/event-callback APIs, not stdin/stdout scripts, so they need their own integration model rather than an adapter like the ones above).
 
 See [Capture from Anywhere](https://github.com/rahilp/second-brain-cloudflare/wiki/Capture-from-Anywhere) for setup and usage instructions.
 

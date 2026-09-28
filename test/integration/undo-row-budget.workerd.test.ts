@@ -53,7 +53,7 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("ADV-U13 (MAJOR) on workerd D1:
          VALUES (?, ?, 1, NULL, ?, '["work"]', '{}', ?, 'rest', 'merge', ?, 1000, 1000)`
       ).bind("big", owner.personalWorkspaceId, preMerge.length, owner.userId, mergeMeta).run();
 
-      const r = await revertEntry(env, owner, "big", { actorId: owner.userId, channel: "rest" }, DEFAULTS);
+      const r = await revertEntry(env, owner, "big", { actorId: owner.userId, channel: "rest" }, DEFAULTS, undefined, owner.personalWorkspaceId);
       expect(r.status).toBe("reverted");
       const revertRow = await env.DB.prepare(
         `SELECT COALESCE(length(CAST(content AS BLOB)), 0) + length(CAST(meta AS BLOB)) + length(CAST(tags AS BLOB)) + length(CAST(state AS BLOB)) AS bytes

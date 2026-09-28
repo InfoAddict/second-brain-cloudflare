@@ -5,11 +5,26 @@ function resetAppendSaveBtn() {
   btn.textContent = t('memories.appendSave')
 }
 
+function showAppendError(message) {
+  const el = document.getElementById('append-error')
+  if (!el) return
+  el.textContent = message
+  el.hidden = false
+}
+
+function clearAppendError() {
+  const el = document.getElementById('append-error')
+  if (!el) return
+  el.hidden = true
+  el.textContent = ''
+}
+
 function openAppend(id, preview) {
   pendingAppendId = id
   document.getElementById('append-context-preview').textContent = preview + '...'
   document.getElementById('append-textarea').value = ''
   resetAppendSaveBtn()
+  clearAppendError()
   document.getElementById('append-sheet').classList.add('open')
   setTimeout(() => document.getElementById('append-textarea').focus(), 100)
 }
@@ -29,19 +44,48 @@ function closeAppend() {
   document.getElementById('append-sheet').classList.remove('open')
   pendingAppendId = null
   resetAppendSaveBtn()
+  clearAppendError()
 }
+
 async function saveAppend() {
   const addition = document.getElementById('append-textarea').value.trim()
   if (!addition || !pendingAppendId) return
   const btn = document.getElementById('append-save-btn')
+  clearAppendError()
   btn.disabled = true
   btn.textContent = t('memories.saving')
   try {
     const appendedId = pendingAppendId
-    await apiMcp('append', { id: appendedId, addition })
+    // REST, not the MCP tool: MCP's channel reads as "via an AI tool" on the
+    // history timeline, which is false for a person's own dashboard append.
+    const res = await fetch(`${WORKER_URL}/append`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: appendedId, addition }),
+    })
+    if (!res.ok) {
+      let data = {}
+      try {
+        data = await res.json()
+      } catch {}
+      // Shown in place, text left in append-textarea exactly as typed -
+      // nothing here ever clears it on failure, so "your text is still
+      // here" holds. Same 413/too_large REST contract saveEdit checks
+      // (src/lib/content-size.ts), not a message-text match.
+      if (res.status === 413 && data.error === 'too_large') {
+        showAppendError(t('home.tooLong'))
+        return
+      }
+      throw new Error(t('auth.serverError', { status: res.status }))
+    }
+    const data = await res.json()
+    if (!data.ok) throw new Error(data.error || '')
     closeAppend()
     notifyMemoryResolved(appendedId)
     refreshAll()
+    if (typeof undoToast === 'function') {
+      undoToast(t('undo.added'), appendedId, { onUndone: () => notifyMemoryRestored(appendedId) })
+    }
   } catch (e) {
     showToast(t('memories.appendFailed', { message: e.message }))
   } finally {
@@ -73,6 +117,7 @@ function openEdit(id, content, tags) {
   const ta = document.getElementById('edit-textarea')
   ta.value = content
   resetEditSaveBtn()
+  clearEditError()
   document.getElementById('edit-sheet').classList.add('open')
   setTimeout(() => {
     ta.focus()
@@ -105,12 +150,28 @@ function closeEdit() {
   pendingEditId = null
   pendingEditTags = []
   resetEditSaveBtn()
+  clearEditError()
+}
+
+function showEditError(message) {
+  const el = document.getElementById('edit-error')
+  if (!el) return
+  el.textContent = message
+  el.hidden = false
+}
+
+function clearEditError() {
+  const el = document.getElementById('edit-error')
+  if (!el) return
+  el.hidden = true
+  el.textContent = ''
 }
 
 async function saveEdit() {
   const newContent = document.getElementById('edit-textarea').value.trim()
   if (!newContent || !pendingEditId) return
   const btn = document.getElementById('edit-save-btn')
+  clearEditError()
   btn.disabled = true
   btn.textContent = t('memories.saving')
   try {
@@ -121,11 +182,27 @@ async function saveEdit() {
       // src/tags/system.ts — so an edit cannot delete a conclusion the brain reached.
       body: JSON.stringify({ id: pendingEditId, content: newContent, tags: pendingEditTags }),
     })
-    if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
+    if (!res.ok) {
+      let data = {}
+      try {
+        data = await res.json()
+      } catch {}
+      // Shown in place, not as a toast, and the textarea is left exactly as
+      // typed - the composer's own promise ("your text is still here") holds
+      // here too, since nothing here ever clears edit-textarea on failure.
+      if (res.status === 413 && data.error === 'too_large') {
+        showEditError(t('home.tooLong'))
+        return
+      }
+      throw new Error(t('auth.serverError', { status: res.status }))
+    }
     const editedId = pendingEditId
     closeEdit()
     notifyMemoryResolved(editedId)
     refreshAll()
+    if (typeof undoToast === 'function') {
+      undoToast(t('undo.saved'), editedId, { onUndone: () => notifyMemoryRestored(editedId) })
+    }
   } catch (e) {
     showToast(t('memories.editFailed', { message: e.message }))
   } finally {
@@ -183,12 +260,17 @@ function notifyMemoryResolved(id) {
   if (typeof dropFromStaleQueue === 'function') dropFromStaleQueue(id)
 }
 
+/** notifyMemoryResolved's sibling: a row an undo brought back reappears in the lists that dropped it. */
+function notifyMemoryRestored(id) {
+  if (typeof refreshAll === 'function') refreshAll()
+}
+
 /**
- * Delete forever (T-0089.4.7): REST-only, `{id, permanent: true, confirm: id}`. Not offered to
- * agents (there is no MCP tool or parameter for it) — the confirm echo, not a hidden token, is
- * what keeps this from being one accidental tap away from Forget.
+ * Delete forever (T-0089.4.7): `{id, permanent: true, confirm: id, nonce}` on one trash row. The
+ * nonce is that row's own (from the trash list), so a stale view never deletes a different row
+ * under a reused id. Lives in the trash view only (Q11); not offered to agents.
  */
-function openDeleteForeverConfirm(id, cardElement) {
+function openDeleteForeverConfirm(id, cardElement, { onDone, onConflict, nonce } = {}) {
   openDangerConfirm({
     title: t('memories.deleteForeverTitle'),
     body: t('memories.deleteForeverConfirm'),
@@ -203,10 +285,23 @@ function openDeleteForeverConfirm(id, cardElement) {
         const res = await fetch(`${WORKER_URL}/forget`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-          body: JSON.stringify({ id, permanent: true, confirm: id }),
+          // Required, not optional: the merged /forget route 400s without it
+          // (src/routes/entries.ts) -- delete forever only ever acts on a
+          // trash row.
+          body: JSON.stringify({ id, permanent: true, confirm: id, nonce }),
         })
         const data = await res.json()
-        if (!res.ok || !data.ok) throw new Error(data.error || t('memories.deleteForeverFailed'))
+        if (!res.ok || !data.ok) {
+          // A stale nonce (the row moved under the reader, e.g. someone else
+          // already restored or deleted it) is the caller's to explain, not
+          // a generic failure toast - trash.js's onConflict refreshes its list.
+          if ((res.status === 404 || res.status === 409) && typeof onConflict === 'function') {
+            done()
+            onConflict()
+            return
+          }
+          throw new Error(data.error || t('memories.deleteForeverFailed'))
+        }
         done()
         if (cardElement) {
           cardElement.style.transition = 'none'
@@ -216,6 +311,7 @@ function openDeleteForeverConfirm(id, cardElement) {
         allEntries = allEntries.filter((e) => e.id !== id)
         notifyMemoryResolved(id)
         refreshAll({ list: false })
+        if (typeof onDone === 'function') onDone(id)
       } catch (e) {
         showToast(t('memories.deleteForeverFailed', { message: e.message }))
         done()
@@ -268,7 +364,13 @@ async function confirmForget(_checked, done) {
     // above have already handled — reloading it here would swap the element out
     // from under its own exit animation.
     refreshAll({ list: false })
-    if (data.trash === false) showToast(t('memories.forgetHardDeleted'))
+    if (data.trash === false) {
+      // Tier 3: too large for the trash, hard-deleted. There is no version to
+      // undo to, the same reason Delete forever never gets a toast either.
+      showToast(t('memories.forgetHardDeleted'))
+    } else if (typeof undoToast === 'function') {
+      undoToast(t('undo.trashed'), idToForget, { onUndone: () => notifyMemoryRestored(idToForget) })
+    }
   } catch (e) {
     showToast(t('memories.forgetFailed', { message: e.message }))
   } finally {
@@ -297,7 +399,8 @@ function viewKindLabel(kind) {
 function viewStatusLabel(status) {
   if (status === 'canonical') return t('memories.statusTrusted')
   if (status === 'draft') return t('memories.statusUnconfirmed')
-  if (status === 'deprecated') return t('memories.statusSuperseded')
+  // SH-3: "Wrong" everywhere the sheet shows status, replacing "Superseded".
+  if (status === 'deprecated') return t('status.wrong')
   return status
 }
 
@@ -334,6 +437,31 @@ function renderViewMeta(entry) {
     parts.push(`<span class="view-meta-item" title="${escAttr(new Date(updated).toLocaleString(localeTag()))}">${escHtml(t('memories.metaEdited', { relative: relativeTime(updated) }))}</span>`)
   }
   el.innerHTML = parts.join('')
+}
+
+/** claude-code, codex-session, cursor-session: an AI coding session's own capture, not the user typing. */
+const AUTO_SAVE_SESSION_SOURCES = {
+  'claude-code': 'Claude Code',
+  'codex-session': 'Codex',
+  'cursor-session': 'Cursor',
+}
+
+/**
+ * A quiet note, sheet only (never the list card): a memory an AI coding
+ * session saved on its own reads differently from one the user wrote, and the
+ * tool name is not translated — only the sentence around it is.
+ */
+function renderViewAutoSaveNote(entry) {
+  const el = document.getElementById('view-auto-save-note')
+  if (!el) return
+  const tool = AUTO_SAVE_SESSION_SOURCES[String(entry.source || '').toLowerCase()]
+  if (!tool) {
+    el.style.display = 'none'
+    el.textContent = ''
+    return
+  }
+  el.textContent = t('memories.sessionSaved', { tool })
+  el.style.display = ''
 }
 
 function renderViewBrain(entry) {
@@ -389,6 +517,286 @@ function renderViewBrain(entry) {
   el.innerHTML = `<div class="view-brain-label">${escHtml(t('memories.brainLabel'))}</div>${rows.join('')}`
 }
 
+const STATUS_HELP_KEYS = {
+  canonical: 'status.trustedHelp',
+  draft: 'status.unconfirmedHelp',
+  deprecated: 'status.wrongHelp',
+}
+
+/**
+ * SH-3: POST /status immediately (no confirm), toast with Undo, re-hydrate.
+ * `wasStatus` is read fresh rather than trusted from closure, since a slow
+ * click racing a re-render should not fire on a status the sheet no longer
+ * shows.
+ */
+async function selectViewStatus(status, entry) {
+  const group = document.getElementById('view-status')
+  const buttons = Array.from(group.querySelectorAll('.status-option'))
+  const wasStatus = tagValue(entry.tags || [], 'status:') || 'canonical'
+  if (status === wasStatus) return
+  buttons.forEach((b) => (b.disabled = true))
+  try {
+    const res = await fetch(`${WORKER_URL}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: entry.id, status }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || '')
+    let message = t('undo.marked', { status: viewStatusLabel(status).toLowerCase() })
+    // undo.marked is a plain "toast after an action" (no period, per the copy
+    // guide), but appending a full sentence after it makes this one a "toast
+    // with a consequence", which does take one.
+    if (data.indexed === false) message += '. ' + t('status.keywordOnly')
+    undoToast(message, entry.id, {
+      onUndone: () => {
+        if (typeof hydrateView === 'function') hydrateView(entry.id)
+      },
+    })
+    if (typeof hydrateView === 'function') hydrateView(entry.id)
+  } catch (e) {
+    showToast(t('status.failed', { message: e.message || '' }))
+    buttons.forEach((b) => (b.disabled = false))
+  }
+}
+
+/** Roving arrow keys over the three options, per the WAI-ARIA radiogroup pattern: moving also selects. */
+function wireViewStatusButton(btn, entry) {
+  btn.onclick = () => {
+    if (!btn.disabled) return selectViewStatus(btn.dataset.status, entry)
+  }
+  btn.onkeydown = (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return
+    e.preventDefault()
+    const opts = Array.from(document.querySelectorAll('#view-status .status-option'))
+    const idx = opts.indexOf(btn)
+    const dir = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1
+    const next = opts[(idx + dir + opts.length) % opts.length]
+    if (next && !next.disabled) {
+      next.focus()
+      selectViewStatus(next.dataset.status, entry)
+    }
+  }
+}
+
+/**
+ * UI review: the lock note explaining why Append, Edit, Forget and Status
+ * are disabled lives here, next to the control it explains, and only here —
+ * it used to also render at the end of History, which read as two different
+ * explanations for the same thing. `locked` is strictly `=== false` plus a
+ * resolved actor_name: an entry that has not answered can_edit yet, or has
+ * answered it without a name, must not print a note attributed to nobody.
+ */
+function renderViewStatusLockNote(entry) {
+  const el = document.getElementById('view-status-lock-note')
+  if (!el) return
+  const locked = entry.can_edit === false && !!entry.actor_name
+  if (!locked) {
+    el.style.display = 'none'
+    el.textContent = ''
+    return
+  }
+  el.style.display = ''
+  el.textContent = t('memories.authorLocked', { name: entry.actor_name })
+}
+
+/**
+ * T7-E Task 14 (15-t7-wow-spec.md 7.3): the standing line and its Stop
+ * button, hidden entirely on a memory that is not currently standing. Shares
+ * this row with the status control below it (T-0101.8, `renderViewStatus`).
+ */
+/**
+ * The one memory a Stop click just turned ordinary, for the CURRENT sheet
+ * session only - not a permanent "not standing" label on every ordinary
+ * memory (that would be a badge on every row, i.e. no badge at all). Cleared
+ * whenever a sheet opens fresh, and by Undo's own restore.
+ */
+let justStoppedStandingId = null
+
+function renderViewStanding(entry) {
+  const block = document.getElementById('view-standing')
+  const line = document.getElementById('view-standing-line')
+  const btn = document.getElementById('view-standing-stop')
+  if (!block || !line || !btn) return
+  const tags = entry.tags || []
+  const isStanding = tags.some((tag) => String(tag).toLowerCase() === 'standing:active')
+  if (isStanding) {
+    block.style.display = ''
+    line.textContent = t('standing.sheetLine')
+    btn.style.display = ''
+    btn.onclick = () => stopStanding(entry, btn)
+    return
+  }
+  // UI reviewer: Stop must read as done the moment it succeeds, not only once
+  // the toast says so - this is the in-place confirmation, kept up until the
+  // sheet moves on to something else. No way to set it again here: spec 2.2
+  // says turning an ordinary memory into a standing one is not offered in
+  // 4.0, so Undo (from the toast) is the only way back.
+  if (entry.id != null && entry.id === justStoppedStandingId) {
+    block.style.display = ''
+    line.textContent = t('standing.notStanding')
+    btn.style.display = 'none'
+    return
+  }
+  block.style.display = 'none'
+}
+
+/** Stop is a resolve action (POST /standing/stop): removes standing:active only, versioned and undoable. */
+async function stopStanding(entry, btn) {
+  if (btn) btn.disabled = true
+  try {
+    const res = await fetch(`${WORKER_URL}/standing/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: entry.id }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || '')
+    // Updates the sheet immediately, before the round trip below: the toast
+    // already says it happened, and the sheet should agree at once rather
+    // than a moment later.
+    justStoppedStandingId = entry.id
+    renderViewStanding({ ...entry, tags: (entry.tags || []).filter((tag) => String(tag).toLowerCase() !== 'standing:active') })
+    undoToast(t('standing.stopped'), entry.id, {
+      onUndone: () => {
+        if (justStoppedStandingId === entry.id) justStoppedStandingId = null
+        if (typeof hydrateView === 'function') hydrateView(entry.id)
+      },
+    })
+    if (typeof hydrateView === 'function') hydrateView(entry.id)
+  } catch (e) {
+    showToast(t('standing.stopFailed', { message: e.message || '' }))
+  } finally {
+    if (btn) btn.disabled = false
+  }
+}
+
+/**
+ * S5 (5.7, UX-E.3): no job ever expires the tag itself - every renderer
+ * decides freshness at render time by comparing today to the tagged date.
+ * 7, not a config value: the spec fixes it as a constant, unlike
+ * STANDING_MAX or similar per-brain settings.
+ */
+const EDITED_CANONICAL_LABEL_DAYS = 7
+
+/**
+ * "Trusted · edited via Cursor on Sep 26" for 7 days after an MCP edit kept a
+ * canonical memory canonical (5.7) - null once the tag is stale, absent, or
+ * the memory isn't canonical (the label only ever qualifies "Trusted").
+ * The client name comes from the newest matching history row's own `client`
+ * (BE-6); a channel of `mcp` with no client name reads as "an AI tool".
+ */
+function canonicalEditLabel(entry) {
+  if ((tagValue(entry.tags || [], 'status:') || 'canonical') !== 'canonical') return null
+  const editedAt = typeof editedCanonicalAt === 'function' ? editedCanonicalAt(entry.tags || []) : null
+  if (!editedAt) return null
+  const ageDays = (Date.now() - Date.parse(`${editedAt}T00:00:00Z`)) / 86400000
+  if (!(ageDays >= 0 && ageDays < EDITED_CANONICAL_LABEL_DAYS)) return null
+  const rows = (entry.history && entry.history.items) || []
+  const editRow = rows.find((row) => row.kind === 'change' && (row.reason === 'update' || row.reason === 'append') && row.channel === 'mcp')
+  const tool = (editRow && editRow.client) || t('status.anAiTool')
+  const date = formatDateUI(Date.parse(`${editedAt}T00:00:00Z`), { month: 'short', day: 'numeric' })
+  return { tool, date }
+}
+
+function renderViewStatus(entry) {
+  const group = document.getElementById('view-status')
+  const caption = document.getElementById('view-status-caption')
+  if (!group || !caption) return
+  const status = tagValue(entry.tags || [], 'status:') || 'canonical'
+  const options = Array.from(group.querySelectorAll('.status-option'))
+  options.forEach((btn) => {
+    const checked = btn.dataset.status === status
+    btn.setAttribute('aria-checked', String(checked))
+    btn.tabIndex = checked ? 0 : -1
+    wireViewStatusButton(btn, entry)
+  })
+  // UI review, S5: every status help line (Trusted/Unconfirmed/Wrong) claims
+  // search visibility ("shows up in search", "search leaves it out"), which
+  // is false while the memory is held - the banner above already says it is
+  // out of search. No held-aware copy exists yet, so this hides the line
+  // rather than risk shipping a second, possibly-conflicting claim.
+  const held = typeof heldReason === 'function' ? heldReason(entry.tags || []) : null
+  if (held) {
+    caption.style.display = 'none'
+    caption.textContent = ''
+    renderViewStatusLockNote(entry)
+    return
+  }
+  caption.style.display = ''
+  const editedLabel = canonicalEditLabel(entry)
+  caption.textContent = editedLabel ? t('status.editedBy', editedLabel) : t(STATUS_HELP_KEYS[status] || '')
+  renderViewStatusLockNote(entry)
+}
+
+/**
+ * S5 (7.2, UX-E.2): the held banner and Release, hidden entirely on a memory
+ * that is not currently held. Covers every hold reason (`quarantine:<reason>`,
+ * src/quarantine/tags.ts): `too_long` gets its own complete sentence (deck
+ * section 9); every other reason fills held.banner's {reason} from the
+ * matching held.reason* key.
+ *
+ * Release is hidden, not just disabled, when `can_edit === false` (deck 18
+ * section 11's truth check: only the author or an admin can actually release
+ * a shared company hold - see assertCanMutateEntry). held.bannerOther takes
+ * over the sentence in that case, naming who can act instead of saying "you".
+ */
+function renderViewHeld(entry) {
+  const block = document.getElementById('view-held')
+  const line = document.getElementById('view-held-line')
+  const btn = document.getElementById('view-held-release')
+  if (!block || !line || !btn) return
+  const reason = typeof heldReason === 'function' ? heldReason(entry.tags || []) : null
+  if (!reason) {
+    block.style.display = 'none'
+    return
+  }
+  block.style.display = ''
+  const locked = entry.can_edit === false
+  btn.style.display = locked ? 'none' : ''
+  if (reason === 'too_long') {
+    line.textContent = t('held.tooLongLine')
+  } else if (locked) {
+    line.textContent = t('held.bannerOther', { reason: heldReasonPhrase(reason) })
+  } else {
+    line.textContent = t('held.banner', { reason: heldReasonPhrase(reason) })
+  }
+  btn.onclick = () => releaseHeld(entry, btn)
+}
+
+/** Explicit if-else, not a keyed lookup passed to the translate helper - the i18n test's static scanner flags a variable argument there as a new dynamic call site. */
+function heldReasonPhrase(reason) {
+  if (reason === 'instruction') return t('held.reasonInstruction')
+  if (reason === 'hidden') return t('held.reasonHidden')
+  if (reason === 'burst') return t('held.reasonBurst')
+  if (reason === 'capsule') return t('held.reasonCapsule')
+  return ''
+}
+
+/** Release is Undo on a currently-held row (5.6): the same POST /undo every other write-site Undo calls. */
+async function releaseHeld(entry, btn) {
+  if (btn) btn.disabled = true
+  try {
+    const res = await fetch(`${WORKER_URL}/undo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: entry.id }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || '')
+    undoToast(t('held.released'), entry.id, {
+      onUndone: () => {
+        if (typeof hydrateView === 'function') hydrateView(entry.id)
+      },
+    })
+    if (typeof hydrateView === 'function') hydrateView(entry.id)
+  } catch (e) {
+    showToast(t('held.releaseFailed', { message: e.message || '' }))
+  } finally {
+    if (btn) btn.disabled = false
+  }
+}
+
 /**
  * Fill in what the caller could not know.
  *
@@ -405,12 +813,32 @@ async function hydrateView(id) {
     if (!data.ok || !data.entry) return
     if (viewOpenId !== id) return // the sheet moved on while this was in flight
     renderViewMeta(data.entry)
+    renderViewAutoSaveNote(data.entry)
     renderViewBrain(data.entry)
+    renderViewStanding(data.entry)
+    renderViewHeld(data.entry)
+    renderViewStatus(data.entry)
     renderViewTimeline(data.entry)
     // openView rendered from whatever the caller happened to hold; /entry is
     // the only source that knows whether this is the reader's to change.
     applyAuthorLock(data.entry)
+    syncViewScrollBottomPadding()
   } catch {}
+}
+
+/**
+ * UI review: .view-scroll's bottom padding used to be a flat 4px, nowhere
+ * near the fixed action row's real height, so scrolling to the very end of a
+ * long history still left its last row (and "Show all") flush against the
+ * footer rather than clear of it. Measuring the action row directly keeps
+ * this correct at any width, button wrap, or safe-area inset, rather than a
+ * guessed constant that drifts the next time the row's own height changes.
+ */
+function syncViewScrollBottomPadding() {
+  const scroll = document.querySelector('#view-sheet .view-scroll')
+  const actions = document.querySelector('#view-sheet .view-actions')
+  if (!scroll || !actions || typeof actions.getBoundingClientRect !== 'function') return
+  scroll.style.paddingBottom = `${Math.ceil(actions.getBoundingClientRect().height)}px`
 }
 
 /**
@@ -433,19 +861,25 @@ function timelineEventLabel(event) {
     reverted: 'memories.evReverted',
     restored: 'memories.evRestored',
     purged: 'memories.evPurged',
+    // T3/T4 lane S5 (16-t3-t4-trust-spec.md 7.9).
+    held: 'history.evHeld',
+    released: 'history.evReleased',
   }
   return keys[event] ? t(keys[event]) : event || ''
 }
 
 function renderViewTimeline(entry) {
+  // SH-1: a Worker that sends `history` (contract 4.1) gets the rich list
+  // with Undo and Restore this version. A Worker that predates it falls back
+  // to the plain event list below, unchanged.
+  if (entry.history) {
+    renderHistory(entry)
+    return
+  }
   const el = document.getElementById('view-timeline')
   if (!el) return
   const items = entry.timeline || []
-  // A shared memory nobody has edited or appended yet still has a reason two
-  // buttons are greyed out, and that reason lives in this section, so an
-  // empty timeline hides History only when there is also no lock note to show.
-  const locked = entry.can_edit === false && !!entry.actor_name
-  if (!items.length && !locked) {
+  if (!items.length) {
     el.style.display = 'none'
     el.innerHTML = ''
     return
@@ -459,11 +893,6 @@ function renderViewTimeline(entry) {
       ? formatDateUI(item.created_at, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
       : ''
     lines.push(`<div class="view-timeline-item">${escHtml(item.actor_name || '')} · ${escHtml(timelineEventLabel(item.event))}${when ? ` · ${escHtml(when)}` : ''}</div>`)
-  }
-  // Two greyed-out buttons with no explanation read as a broken screen, so the
-  // reason sits at the end of the history that establishes it.
-  if (locked) {
-    lines.push(`<div class="view-timeline-note">${escHtml(t('memories.authorLocked', { name: entry.actor_name }))}</div>`)
   }
   el.style.display = ''
   el.innerHTML = `<div class="view-timeline-label">${escHtml(t('memories.timelineLabel'))}</div>${lines.join('')}`
@@ -484,7 +913,10 @@ function renderViewTimeline(entry) {
  * only on readability (src/routes/graph.ts), so a reader may remove a link.
  */
 function applyAuthorLock(entry) {
-  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget', 'view-btn-delete-forever'].map((id) => document.getElementById(id)), 'view-btn--locked')
+  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
+  lockAuthoredControls(entry, Array.from(document.querySelectorAll('#view-status .status-option')), 'status-option--locked')
+  lockAuthoredControls(entry, [document.getElementById('view-standing-stop')], 'card-action-btn--locked')
+  lockAuthoredControls(entry, [document.getElementById('view-held-release')], 'card-action-btn--locked')
 }
 
 /**
@@ -535,9 +967,17 @@ let viewOpenId = null
 
 function openView(entry, cardElement) {
   viewOpenId = entry.id || null
+  // A fresh sheet, even on the same memory reopened: the "just stopped"
+  // acknowledgment belongs to the session that clicked Stop, not to every
+  // later visit.
+  justStoppedStandingId = null
   document.getElementById('view-content-text').textContent = normalizeForDisplay(entry.content)
   renderViewMeta(entry)
+  renderViewAutoSaveNote(entry)
   renderViewBrain(entry)
+  renderViewStanding(entry)
+  renderViewHeld(entry)
+  renderViewStatus(entry)
   if (entry.id) hydrateView(entry.id)
   const tagsContainer = document.getElementById('view-tags-container')
   tagsContainer.innerHTML = ''
@@ -576,16 +1016,6 @@ function openView(entry, cardElement) {
   } else {
     forgetBtn.style.display = 'none'
   }
-  const deleteForeverBtn = document.getElementById('view-btn-delete-forever')
-  if (entry.id) {
-    deleteForeverBtn.onclick = () => {
-      closeView()
-      openDeleteForeverConfirm(entry.id, cardElement || null)
-    }
-    deleteForeverBtn.style.display = 'flex'
-  } else {
-    deleteForeverBtn.style.display = 'none'
-  }
   const editBtn = document.getElementById('view-btn-edit')
   if (entry.id) {
     editBtn.onclick = () => {
@@ -598,6 +1028,7 @@ function openView(entry, cardElement) {
   }
   applyAuthorLock(entry)
   document.getElementById('view-sheet').classList.add('open')
+  syncViewScrollBottomPadding()
 }
 function closeView() {
   document.getElementById('view-sheet').classList.remove('open')

@@ -32,13 +32,13 @@ async function setup(score: number, decision: string) {
   return { sqlite, env, vectors };
 }
 
-describe("lost pinned deprecation", () => {
-  it("D1: row moves between snapshot and pinned deprecate — newcomer returned 'stored' but keeps contradiction-resolved", async () => {
+describe("lost pinned supersede", () => {
+  it("D1: row moves between snapshot and pinned supersede: newcomer returned 'stored' without contradiction-resolved", async () => {
     const { sqlite, env, vectors } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
     sqlite.db.prepare(`UPDATE entries SET content = 'I live in Paris', tags = '["home"]', source = 'api', actor_id = 'u2' WHERE id = 'old'`).run();
     const db = env.DB as any; const prepare = db.prepare.bind(db); let raced = false;
     db.prepare = (sql: string) => {
-      if (!raced && sql.startsWith("SELECT tags, vector_ids FROM entries WHERE id = ? AND workspace_id = ?")) {
+      if (!raced && sql.startsWith("INSERT INTO entry_versions")) {
         raced = true; sqlite.db.prepare("UPDATE entries SET workspace_id = 'company-ws' WHERE id = 'old'").run();
       }
       return prepare(sql);
@@ -52,7 +52,8 @@ describe("lost pinned deprecation", () => {
     expect(JSON.parse(mine.tags)).not.toContain("contradiction-resolved");
     expect(result.status).toBe("stored");
     expect(result.tags).not.toContain("contradiction-resolved");
-    expect(vectors.get(result.id)?.tags).toEqual(JSON.parse(mine.tags));
+    // Vector ids are per upload (T-0089.1.1): read the newcomer's vector through its parentId.
+    expect([...vectors.values()].filter((m: any) => m.parentId === result.id).pop()?.tags).toEqual(JSON.parse(mine.tags));
     sqlite.close();
   });
 });

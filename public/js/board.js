@@ -226,27 +226,71 @@ function renderDecisionPanel(board, brief) {
  * to resolve one without leaving home. `resolveLoop` (loops.js, loaded
  * before this file) does the actual POST /loops/resolve; this panel just
  * wires the buttons to it.
+ *
+ * T7-E (Design 5.3, 7.1): the one panel now shows two groups, "You owe"
+ * (outbound) and "Owed to you" (inbound), each up to three rows, from the
+ * one mixed-direction `brief.loops.items` array (Design 5.3 L2) plus the
+ * top-level `brief.owed_to_me` count. A group with no rows is omitted; the
+ * panel itself hides only when both are empty, so an inbound-only or
+ * outbound-only brain still sees its one group.
  */
-function renderLoopsPanel(board, brief) {
-  const loops = (brief && brief.loops) || { open: 0, items: [] }
-  if (!loops.open || !loops.items.length) return
-
-  const rows = loops.items
-    .map(
-      (item) => `<div class="task" id="loop-tile-${escAttr(item.id)}">
-        <div class="task-t">${escHtml(titleLine(item.content, 80))}</div>
+function loopsPanelRow(item, inbound) {
+  const counterparty = item.counterparty || loopCounterpartyOf(item.tags)
+  const metaParts = inbound ? [counterparty ? t('loops.fromName', { name: counterparty }) : '', loopDueLine(item)].filter(Boolean) : []
+  const meta = metaParts.length ? `<span>${escHtml(metaParts.join(' · '))}</span>` : ''
+  const doneLabel = inbound ? t('loops.received') : t('loops.done')
+  const notTaskLabel = inbound ? t('due.notCommitment') : t('loops.notTask')
+  return `<div class="task" id="loop-tile-${escAttr(item.id)}">
+        <div class="task-t">${escHtml(titleLine(item.content, 80))}${meta}</div>
         <div class="task-actions">
-          <button class="btn btn-secondary btn-sm" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'done', this)">${escHtml(t('loops.done'))}</button>
-          <button class="btn btn-secondary btn-sm" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'not-task', this)">${escHtml(t('loops.notTask'))}</button>
+          <button class="card-action-btn" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'done', this)">${escHtml(doneLabel)}</button>
+          <button class="card-action-btn" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'not-task', this)">${escHtml(notTaskLabel)}</button>
         </div>
-      </div>`,
-    )
-    .join('')
+      </div>`
+}
+
+function loopsPanelGroup(title, items, inbound) {
+  if (!items.length) return ''
+  return `<div class="loops-group"><div class="loops-group-title">${escHtml(title)}</div>${items
+    .slice(0, 3)
+    .map((item) => loopsPanelRow(item, inbound))
+    .join('')}</div>`
+}
+
+function renderLoopsPanel(board, brief) {
+  const items = (brief && brief.loops && brief.loops.items) || []
+  const outboundOpen = (brief && brief.loops && brief.loops.open) || 0
+  const inboundOpen = (brief && brief.owed_to_me) || 0
+  if ((!outboundOpen && !inboundOpen) || !items.length) return
+
+  const outbound = items.filter((item) => !loopIsInbound(item))
+  const inbound = items.filter((item) => loopIsInbound(item))
+  if (!outbound.length && !inbound.length) return
+
+  const groupsHtml = loopsPanelGroup(t('loops.youOwe'), outbound, false) + loopsPanelGroup(t('loops.owedToYou'), inbound, true)
 
   const panel = boardPanel('loops', { title: t('board.loopsTitle'), sub: t('board.loopsSub'), span: 3 })
+  panel.body.innerHTML = groupsHtml + `<button class="digest-more" type="button" onclick="openLoopsSheet()">${escHtml(t('loops.seeAll'))}</button>`
+  board.appendChild(panel)
+}
+
+/**
+ * "Decision log" (T7-E, Design 7.4): the calibration sentence (or the
+ * not-ready line, both `result.line`), and a way to the full sheet. Hidden
+ * with zero decisions — in practice, hidden until the brief's own
+ * `decisions_resolved` gate exposes `calibration` at all (C11: the Worker
+ * never runs the calibration read below 10 resolved decisions, to keep an
+ * ordinary brief load free of it), so an unused ledger costs nothing here.
+ * Lists no review items itself: Due already does, and listing them twice
+ * would be a new chore, not a saved one.
+ */
+function renderLedgerPanel(board, brief) {
+  const calibration = brief && brief.calibration
+  if (!calibration) return
+  const panel = boardPanel('ledger', { title: t('board.ledgerTitle'), sub: t('board.ledgerSub'), span: 3 })
   panel.body.innerHTML =
-    `<div class="rows">${rows}</div>` +
-    `<button class="digest-more" type="button" onclick="openLoopsSheet()">${escHtml(t('loops.seeAll'))}</button>`
+    `<p class="digest-note">${escHtml(calibrationSentence(calibration))}</p>` +
+    `<button class="digest-more" type="button" onclick="openLedgerSheet()">${escHtml(t('ledger.openLog'))}</button>`
   board.appendChild(panel)
 }
 
@@ -309,7 +353,7 @@ function renderResurfacePanel(board, brief) {
     </div>
     <p class="reread-text">${escHtml(titleLine(m.content, 180))}</p>
     <div class="memory-card-foot">
-      ${tags}
+      ${standingBadgeHtml(m.tags)}${tags}
       <button class="digest-btn" type="button" onclick="openAppend('${escAttr(m.id)}', '${escAttr((m.content || '').slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
       <button class="digest-btn" type="button" data-resurface-dismiss onclick="dismissResurface('${escAttr(m.id)}', this)">${escHtml(t('brief.dismiss'))}</button>
     </div>`
@@ -1031,6 +1075,7 @@ BOARD_PANELS.push(
   renderGrowthPanel,
   renderDecisionPanel,
   renderLoopsPanel,
+  renderLedgerPanel,
   renderGraphPanel,
   renderRecalledPanel,
   renderNightPanel,
@@ -1072,6 +1117,7 @@ async function renderRailNote() {
   const indexOk = !!(body.vectorize && body.vectorize.ok)
   el.innerHTML = `<b>${escHtml(t('board.railVersion', { v: body.version || '' }))}</b>${escHtml(indexOk ? t('board.railIndexOk') : t('board.railIndexDegraded'))}` +
     (hostLine ? `<br>${escHtml(hostLine)}` : '')
+  return body
 }
 
 async function renderBoard(brief) {
@@ -1110,5 +1156,7 @@ async function renderBoard(brief) {
     try { await fn(board, brief) } catch (e) { console.error('board panel failed:', e) }
   }
   if (token !== _boardRenderToken) return
-  try { await renderRailNote() } catch (e) { console.error('rail note failed:', e) }
+  let health
+  try { health = await renderRailNote() } catch (e) { console.error('rail note failed:', e) }
+  if (typeof renderWhatsNewLine === 'function') renderWhatsNewLine(health)
 }

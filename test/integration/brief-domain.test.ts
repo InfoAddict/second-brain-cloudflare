@@ -40,7 +40,7 @@ describe("shared brief domain", () => {
 
   it("lean brief keeps the dashboard's due/loops shape and caps items at three", async () => {
     for (let i = 0; i < 5; i++) sqlite.seed({ id: `t${i}`, content: `Task ${i}`, createdAt: 1000 + i, tags: ["task"] });
-    const lean = await computeLeanBrief(env, auth);
+    const lean = await computeLeanBrief(env, ctx, auth);
     expect(lean).toMatchObject({ ok: true, lean: true, attention: { due: 0 }, loops: { open: 5 } });
     expect(lean.loops.items.map(i => i.id)).toEqual(["t4", "t3", "t2"]);
   });
@@ -48,7 +48,7 @@ describe("shared brief domain", () => {
   it("formats an empty brief as the quiet state and omits empty sections", () => {
     expect(formatAgentBrief({})).toBe("Nothing needs attention.");
     const text = formatAgentBrief({ loops: { total: 1, items: [{ id: "x", content: "Do it" }] } });
-    expect(text).toContain("Open commitments");
+    expect(text).toContain("You owe");
     expect(text).not.toContain("Due");
   });
 });

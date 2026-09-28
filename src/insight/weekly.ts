@@ -15,11 +15,12 @@ import { initializeDatabase } from "../db/init";
 import { captureEntry } from "../capture/entry";
 import { reasonOverPair, restatesRecent } from "./reason";
 import { PENDING_INSIGHT_SQL, WRITTEN_INSIGHT_SQL } from "../memory/patterns";
-import { edgeInsertStatement, kindsAllowEdge } from "../graph/edges";
+import { edgeInsertStatement, kindsAllowEdge, sameWorkspaceEdge } from "../graph/edges";
 import { getKind } from "../memory/kind";
 import type { TypedRelationship } from "./reason";
 import { isEligiblePair, parseTags } from "./candidates";
 import { D1_MAX_BOUND_PARAMS, SYSTEM_SOURCE } from "../constants";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 
 /**
  * Weight for an edge the reasoning model proposed.
@@ -179,6 +180,7 @@ export async function runWeeklyInsights(
   try {
     const cfg = await resolveConfig(env);
     await initializeDatabase(env);
+    const now = Date.now();
 
     const sliceIds = opts?.onlyWorkspaceIds ?? [];
     // Chunked against the platform's bound-parameter ceiling, the way every
@@ -225,15 +227,22 @@ export async function runWeeklyInsights(
     // The deprecation check is the same reasoning applied to a candidate whose
     // entries still exist but should no longer be reasoned over: accrual is
     // nightly and this is weekly, so up to seven days can pass between a pair
-    // being accrued and being read here, and a `supersedes` edge deprecates its
-    // target the moment it is created (src/capture/entry.ts). Filtering both
-    // sides here catches that drift regardless of which signal accrued the
-    // candidate or how eligibility was — or was not — checked at accrual time.
+    // being accrued and being read here. Before T-0089.2.1 a supersedes edge
+    // deprecated its target the moment it was created; a contradiction now
+    // closes the target's validity window instead (src/capture/entry.ts,
+    // keeping its status and vectors per D2.1), so the valid_until check below
+    // is what catches that path today, alongside status:deprecated for the
+    // other, still-live deprecation routes. Filtering both sides here catches
+    // that drift regardless of which signal accrued the candidate or how
+    // eligibility was — or was not — checked at accrual time.
     // a.tags/b.tags ride along on the same join this query already makes —
     // D1 (isEligiblePair, ./candidates.ts) has to be applied here too, not
     // only at accrual, or every candidate accrued before D1 existed keeps
     // being drawn under the old rule until the pool empties. Free: the JOIN
     // was already selecting these rows, this only widens the column list.
+    // Codex review class E (T-0089.4.2): a row accrued clean can be held later, between accrual
+    // and this weekly draw — the same re-check reasoning as status:deprecated/valid_until above,
+    // for the one condition those two do not cover. Held content must never reach reasonOverPair.
     const drawn: CandidateRow[] = [];
     for (const chunk of sliceChunks) {
       // Built here rather than inline in the template so the query carries a
@@ -243,6 +252,7 @@ export async function runWeeklyInsights(
       const sliceClause = chunk.length
         ? `AND a.workspace_id IN (${slicePlaceholders}) AND b.workspace_id IN (${slicePlaceholders})`
         : "";
+      // validity: current: a replaced side of a candidate pair is not insight material (5.5)
       const { results: chunkRows } = await env.DB.prepare(
         // scope-exempt: cron: no caller to scope to. Both workspaces are projected, and the loop below compares them BEFORE the pair reaches the model: a candidate whose two entries sit in different workspaces is skipped and settled, never reasoned over and never written anywhere. Accrual refuses to pair across workspaces (candidates.ts), so that only fires for pre-tenancy candidate rows. sliceClause is optionally present and is a list of workspace IDS read from the `workspaces` table (companyWorkspaceIds, below), never from a request — it narrows this cron's slate, it does not scope it to a caller, and there is no caller to scope to on either invocation
         `SELECT c.id, c.score, c.a_id, c.b_id, a.content AS a_content, b.content AS b_content,
@@ -255,6 +265,10 @@ export async function runWeeklyInsights(
          WHERE c.status = 'pending'
            AND a.tags NOT LIKE '%"status:deprecated"%'
            AND b.tags NOT LIKE '%"status:deprecated"%'
+           AND (a.valid_until IS NULL OR a.valid_until > ${now})
+           AND (b.valid_until IS NULL OR b.valid_until > ${now})
+           AND a.${NOT_HELD_SQL}
+           AND b.${NOT_HELD_SQL}
            ${sliceClause}
          ORDER BY c.score DESC
          LIMIT ?`,
@@ -375,7 +389,11 @@ export async function runWeeklyInsights(
     // rejected.map/used.map, immediately before env.DB.batch(statements),
     // keeps the whole batch's statements prepared together — which is what
     // lets it join the status updates as a single subrequest.
-    const drawnFromPairs: { insightId: string; targetId: string; workspaceId: string }[] = [];
+    // Keyed by insight id, not appended: a second replace of the same insight
+    // in this run overwrites the first replace's pair rather than adding to
+    // it, so the edges emitted below describe only the insight's CURRENT
+    // pair, the one the last replace actually drew it from (T-0089.3.3).
+    const drawnFromByInsight = new Map<string, { targetId: string; workspaceId: string }[]>();
     const replacedInsightIds: string[] = [];
     // Typed edges the reasoning produced. Collected rather than written in the
     // loop for the same reason drawnFromPairs is: one batch, one subrequest.
@@ -517,18 +535,23 @@ export async function runWeeklyInsights(
 
       // Mark it used either way, or the pass re-proposes and re-pays for this pair forever.
       used.push(candidate.id);
-      // Only a blocked capture wrote nothing. Every other status left a row (created,
-      // flagged, or an earlier system insight merged into), and an edge sourced from
-      // a row that does not exist would dangle, so blocked alone gets none. The edge
-      // carries the insight's own workspace so scoped graph walks can see it.
-      if (captured.status !== "blocked") {
+      // Only a blocked capture (or a t7_refused one — never reachable here, a system job
+      // never passes Track 7 parameters) wrote nothing. Every other status left a row
+      // (created, flagged, or an earlier system insight merged into), and an edge sourced
+      // from a row that does not exist would dangle, so blocked/t7_refused alone gets
+      // none. The edge carries the insight's own workspace so scoped graph walks can see it.
+      if (captured.status !== "blocked" && captured.status !== "t7_refused") {
         written++;
         // A replaced insight was redrawn from THIS pair, so the pair it was drawn from
         // before no longer describes it. A merge keeps its edges and adds these.
         if (captured.status === "replaced") replacedInsightIds.push(captured.id);
-        for (const targetId of [candidate.a_id, candidate.b_id]) {
-          drawnFromPairs.push({ insightId: captured.id, targetId, workspaceId: insightWorkspace });
-        }
+        // Overwrites, not appends: a second write to the SAME insight id later
+        // in this run (a second replace drawing it from a different pair) must
+        // leave only its own pair here, not both (T-0089.3.3).
+        drawnFromByInsight.set(captured.id, [
+          { targetId: candidate.a_id, workspaceId: insightWorkspace },
+          { targetId: candidate.b_id, workspaceId: insightWorkspace },
+        ]);
       }
     }
 
@@ -554,10 +577,10 @@ export async function runWeeklyInsights(
       ...[...new Set(replacedInsightIds)].map(id => env.DB.prepare(
         // scope-exempt: cron: by-id, an insight the system job just replaced in the workspace it was drawing from
         `DELETE FROM edges WHERE source_id = ? AND type = 'drawn_from' AND provenance = 'system'`).bind(id)),
-      ...drawnFromPairs
-        .map(({ insightId, targetId, workspaceId }) => edgeInsertStatement(
-          insightId, targetId, "drawn_from", { provenance: "system", weight: 1, workspaceId }, env,
-        ))
+      ...[...drawnFromByInsight.entries()]
+        .flatMap(([insightId, pairs]) => pairs.map(({ targetId, workspaceId }) => edgeInsertStatement(
+          insightId, targetId, "drawn_from", { provenance: "system", weight: 1, ...sameWorkspaceEdge(workspaceId) }, env,
+        )))
         .filter((stmt): stmt is D1PreparedStatement => stmt !== null),
       ...typedEdges
         .flatMap(({ sourceId, targetId, type, workspaceId }) => [
@@ -567,7 +590,7 @@ export async function runWeeklyInsights(
           // is why the DELETE comes last rather than first.
           edgeInsertStatement(sourceId, targetId, type, {
             provenance: "system", weight: INSIGHT_EDGE_WEIGHT,
-            metadata: { via: "insight-reasoning" }, workspaceId,
+            metadata: { via: "insight-reasoning" }, ...sameWorkspaceEdge(workspaceId),
           }, env),
           // WEIGHTS ARE HIGH-WATER MARKS, and this step propagates that into
           // typed edges. `max(weight, excluded.weight)` on the upsert (which

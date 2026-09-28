@@ -4,6 +4,12 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 ## [Unreleased]
 
+**Session hooks**
+
+- Session start no longer spends Workers AI allowance: hooks inject your ranked memories directly.
+- Session capture keeps only what you typed and the assistant's replies: instruction files, environment details and tool context are left out, and likely secrets are masked.
+- Cursor recall comes from session start; use the MCP recall tool for guaranteed recall.
+
 **Activity history**
 
 - A failed edit no longer shows up in a memory's history as an update. When the search re-index failed and the memory was left unchanged, the dashboard's edit still recorded an "updated" event; now only a saved edit does.
@@ -13,11 +19,13 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Saving**
 
+- Nine tag prefixes are now reserved for the brain's own use: `quarantine:`, `edited-canonical:`, `standing:`, `ledger:`, `confidence:`, `confidence-source:`, `outcome:`, `review-rearms:`, `counterparty:`, plus the bare `owed-to-me` marker. A tag in one of these that a person or an AI tool tries to set directly on `remember` or `update` is not saved, and the reply says so. A tag you already had that merely looks like one of these (an `outcome:won` or `confidence:high` from before this change) keeps showing normally; nothing stored is rewritten. The features that use these prefixes land in a later release.
 - The nightly digest and the weekly insight pass never merge into or replace a memory you or an assistant wrote. If one of them writes something that looks like an existing memory, it saves a new memory flagged as a possible duplicate and leaves yours untouched (a digest merges only into an earlier digest, and an insight only into an earlier insight, and never into one you have edited). If what they write contradicts one of your memories, they save it as a draft and leave your memory as it was, instead of marking yours deprecated. A digest that contradicts one of your memories is saved as a held draft instead, and that topic is not digested again while the draft stays as it is. Edit it, confirm it, delete it or mark it deprecated and the next nightly run digests the topic normally.
 
 **Search**
 
 - Search records which memories it showed with one database call instead of one per result, so a 20-result search makes up to 19 fewer database calls.
+- Recall can now say why a memory came back. Ask for it with `explain: true` on the MCP `recall` tool, or `explain=1` on `GET /recall`. The MCP tool adds one line under each result, for example `why: meaning #2 · keywords "gatewright" (rare) · canonical · recent (Sep 20) · reranked up`. The REST API adds a `why` object per result: its rank in the meaning search, the keyword terms it matched (with how rare each is), the ranking multipliers applied (recency, frequency, importance, tag boost), the reranker's percentile, the link it was reached through, and which result slot it took. It is off by default, results and their order are identical either way, and it uses no extra database queries or AI calls.
 
 **Agents**
 
@@ -26,6 +34,12 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Agents can read the latest existing project or tag digest without starting a new summary or model call.
 - Agents can inspect who changed a memory, through which channel, and its supersedes links.
 - The session-start brief reads only the rows of its own queues, so it stays cheap on a large brain, and it lists only items you can act on. History for a shared memory starts at the moment it was shared unless you wrote it.
+
+**Desktop app**
+
+- The Worker update screen now shows what changed for a major version. For 4.0: "Every edit to a memory is now kept, so any change can be undone, by you or by asking your AI. Forgotten memories wait in the trash for 14 days before they are removed for good. Edits made before this update were not recorded, so undo starts from today." Shown to the brain's owner only, and the Done screen adds a line reading the brain's actual trash retention once the update has finished.
+- Advanced Settings has a new "History and trash" section: how long forgotten memories wait in the trash (7, 14, 30 or 90 days) and how many changes are kept per memory (10, 20 or 50). Owners and admins can change these; members see them read-only, with a line saying who can change them.
+- The app's self-update dialog now says plainly that 4.0's features depend on the brain being updated, not the app alone. English: "New in 4.0 once your Second Brain is updated: every change to a memory is now kept, so you can undo it, yourself or by asking your AI. Forgotten memories wait in the trash for 14 days by default before they're removed for good. This app update alone doesn't bring those. Ask whoever owns your Second Brain whether it's been updated yet." Italian: "Novità della versione 4.0, una volta aggiornato il tuo Second Brain: ogni modifica a un ricordo viene ora conservata, così puoi annullarla, da te o chiedendolo alla tua IA. I ricordi dimenticati restano nel cestino per 14 giorni per impostazione predefinita prima di essere eliminati per sempre. Questo aggiornamento dell'app da solo non porta queste novità. Chiedi al proprietario del tuo Second Brain se lo ha già aggiornato."
 
 ## [3.7.0] — Search that puts the right answer first
 

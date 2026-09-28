@@ -1,18 +1,27 @@
-import { validInputTags, projectSlugError, projectTagError, withProjectTag, MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS } from "../tags/system";
+import { validInputTags, projectSlugError, projectTagError, withProjectTag, MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS, reservedTagsNote, stripNewReservedTags } from "../tags/system";
 import { autoCreateProject } from "../projects/autocreate";
 import type { Env } from "../env";
-import { resolveConfig } from "../config";
+import { resolveConfig, type Config } from "../config";
 import { VECTORIZE_FIX_HINT } from "../constants";
 import { json } from "../lib/http";
 import { requireIdentity, type Identity } from "../lib/identity";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { scopeWrite, effectiveWriteTarget, readTeamParam, type WriteContext } from "../lib/scope";
 import { captureEntry } from "../capture/entry";
+import { partitionIgnoredTags, t7ReplyText, validateT7Capture, validateT7RestFields, type T7CaptureInput } from "../capture/t7-capture";
 import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
+import { maybeMarkFollowed } from "../recall/log";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
 import { parseExplicitWhen } from "../when/input";
+import { contentByteLength, isOverContentLimit, tooLargeRestBody, MAX_CONTENT_BYTES } from "../lib/content-size";
+import { parseValidityInput, updateEntryValidity, VALIDITY_WITH_CONTENT_ERROR, type UpdateValidityResult } from "../memory/validity";
+
+// Copy deck 9.1 (T-0089.4.2): too_long's own REST message, ahead of any T7 reply text or the
+// generic held message — there is no nightly check to wait on any more, just a note over the
+// scorer's budget that only the owner can read and release.
+const TOO_LONG_MESSAGE = "Saved, but held out of search because it is too long to check automatically. Read it and release it if it's fine. Shorter memories (about 5,000 words or less) are not held.";
 
 /** Validate route-only volatility input; MCP gets equivalent Zod validation. */
 /** Where this caller's writes land and who gets stamped on them. */
@@ -40,6 +49,24 @@ function readVolatility(raw: unknown): { value?: Volatility; error?: string } {
   return { value: raw as Volatility };
 }
 
+/**
+ * Additive: older clients ignore both extra fields. Merged rather than
+ * overwritten, since several branches already carry their own `message`.
+ * `extraNotes` (Design 1.3) carries T7's own per-tag notes ("use standing: true"),
+ * kept separate from `ignored` so a T7 tag is never also named in the generic sentence.
+ */
+function withReservedNote(body: Record<string, unknown>, ignored: readonly string[], extraNotes: readonly string[] = []): Record<string, unknown> {
+  const notes = [...extraNotes, ...(ignored.length ? [reservedTagsNote(ignored)] : [])];
+  if (!notes.length) return body;
+  const combined = notes.join(" ");
+  const existingMessage = typeof body.message === "string" ? body.message : undefined;
+  return {
+    ...body,
+    ...(ignored.length ? { ignored_tags: [...ignored] } : {}),
+    message: existingMessage ? `${existingMessage} ${combined}` : combined,
+  };
+}
+
 export async function handleCaptureRoutes(
   request: Request,
   url: URL,
@@ -52,13 +79,20 @@ export async function handleCaptureRoutes(
     if (auth instanceof Response) return auth;
     const identity = auth;
 
-    let body: { content?: string; tags?: string[]; source?: string; volatility?: unknown; workspace?: unknown; team?: unknown; project?: unknown; when?: unknown; when_kind?: unknown };
+    let body: {
+      content?: string; tags?: string[]; source?: string; volatility?: unknown; workspace?: unknown; team?: unknown; project?: unknown; when?: unknown; when_kind?: unknown;
+      standing?: unknown; decision?: unknown; confidence?: unknown; confidence_source?: unknown; review_by?: unknown; owed_by?: unknown; owed_to?: unknown;
+      valid_from?: unknown; valid_until?: unknown;
+    };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (body.tags !== undefined && !validInputTags(body.tags)) return json({ ok: false, error: `tags must contain at most ${MAX_INPUT_TAGS} NUL-free strings of at most ${MAX_INPUT_TAG_CHARS} characters` }, 400);
     const badProjectTag = body.tags === undefined ? null : projectTagError(body.tags);
     if (badProjectTag) return json({ ok: false, error: badProjectTag }, 400);
     if (typeof body.content === "string" && body.content.includes("\0")) return json({ ok: false, error: "NUL is not allowed" }, 400);
     if (!body.content?.trim()) return json({ ok: false, error: "content is required" }, 400);
+    // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note, so a very large paste cannot
+    // spend the Worker's 10 ms CPU budget on one write. Checked before anything is written.
+    if (isOverContentLimit(body.content)) return json(tooLargeRestBody(), 413);
     if (body.workspace !== undefined && body.workspace !== "personal" && body.workspace !== "company") {
       return json({ ok: false, error: 'workspace must be "personal" or "company"' }, 400);
     }
@@ -66,15 +100,47 @@ export async function handleCaptureRoutes(
     const captureVol = readVolatility(body.volatility);
     if (captureVol.error) return json({ ok: false, error: captureVol.error }, 400);
 
+    // Every T7 field's type/range is checked here, unconditionally, before anything below
+    // branches on `decision` or reads a field under a different path (the class of bug a
+    // cross-vendor review found: decision:true skipped `when`'s own type guard and crashed
+    // parseExplicitWhen with a 500 instead of a 400).
+    const restFieldError = validateT7RestFields(body);
+    if (restFieldError) return json({ ok: false, error: restFieldError.error }, 400);
+    const t7Input: T7CaptureInput = {
+      standing: body.standing === undefined ? undefined : !!body.standing,
+      decision: body.decision === undefined ? undefined : !!body.decision,
+      confidence: body.confidence as number | undefined,
+      confidence_source: body.confidence_source as "stated" | "inferred" | undefined,
+      review_by: body.review_by as string | undefined,
+      owed_by: body.owed_by as string | undefined,
+      owed_to: body.owed_to as string | undefined,
+      when: body.when as string | undefined,
+      when_kind: body.when_kind as string | undefined,
+    };
+    const t7Validation = validateT7Capture(t7Input);
+    if (t7Validation) return json({ ok: false, error: t7Validation.error }, 400);
+
+    // A decision's review date comes from review_by/when, resolved inside captureEntry
+    // (Design 4.1); the generic when/when_kind parsing below is skipped for it. A
+    // commitment's promised date is an ordinary `when`, just defaulting when_kind to
+    // "due" instead of "wake" (Design 5.1) when the caller left it out.
     let when: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
-    if (body.when !== undefined && body.when !== null) {
-      if (typeof body.when !== "string") return json({ ok: false, error: "when must be a string" }, 400);
-      const parsed = parseExplicitWhen(body.when, body.when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
-      if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
-      when = parsed.value;
-    } else if (body.when_kind !== undefined) {
-      return json({ ok: false, error: "when_kind requires when" }, 400);
+    if (!t7Input.decision) {
+      const hasCommitment = body.owed_by !== undefined || body.owed_to !== undefined;
+      const effectiveKind = body.when_kind ?? (hasCommitment ? "due" : undefined);
+      if (body.when !== undefined && body.when !== null) {
+        if (typeof body.when !== "string") return json({ ok: false, error: "when must be a string" }, 400);
+        const parsed = parseExplicitWhen(body.when, effectiveKind, undefined, (await resolveConfig(env)).TIMEZONE);
+        if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
+        when = parsed.value;
+      } else if (body.when_kind !== undefined) {
+        return json({ ok: false, error: "when_kind requires when" }, 400);
+      }
     }
+
+    // T-0089.2.1: when the fact became and stopped being true, as the user said it.
+    const validity = parseValidityInput(body, Date.now(), (await resolveConfig(env)).TIMEZONE, { allowNull: false });
+    if ("error" in validity) return json({ ok: false, error: validity.error, field: validity.field }, 400);
 
     // Empty means absent, like every other optional param. A bad slug is bad input, not an
     // unknown project, so it fails the capture before anything is written.
@@ -94,10 +160,21 @@ export async function handleCaptureRoutes(
     // volatility: tags the Worker adds may take a capture past it; refusing a capture
     // over a convenience tag would lose the memory.
 
+    // Computed on the caller's raw tags — captureEntry strips these again on its own
+    // path (normalizeCaptureInput), this is purely for telling the caller honestly.
+    // Design 1.3: a T7-namespace tag gets its own specific note, kept out of the
+    // generic reserved-tags sentence so it is never named in both.
+    const { ignored: allIgnoredTags } = stripNewReservedTags(body.tags ?? []);
+    const { t7Notes, otherIgnored: ignoredReservedTags } = partitionIgnoredTags(body.tags ?? [], allIgnoredTags);
+
     const writeCtx = await writeContextFor(env, identity, body.workspace, body.team);
     if (writeCtx instanceof Response) return writeCtx;
 
-    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx, when, { channel: "rest" });
+    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx, when, { channel: "rest", t7: t7Input, validity: validity.value });
+
+    if (result.status === "t7_refused") {
+      return json({ ok: false, error: result.error }, 400);
+    }
 
     if (projectSlug && result.status !== "blocked") {
       await autoCreateProject(env, ctx, { workspaceId: writeCtx.workspaceId, actorId: identity.userId, slug: projectSlug });
@@ -113,6 +190,15 @@ export async function handleCaptureRoutes(
         event: result.status === "stored" || result.status === "flagged" ? "created" : "updated",
         payload: { captureStatus: result.status, channel: "rest" },
       });
+      // 5.4: the hold's own event, written alongside the write's own.
+      if ((result.status === "stored" || result.status === "flagged") && result.held) {
+        auditEvent(env, ctx, {
+          entryId: result.id,
+          actorId: identity.userId,
+          event: "held",
+          payload: { reasons: result.held.reasons, score: result.held.score, channel: "rest" },
+        });
+      }
     }
 
     if (result.status === "blocked") {
@@ -121,40 +207,53 @@ export async function handleCaptureRoutes(
         duplicate: true,
         matchId: result.matchId,
         score: parseFloat((result.score * 100).toFixed(1)),
-        message: "Near-exact duplicate detected — not stored",
+        message: "Near-exact duplicate detected. Not stored.",
       });
     }
+    const t7Message = async () => result.t7 && t7ReplyText(result.id, result.t7, {
+      timezone: (await resolveConfig(env)).TIMEZONE, hasProject: !!projectSlug, commitmentWhenAt: when?.at,
+    });
     if (result.status === "contradiction") {
-      return json({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason });
+      const supersede = result.supersede
+        ? { closed_id: result.supersede.closedId, at: result.supersede.at, direction: result.supersede.direction }
+        : null;
+      return json(withReservedNote({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason, supersede, message: await t7Message() }, ignoredReservedTags, t7Notes));
     }
     if (result.status === "contradiction_protected") {
-      return json({
+      return json(withReservedNote({
         ok: true,
         id: result.id,
         status: result.entryStatus,
         kept_canonical: result.canonicalId,
         reason: result.reason,
-      });
+        message: await t7Message(),
+      }, ignoredReservedTags, t7Notes));
     }
     if (result.status === "replaced") {
-      return json({ ok: true, id: result.id, action: "replaced", message: "New memory replaced an outdated existing entry" });
+      return json(withReservedNote({ ok: true, id: result.id, action: "replaced", message: "The new memory replaced an older one." }, ignoredReservedTags, t7Notes));
     }
     if (result.status === "merged") {
-      return json({ ok: true, id: result.id, action: "merged", message: "Memories merged into a single combined entry" });
+      return json(withReservedNote({ ok: true, id: result.id, action: "merged", message: "Merged into an existing memory." }, ignoredReservedTags, t7Notes));
     }
     if (result.status === "flagged") {
-      return json({
+      const message = await t7Message();
+      return json(withReservedNote({
         ok: true,
         id: result.id,
         warning: "similar",
         matchId: result.matchId,
         score: parseFloat((result.score * 100).toFixed(1)),
-        message: "Stored but similar entry exists — tagged as duplicate-candidate",
-      });
+        held: result.held ? { reason: result.held.reasons[0] } : null,
+        message: result.held?.reasons[0] === "too_long" ? TOO_LONG_MESSAGE : (message ?? "Stored but similar entry exists: tagged as duplicate-candidate"),
+      }, ignoredReservedTags, t7Notes));
     }
     // Additive: older clients ignore the extra field, and the dashboard uses it
     // to show what was filed under what.
-    return json({ ok: true, id: result.id, tags: result.tags ?? [] });
+    return json(withReservedNote({
+      ok: true, id: result.id, tags: result.tags ?? [],
+      held: result.held ? { reason: result.held.reasons[0] } : null,
+      message: result.held?.reasons[0] === "too_long" ? TOO_LONG_MESSAGE : await t7Message(),
+    }, ignoredReservedTags, t7Notes));
   }
 
   // POST /append
@@ -176,7 +275,7 @@ export async function handleCaptureRoutes(
     const addition = body.addition.trim();
 
     const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, content, tags, source");
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     const denied = assertCanEditContent(identity, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
@@ -188,18 +287,44 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: mirrorEditError(source) }, 409);
     }
 
-    let indexed: boolean;
+    // Rahil's decision (18-copy-deck.md 6.8): checks the RESULTING total, not the addition
+    // alone — an append that would push an already-large memory over 128 KB is refused before
+    // anything is written, same as a fresh capture or a full replacement.
+    if (contentByteLength(existingContent) + contentByteLength(addition) > MAX_CONTENT_BYTES) {
+      return json(tooLargeRestBody(), 413);
+    }
+
+    const cfg = await resolveConfig(env);
+    let appendResult: Awaited<ReturnType<typeof appendToEntry>>;
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
+      appendResult = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string, ctx);
     } catch (e) {
       if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
       if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
+    const { indexed, held, wasCanonical } = appendResult;
 
-    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "rest" } });
+    auditEvent(env, ctx, {
+      entryId: id, actorId: identity.userId, event: "appended",
+      payload: { channel: "rest", ...(wasCanonical ? { was_canonical: true } : {}) },
+    });
+    if (held) {
+      auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "held", payload: { reasons: held.reasons, score: held.score, channel: "rest" } });
+    }
+    // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
+    // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+    // hand from appendToEntry above, so this adds no second KV read.
+    ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
+
+    if (held) {
+      const message = held.reasons[0] === "too_long"
+        ? TOO_LONG_MESSAGE
+        : "Update appended, but held out of recall: it looks like an instruction to an AI. Release it once you're sure it's fine.";
+      return json({ ok: true, id, held: { reason: held.reasons[0] }, message });
+    }
 
     return json({
       ok: true,
@@ -217,14 +342,42 @@ export async function handleCaptureRoutes(
     if (auth instanceof Response) return auth;
     const identity = auth;
 
-    let body: { id?: string; content?: string; volatility?: unknown; tags?: unknown };
+    let body: { id?: string; content?: string; volatility?: unknown; tags?: unknown; valid_from?: unknown; valid_until?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+
+    // T-0089.2.1: valid_from / valid_until, the same rules as the MCP update tool.
+    const hasValidity = body.valid_from !== undefined || body.valid_until !== undefined;
+    if (body.content === undefined && !hasValidity) return json({ ok: false, error: "Nothing to update: pass content, valid_from or valid_until." }, 400);
+    if (body.content === undefined && (body.tags !== undefined || body.volatility !== undefined)) return json({ ok: false, error: "To change tags or volatility, pass content too." }, 400);
+    if (body.content !== undefined && body.valid_from !== undefined) return json({ ok: false, error: VALIDITY_WITH_CONTENT_ERROR, field: "valid_from" }, 400);
+    const validityCfg = hasValidity ? await resolveConfig(env) : null;
+    const validity = hasValidity ? parseValidityInput(body, Date.now(), (validityCfg as Config).TIMEZONE, { allowNull: true }) : null;
+    if (validity && "error" in validity) return json({ ok: false, error: validity.error, field: validity.field }, 400);
+    const setValidity = (workspaceId: string) =>
+      updateEntryValidity(env, body.id!.trim(), validity!.value as { from?: number | null; until?: number | null }, { actorId: identity.userId, channel: "rest" }, validityCfg as Config, workspaceId, ctx);
+    const validityBody = (r: UpdateValidityResult): { status: number; body: Record<string, unknown> } => {
+      if (r.status === "updated") return { status: 200, body: { validity: { valid_from: r.effectiveFrom, valid_from_stated: r.validFrom !== null, valid_until: r.validUntil, propagated: r.propagated } } };
+      if (r.status === "refused") return { status: 400, body: { ok: false, error: r.error, field: r.field } };
+      if (r.status === "no_change") return { status: 200, body: { validity: null, changed: false } };
+      if (r.status === "conflict") return { status: 409, body: { ok: false, error: "Entry changed while saving, try again" } };
+      return { status: 404, body: { ok: false, error: `No entry found with ID: ${body.id!.trim()}` } };
+    };
+    if (body.content === undefined) {
+      const target = await getReadableEntry(env, identity, body.id.trim(), "id, workspace_id, actor_id");
+      if (!target) return json({ ok: false, error: `No entry found with ID: ${body.id.trim()}` }, 404);
+      const refused = assertCanEditContent(identity, target);
+      if (refused) return json({ ok: false, error: refused.message }, 403);
+      const out = validityBody(await setValidity(target.workspace_id as string));
+      return json(out.status === 200 ? { ok: true, id: body.id.trim(), ...out.body } : out.body, out.status);
+    }
     if (body.tags !== undefined && !validInputTags(body.tags)) return json({ ok: false, error: `tags must contain at most ${MAX_INPUT_TAGS} NUL-free strings of at most ${MAX_INPUT_TAG_CHARS} characters` }, 400);
     const badProjectTag = body.tags === undefined ? null : projectTagError(body.tags);
     if (badProjectTag) return json({ ok: false, error: badProjectTag }, 400);
     if (typeof body.content === "string" && body.content.includes("\0")) return json({ ok: false, error: "NUL is not allowed" }, 400);
     if (!body.content?.trim()) return json({ ok: false, error: "content is required" }, 400);
+    // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note, checked before anything is written.
+    if (isOverContentLimit(body.content)) return json(tooLargeRestBody(), 413);
 
     const updateVol = readVolatility(body.volatility);
     if (updateVol.error) return json({ ok: false, error: updateVol.error }, 400);
@@ -247,7 +400,7 @@ export async function handleCaptureRoutes(
     // the rest for itself, and keeping the mirror guard out here is what stops
     // capture/store.ts having to depend on the integrations registry (see #289).
     const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, source");
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     const denied = assertCanEditContent(identity, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
@@ -258,11 +411,17 @@ export async function handleCaptureRoutes(
     const writeCtx = await writeContextFor(env, identity);
     if (writeCtx instanceof Response) return writeCtx;
 
-    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string);
+    // Computed on the caller's raw tags — updateEntryContent strips these again on its
+    // own path (applyTagReplacement), this is purely for telling the caller honestly.
+    // Absent (undefined) means "leave the tags alone", so nothing was ignored.
+    const { ignored: ignoredReservedTags } = stripNewReservedTags(replaceTags ?? []);
+
+    const cfg = await resolveConfig(env);
+    const result = await updateEntryContent(env, id, newContent, cfg, updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string, ctx);
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {
-      return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     }
 
     // R2-5: the row is still there, just moved out of this caller's reach mid-edit — a conflict to
@@ -272,7 +431,7 @@ export async function handleCaptureRoutes(
     }
 
     if (result.status === "reembed_failed") {
-      return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged — please try again." }, 500);
+      return json({ ok: false, error: "Couldn't update: search did not update. The memory is unchanged. Try again." }, 500);
     }
 
     if (result.status === "conflict") {
@@ -280,19 +439,48 @@ export async function handleCaptureRoutes(
     }
 
     // Only a write that happened is audited.
-    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "rest" } });
+    auditEvent(env, ctx, {
+      entryId: id, actorId: identity.userId, event: "updated",
+      payload: {
+        channel: "rest",
+        ...(result.wasCanonical ? { was_canonical: true } : {}),
+        ...(result.capsuleChanged ? { capsule_changed: true } : {}),
+      },
+    });
+    if (result.held) {
+      auditEvent(env, ctx, {
+        entryId: id, actorId: identity.userId, event: "held",
+        payload: { reasons: result.held.reasons, score: result.held.score, channel: "rest" },
+      });
+    }
+    // New content plus an end date: the text first, then the window, each its own version.
+    const endFields = hasValidity ? validityBody(await setValidity(row.workspace_id as string)).body : {};
+    // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
+    // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+    // hand from updateEntryContent above, so this adds no second KV read.
+    ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
+
+    if (result.held) {
+      const message = result.held.reasons[0] === "too_long"
+        ? TOO_LONG_MESSAGE
+        : "Updated, but held out of recall: it looks like an instruction to an AI. Release it once you're sure it's fine.";
+      return json(withReservedNote({
+        ...endFields, ok: true, id, held: { reason: result.held.reasons[0] }, message,
+      }, ignoredReservedTags));
+    }
 
     if (!result.vectorIds) {
-      return json({
+      return json(withReservedNote({
+        ...endFields,
         ok: true,
         id,
         vectors: 0,
         semantic_unavailable: true,
-        message: `Updated, but not re-indexed for semantic search (Vectorize unavailable) — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
-      });
+        message: `Updated. Search by meaning is unavailable because Vectorize is unavailable, so it is findable by its words only. Fix: ${VECTORIZE_FIX_HINT}.`,
+      }, ignoredReservedTags));
     }
 
-    return json({ ok: true, id, vectors: result.vectorIds.length });
+    return json(withReservedNote({ ...endFields, ok: true, id, vectors: result.vectorIds.length }, ignoredReservedTags));
   }
 
   return null;

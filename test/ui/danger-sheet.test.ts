@@ -74,7 +74,6 @@ function load(missing: string[] = []) {
       body: { style: {}, appendChild() {} },
     },
     fetch: async () => ({ ok: true, json: async () => ({ ok: true }) }),
-    apiMcp: async () => "",
     refreshAll: () => {},
     setTimeout: (fn: () => void) => fn(),
     clearTimeout: () => {},

@@ -64,10 +64,36 @@ export const DEFAULTS = {
   COMPRESSION_MIN_RECALL: 2,
   COMPRESSION_MIN_AGE_MS: 60 * 86400000,
 
+  // ── Source trust in retrieval (src/recall/source-trust.ts, Track 3) ──
+  // All five start at their neutral / off value: source weighting, the
+  // mirror/transcript occupancy cap and the near-duplicate collapse ship
+  // lock-neutral, so every intermediate commit changes no ranking. A later
+  // tuning task flips these once the eval sets their final values (P1).
+  SOURCE_WEIGHT_MIRROR: 1.0,
+  SOURCE_WEIGHT_TRANSCRIPT: 1.0,
+  SOURCE_WEIGHT_SYSTEM: 1.0,
+  MIRROR_MAX_SHARE: 1.0,
+  NOTICE_COLLAPSE: "off",
+
+  // ── Self-protecting quarantine (src/quarantine/score.ts, Track 4) ──
+  // A write scoring at or above the threshold is held out of recall.
+  // Nothing computes a score yet in this commit, so the default is inert;
+  // 100 disables holds outright once scoring lands, but is not the default.
+  QUARANTINE_THRESHOLD: 1.0,
+  // MCP content writes by one actor inside a 10-minute window before a burst hold fires.
+  QUARANTINE_WRITE_BURST: 40,
+  // Status changes by one actor inside a 10-minute window before the brief groups them.
+  QUARANTINE_STATUS_BURST: 10,
+
   // ── Capture tuning (src/constants.ts) ──
   TAG_BOOST_STEP: 0.15,
   TAG_BOOST_MAX: 1.5,
   CONTRADICTION_IMPORTANCE_STEP: 1.0,
+
+  // A mild score demotion for a stale:as-of row under a "current" query intent (spec 14 5.8/B6).
+  // 1.0 (off) until the as-of eval gate passes on knowledge-update:ku-silent with no regression on
+  // ku-silent-true/ku-silent-fresh (director, 2026-09-27); the real value is 0.9.
+  STALE_PENALTY: 1.0,
 
   // ── Models (src/lib/ai.ts) ──
   LLM_MODEL: "@cf/meta/llama-4-scout-17b-16e-instruct",
@@ -141,11 +167,37 @@ export const DEFAULTS = {
   // .local placeholder this replaced in src/push/vapid.ts.
   PUSH_CONTACT: "",
 
+  // ── Sampled recall log (src/recall/log.ts, T-0089.5.2) ──
+  // Off by default everywhere (D5.2): the log holds the user's own query text, so it is
+  // opt-in rather than opt-out. Consequences of leaving it off: Part B's implicit feedback
+  // never accrues, and T-0043's golden set can only harvest from a brain that turned it on.
+  RECALL_LOG: "off",
+
   // ── Content versions and trash (src/memory/versions.ts, src/memory/trash.ts) ──
   // Prior states kept per memory, newest first. The oldest fall off as new ones arrive.
   VERSION_KEEP: 20,
   // Days a forgotten memory waits in the trash before it is purged for good.
   TRASH_RETENTION_DAYS: 14,
+
+  // ── Standing memory (src/standing/*, Track 7, T-0089.7.1) ──
+  // Eval-tuned firing threshold (the committed standing eval report, Task 2's chosen value
+  // for the raw-input curve — see SYNTHETIC-CORPORA.md). Not a fixed constant: a future
+  // re-run of the eval retunes this without a code change.
+  STANDING_THRESHOLD: 0.67,
+  // Capacity, not a fixed cap: how many standing memories one workspace may hold at once
+  // (Design 2.1 "the cap", 2.4's oldest-first cache build).
+  STANDING_MAX: 50,
+  // Dimension of DEFAULTS.EMBEDDING_MODEL's vectors (bge-small-en-v1.5). Threaded explicitly
+  // into the standing cache codec/build rather than hard-coded there, so a future embedding
+  // model change updates both together.
+  EMBEDDING_DIM: 384,
+
+  // ── Decision ledger (src/decisions/*, Track 7, T-0089.7.2) ──
+  // D7.3: a decision's review date when neither review_by nor when is given.
+  DECISION_REVIEW_DEFAULT_DAYS: 90,
+  CALIBRATION_MIN_N: 10,
+  CALIBRATION_MIN_BUCKET_N: 5,
+  CALIBRATION_MIN_TOPIC_N: 5,
 } as const;
 
 // DEFAULTS is `as const` so the shipped values are pinned and a typo shows up
@@ -199,9 +251,20 @@ export const RULES: Record<ConfigKey, Rule> = {
   COMPRESSION_MIN_RECALL: { kind: "number", min: 0, max: 100, integer: true },
   COMPRESSION_MIN_AGE_MS: { kind: "number", min: 0, max: 10 * 365 * 86400000, integer: true },
 
+  SOURCE_WEIGHT_MIRROR: { kind: "number", min: 0.5, max: 1.0 },
+  SOURCE_WEIGHT_TRANSCRIPT: { kind: "number", min: 0.5, max: 1.0 },
+  SOURCE_WEIGHT_SYSTEM: { kind: "number", min: 0.5, max: 1.0 },
+  MIRROR_MAX_SHARE: { kind: "number", min: 0.1, max: 1.0 },
+  NOTICE_COLLAPSE: { kind: "string" },
+
+  QUARANTINE_THRESHOLD: { kind: "number", min: 0.5, max: 100 },
+  QUARANTINE_WRITE_BURST: { kind: "number", min: 5, max: 1000, integer: true },
+  QUARANTINE_STATUS_BURST: { kind: "number", min: 3, max: 1000, integer: true },
+
   TAG_BOOST_STEP: { kind: "number", min: 0, max: 1 },
   TAG_BOOST_MAX: { kind: "number", min: 1, max: 5 },
   CONTRADICTION_IMPORTANCE_STEP: { kind: "number", min: 0, max: 5 },
+  STALE_PENALTY: { kind: "number", min: 0.5, max: 1.0 },
 
   RERANK_MODE: { kind: "string" },
 
@@ -214,8 +277,18 @@ export const RULES: Record<ConfigKey, Rule> = {
   TEAM_MODE: { kind: "string" },
   TIMEZONE: { kind: "string" },
   PUSH_CONTACT: { kind: "string" },
+  RECALL_LOG: { kind: "string" },
   VERSION_KEEP: { kind: "number", min: 5, max: 500, integer: true },
   TRASH_RETENTION_DAYS: { kind: "number", min: 1, max: 365, integer: true },
+
+  STANDING_THRESHOLD: { kind: "number", min: 0.5, max: 0.95 },
+  STANDING_MAX: { kind: "number", min: 1, max: 100, integer: true },
+  EMBEDDING_DIM: { kind: "number", min: 1, max: 4096, integer: true },
+
+  DECISION_REVIEW_DEFAULT_DAYS: { kind: "number", min: 7, max: 730, integer: true },
+  CALIBRATION_MIN_N: { kind: "number", min: 5, max: 100, integer: true },
+  CALIBRATION_MIN_BUCKET_N: { kind: "number", min: 3, max: 50, integer: true },
+  CALIBRATION_MIN_TOPIC_N: { kind: "number", min: 3, max: 50, integer: true },
 };
 
 /**
@@ -237,6 +310,16 @@ function isValidTimeZone(value: string): boolean {
 export const RERANK_MODES = ["off", "on", "auto"] as const;
 export type RerankMode = (typeof RERANK_MODES)[number];
 export const isRerankMode = (value: unknown): value is RerankMode => (RERANK_MODES as readonly unknown[]).includes(value);
+
+export const NOTICE_COLLAPSE_MODES = ["off", "on"] as const;
+export type NoticeCollapseMode = (typeof NOTICE_COLLAPSE_MODES)[number];
+export const isNoticeCollapseMode = (value: unknown): value is NoticeCollapseMode =>
+  (NOTICE_COLLAPSE_MODES as readonly unknown[]).includes(value);
+
+export const RECALL_LOG_MODES = ["off", "on"] as const;
+export type RecallLogMode = (typeof RECALL_LOG_MODES)[number];
+export const isRecallLogMode = (value: unknown): value is RecallLogMode =>
+  (RECALL_LOG_MODES as readonly unknown[]).includes(value);
 
 /** RFC 8292 section 2's two accepted VAPID `sub` shapes. */
 function isValidPushContact(value: string): boolean {
@@ -285,6 +368,14 @@ export function coerce(key: ConfigKey, value: unknown): { value: Config[ConfigKe
     // A closed enum: an unknown stored value reads as "off" (never the model), not as the default.
     if (key === "RERANK_MODE" && !isRerankMode(value)) {
       return { value: "off" as Config[ConfigKey], note: `${key}: expected off, on or auto, got ${JSON.stringify(value)}; reranking stays off` };
+    }
+    // A closed enum: an unknown stored value reads as "off" (the collapse stays off), not as the default.
+    if (key === "NOTICE_COLLAPSE" && !isNoticeCollapseMode(value)) {
+      return { value: "off" as Config[ConfigKey], note: `${key}: expected off or on, got ${JSON.stringify(value)}; the collapse stays off` };
+    }
+    // A closed enum: an unknown stored value reads as "off" (the log stays off, D5.2's opt-in default), not as the default key's own value — which happens to also be "off" today, but this must not depend on that coincidence.
+    if (key === "RECALL_LOG" && !isRecallLogMode(value)) {
+      return { value: "off" as Config[ConfigKey], note: `${key}: expected off or on, got ${JSON.stringify(value)}; the log stays off` };
     }
     if (typeof value !== "string" || value.trim() === "") {
       return { value: fallback, note: `${key}: expected a non-empty string, got ${typeof value}` };
@@ -397,6 +488,7 @@ function validateStrict(key: string, value: unknown): string | null {
         : `${key} must be empty, a mailto:<address>, or an https:// URL`;
     }
     if (key === "RERANK_MODE") return isRerankMode(value) ? null : `${key} must be one of ${RERANK_MODES.join(", ")}`;
+    if (key === "NOTICE_COLLAPSE") return isNoticeCollapseMode(value) ? null : `${key} must be one of ${NOTICE_COLLAPSE_MODES.join(", ")}`;
     if (typeof value !== "string" || value.trim() === "") return `${key} must be a non-empty string`;
     if (key === "TIMEZONE" && !isValidTimeZone(value)) {
       return `${key} must be a recognized IANA timezone name (e.g. "America/New_York")`;

@@ -20,7 +20,11 @@ const sse = (text: string) => new ReadableStream({
 function makeAI(decision: () => string) {
   return {
     run: vi.fn().mockImplementation(async (model: string, opts: any) => {
-      if (model.startsWith("@cf/baai/bge")) return { data: [new Array(384).fill(0.1)] };
+      // R20's batchEmbeds sends every chunk in one call: answer with one vector per requested text.
+      if (model.startsWith("@cf/baai/bge")) {
+        const texts = Array.isArray(opts?.text) ? opts.text : [opts?.text];
+        return { data: texts.map(() => new Array(384).fill(0.1)) };
+      }
       const prompt = String(opts?.messages?.[0]?.content ?? "");
       if (prompt.includes("Choose exactly one action") || prompt.includes("checking if a new memory contradicts")) return sse(decision());
       return opts?.stream ? sse("A digest of the work memories.") : { response: "3" };
@@ -127,6 +131,8 @@ describe("ADV systemWrite", () => {
     decision = () => JSON.stringify({ action: "merge", target_id: "old-digest", merged_content: "combined digest text" });
     const upserts: { id: string; metadata: any }[] = [];
     (env.VECTORIZE as any).upsert = async (v: any[]) => { upserts.push(...v); return { mutationId: "m" }; };
+    // deleteEntryVectors reads metadata.parentId first (T-0089.1.1): answer from what was upserted.
+    (env.VECTORIZE as any).getByIds = async (ids: string[]) => upserts.filter(u => ids.includes(u.id));
     // The person's edit commits after the merge read the row and before its UPDATE runs.
     const db = env.DB as any;
     const realPrepare = db.prepare.bind(db);
@@ -147,9 +153,12 @@ describe("ADV systemWrite", () => {
     const others = rows.filter(x => String(x.tags).includes('"synthesized"') && x.id !== "old-digest");
     expect(others).toHaveLength(1);
     expect(String(others[0].content)).not.toContain("MY EDIT");
-    // The vectors under the user's row describe the user's text again, not the system's.
-    const last = upserts.filter(v => v.id === "old-digest").pop()!;
-    expect(last.metadata.content).toBe("MY EDIT");
+    // Per-upload vector ids (T-0089.1.1): the lost merge's own upload (the system text) is deleted and
+    // never listed by the user's row.
+    const mergeUpload = upserts.filter(v => v.metadata?.parentId === "old-digest").map(v => v.id);
+    const deletedIds = (env.VECTORIZE.deleteByIds as any).mock?.calls?.flatMap((c: any) => c[0]) ?? [];
+    for (const id of mergeUpload) expect(deletedIds).toContain(id);
+    expect(JSON.parse(String(mine.vector_ids ?? "[]")).some((id: string) => mergeUpload.includes(id))).toBe(false);
   });
 
   function statefulVectors() {
@@ -157,6 +166,8 @@ describe("ADV systemWrite", () => {
     const vz = env.VECTORIZE as any;
     vz.upsert = async (v: any[]) => { for (const x of v) store.set(x.id, x.metadata); return { mutationId: "m" }; };
     vz.deleteByIds = async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" }; };
+    // deleteEntryVectors reads metadata.parentId first (T-0089.1.1): answer from this store.
+    vz.getByIds = async (ids: string[]) => ids.filter(i => store.has(i)).map(i => ({ id: i, values: [], metadata: store.get(i) }));
     return store;
   }
   function raceOnMergeUpdate(action: () => void) {
@@ -177,10 +188,11 @@ describe("ADV systemWrite", () => {
     ai.run.mockImplementation(async (m: string, o: any) => { if (failEmbeds && m.startsWith("@cf/baai/bge")) throw new Error("embed 503"); return base(m, o); });
     raceOnMergeUpdate(() => { sqlite.db.prepare(`UPDATE entries SET content = 'MY EDIT', tags = '["synthesized","work","user-edited"]' WHERE id = 'd'`).run(); failEmbeds = true; });
     await compressTag("work", env, ctx);
-    // content = "MY EDIT", vector_ids = ["d-chunk-0","d-chunk-1","d-chunk-2"], all three vectors hold "combined digest text"
+    // No vector of the lost merge's system text survives under the user's row.
     expect([...store.values()].filter(m => m.parentId === "d").every(m => !String(m.content).includes("combined digest"))).toBe(true);
-    // The repair job (/vectorize-pending) re-indexes a row whose vector_ids is empty.
-    expect(sqlite.rows().find(x => x.id === "d")!.vector_ids).toBe("[]");
+    // Round 6: the lost merge only deleted its own upload, so the row still lists (and has) its own vector.
+    expect(sqlite.rows().find(x => x.id === "d")!.vector_ids).toBe('["d"]');
+    expect(store.has("d")).toBe(true);
   });
 
   it("P3: row forgotten during the merge re-embed leaves the merge's vectors orphaned", async () => {

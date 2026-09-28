@@ -475,22 +475,11 @@ describe("prompt capsule routes", () => {
     });
   });
 
-  it("bounds imported entry ids and never reflects an oversized id", async () => {
+  it("bounds entry ids and never reflects an oversized id", async () => {
     const oversizedId = `private-marker-${"x".repeat(PROMPT_CAPSULE_MAX_ENTRY_ID_CHARS)}`;
-    const imported = await defaultHandler.fetch(req("POST", "/import", {
-      body: {
-        version: 2,
-        entries: [{
-          id: oversizedId,
-          content: "Imported definition",
-          tags: ["capsule:core", "capsule-slot:identity", "status:canonical"],
-          created_at: 1000,
-        }],
-        edges: [],
-      },
-    }), env, ctx);
-    expect(imported.status).toBe(200);
-    expect(await imported.json()).toMatchObject({ imported: 1, failed: 0 });
+    // Import now maps an id over MAX_ENTRY_ID_BYTES to a minted one (T-0089.1.1), so the oversized id
+    // arrives the only way it still can: a row written by 3.7, which had no bound.
+    await seed(oversizedId, "Imported definition", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
 
     const response = await defaultHandler.fetch(req("GET", "/prompt-capsules/core"), env, ctx);
     expect(response.status).toBe(409);

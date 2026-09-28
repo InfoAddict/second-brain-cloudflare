@@ -1,28 +1,30 @@
 import { hasCapsuleTag } from "../tags/system";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from "../compression/eligibility";
 import { intParam, json } from "../lib/http";
-import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
+import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
 import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere, scopeWhereForIdRead } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { graceMs } from "../lib/ai";
 import { classifyEntry } from "../capture/classify";
-import { storeEntry } from "../capture/store";
+import { PENDING_WHERE, indexPendingRow, type PendingRow } from "../vectorize/pending";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
-import { OPEN_LOOP_SQL, withTaskDone, withoutTask } from "../memory/loops";
+import { openLoopSql, withTaskDone, withoutTask } from "../memory/loops";
+import { openOutboundSql, openInboundSql, directionOf, counterpartyOf, dueKindOf } from "../commitments/direction";
 import { getStatus, withStatus } from "../memory/status";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
 import { vectorizeFilterState } from "../vectorize/scope";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 import { reasonOverPair, restatesRecent } from "../insight/reason";
 import { MAX_INSIGHTS_PER_RUN, RECENT_INSIGHT_WINDOW, rawInsightText } from "../insight/weekly";
 import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candidates";
@@ -32,7 +34,7 @@ import { resolveEntryAction, applyInsightResolution } from "../memory/actions";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
 import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 import { readWhenCursor, fetchWhenCandidates, judgeCommitment } from "../when/pass";
-import { DUE_WITHIN_MS, DUE_SQL, parseExplicitWhen } from "../when/input";
+import { DUE_WITHIN_MS, dueSql, parseExplicitWhen } from "../when/input";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -269,7 +271,7 @@ export async function handleAdminRoutes(
       });
       if (result.vectorIds.length) {
         try {
-          await deleteVectorIds(env, result.vectorIds);
+          await deleteEntryVectors(env, result.ownedVectors);
         } catch (e) {
           // The D1 rows and the audit row are already committed: the removal
           // succeeded. A failed index delete only leaves dead vectors behind,
@@ -943,11 +945,15 @@ export async function handleAdminRoutes(
     // written.
     const latchedAtRaw = await env.OAUTH_KV.get(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY).catch(() => null);
     const latchedAt = latchedAtRaw ? Number(latchedAtRaw) : null;
+    // T-0101.8.5: the KV marker set once history starts being recorded (T-0089.1.1),
+    // read here only — no D1 fallback. Omitted, not null, when it has never been set.
+    const historySinceRaw = await env.OAUTH_KV.get(VERSIONS_SINCE_KV_KEY).catch(() => null);
     return json({
       ok: vectorize.ok,
       version: SB_VERSION,
       vectorize: { ...vectorize, workspaceFilter: { supported, degradedQueries, latchedAt } },
       team,
+      ...(historySinceRaw ? { history_since: Number(historySinceRaw) } : {}),
     });
   }
 
@@ -1174,28 +1180,44 @@ export async function handleAdminRoutes(
     if (limit instanceof Response) return limit;
     const offset = intParam(url, "offset", { fallback: 0, min: 0 });
     if (offset instanceof Response) return offset;
+    // P7.8: defaults to "out" so every existing client (none of which send
+    // direction) keeps today's meaning, "things I owe". The dashboard asks
+    // for both explicitly.
+    const direction = url.searchParams.get("direction") ?? "out";
+    if (direction !== "out" && direction !== "in" && direction !== "all") {
+      return json({ ok: false, error: 'direction must be "out", "in" or "all"' }, 400);
+    }
+    const now = Date.now();
+    const directionSql = direction === "out" ? openOutboundSql(now) : direction === "in" ? openInboundSql(now) : openLoopSql(now);
 
     const scope = scopeWhere(auth);
+    // validity: current: a replaced loop is not open (5.5)
     const [rows, countRow] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, tags, source, created_at FROM entries
-         WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
+         WHERE ${directionSql} AND ${scope.clause}
          ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       ).bind(...scope.bindings, limit, offset).all(),
+      // validity: current: the pager's total must match the same replaced-loop exclusion as the rows above (5.5)
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${directionSql} AND ${scope.clause}`,
       ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
     ]);
 
     return json({
       ok: true,
-      entries: (rows.results as Record<string, any>[]).map(r => ({
-        id: r.id as string,
-        content: r.content as string,
-        source: r.source as string,
-        tags: parseTags(r.tags as string),
-        created_at: r.created_at as number,
-      })),
+      entries: (rows.results as Record<string, any>[]).map(r => {
+        const tags = parseTags(r.tags as string);
+        return {
+          id: r.id as string,
+          content: r.content as string,
+          source: r.source as string,
+          tags,
+          created_at: r.created_at as number,
+          direction: directionOf(tags),
+          ...(counterpartyOf(tags) ? { counterparty: counterpartyOf(tags) } : {}),
+        };
+      }),
       total: (countRow?.n as number) ?? 0,
       limit,
       offset,
@@ -1242,35 +1264,44 @@ export async function handleAdminRoutes(
     const now = Date.now();
     const upcomingBefore = now + DUE_WITHIN_MS;
 
-    const rowShape = (r: Record<string, any>) => ({
-      id: r.id as string,
-      content: (r.content as string).slice(0, DUE_CONTENT_CHARS),
-      // The nightly pass's short label when it set the when (src/when/pass.ts),
-      // else the first 80 characters of content as a fallback for the
-      // explicit/regex paths, which never generate one.
-      label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
-      tags: parseTags(r.tags as string),
-      when_at: r.when_at as number,
-      when_kind: r.when_kind as string,
-      when_source: r.when_source as string,
-    });
+    const rowShape = (r: Record<string, any>) => {
+      const tags = parseTags(r.tags as string);
+      return {
+        id: r.id as string,
+        content: (r.content as string).slice(0, DUE_CONTENT_CHARS),
+        // The nightly pass's short label when it set the when (src/when/pass.ts),
+        // else the first 80 characters of content as a fallback for the
+        // explicit/regex paths, which never generate one.
+        label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
+        tags,
+        when_at: r.when_at as number,
+        when_kind: r.when_kind as string,
+        when_source: r.when_source as string,
+        // Design 5.3: derived from tags in JS, no SQL change — rows already carry tags.
+        kind: dueKindOf(tags),
+      };
+    };
 
+    // validity: current: a replaced "dentist Tuesday" must not appear in GET /due (5.5)
     const [overdueRows, overdueCount, upcomingRows, upcomingCount] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
-         WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}
+         WHERE ${dueSql(now)} AND when_at < ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      // validity: current: the overdue pager's total must match the same replaced-fact exclusion as the rows above (5.5)
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${dueSql(now)} AND when_at < ? AND ${scope.clause}`,
       ).bind(now, ...scope.bindings).first() as Promise<Record<string, any> | null>,
+      // validity: current: a replaced "dentist Tuesday" must not appear in the upcoming feed either (5.5)
       env.DB.prepare(
         `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
-         WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}
+         WHERE ${dueSql(now)} AND when_at >= ? AND when_at <= ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, upcomingBefore, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      // validity: current: the upcoming pager's total must match the same replaced-fact exclusion as the rows above (5.5)
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${dueSql(now)} AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
       ).bind(now, upcomingBefore, ...scope.bindings).first() as Promise<Record<string, any> | null>,
     ]);
 
@@ -1427,7 +1458,7 @@ export async function handleAdminRoutes(
     // The single-id form keeps its precise errors, because a client asking about
     // one pattern can act on "not found" and the bulk form cannot.
     if (body.ids === undefined) {
-      if (!found.length) return json({ ok: false, error: `No entry found with ID: ${ids[0]}` }, 404);
+      if (!found.length) return json({ ok: false, error: `No memory found with ID: ${ids[0]}` }, 404);
       if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-insight")) {
         return json({ ok: false, error: "Entry is not a derived insight" }, 400);
       }
@@ -1459,48 +1490,43 @@ export async function handleAdminRoutes(
     // discards at hydration anyway.
     const { results: toProcess } = await env.DB.prepare(
       // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
+      // validity: any: a replaced row keeps its vectors and must stay re-indexable here (5.5)
       `SELECT id, content, tags, source, created_at, workspace_id, actor_id FROM entries
-       WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}
+       WHERE ${PENDING_WHERE}
        ORDER BY created_at DESC LIMIT 25`
-    ).bind(graceCutoff).all();
+    ).bind(graceCutoff).all<PendingRow>();
 
     let processed = 0;
     let failed = 0;
 
-    for (const row of toProcess as Record<string, any>[]) {
+    for (const row of toProcess) {
       try {
-        await storeEntry(
-          env,
-          row.id as string,
-          row.content as string,
-          JSON.parse(row.tags as string),
-          row.source as string,
-          row.created_at as number,
-          // Without this the backfill embeds with DEFAULTS.EMBEDDING_MODEL while
-          // capture and recall use the configured one, writing vectors from the
-          // wrong model into the index, scores go quietly wrong, nothing throws.
-          cfg,
-          // This route repairs OTHER members' rows by design, the context comes
-          // from the row, never from `auth`. Stamping the admin's workspace here
-          // would move every repaired vector into the admin's own space.
-          { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
-        );
-        processed++;
+        // cfg carries the configured embedding model; indexPendingRow stamps the ROW's own
+        // workspace and author, never the admin's.
+        // False: the row changed content or workspace mid-embed; it stays pending for the next call.
+        if (await indexPendingRow(env, row, cfg)) processed++; else failed++;
       } catch (e) {
         console.error("Re-embed failed for entry", row.id, e);
         failed++;
       }
     }
 
-    // Same filter as the select above, or the loop never reaches zero: the
-    // dashboard presses this until `remaining` is 0, so counting rows the select
-    // refuses to process would spin until the batch-made-no-progress guard.
+    // Every still-unindexed row, not just the past-grace ones the select above can touch (adv-final
+    // MAJOR 2): a row inside its grace window is genuinely pending, not done, so reporting
+    // `remaining: 0` while it sits there would tell a caller — including the undo reply this
+    // backs — that indexing finished when it has not even started. oldest, of that same set,
+    // drives retryAfterMs: 0 once nothing is left, otherwise how long until the longest-waiting
+    // row leaves its grace window and this endpoint can actually make progress on it.
     const remaining = await env.DB.prepare(
-      // scope-exempt: admin repair backlog: must match the SELECT above or the loop never reaches zero
-      `SELECT COUNT(*) as count FROM entries WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}`
-    ).bind(graceCutoff).first() as Record<string, any> | null;
+      // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
+      // validity: any: must match the toProcess selection above, replaced rows included (5.5)
+      `SELECT COUNT(*) as count, MIN(created_at) as oldest FROM entries WHERE vector_ids = '[]' AND ${INDEXABLE_SQL}`
+    ).first() as Record<string, any> | null;
+    const remainingCount = (remaining?.count as number) ?? 0;
+    const oldestCreatedAt = remaining?.oldest as number | null;
+    const retryAfterMs = remainingCount === 0 ? 0 : Math.max(0, (oldestCreatedAt as number) + graceMs(env) - Date.now());
 
-    return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+    return json({ processed, failed, remaining: remainingCount, retryAfterMs });
   }
 
   // POST /classify-pending
@@ -1626,6 +1652,10 @@ export async function handleAdminRoutes(
     // which is how it stayed unscoped while every sibling query was fixed.
     const aScope = scopeWhere(auth, undefined, "a.workspace_id");
     const bScope = scopeWhere(auth, undefined, "b.workspace_id");
+    const dryRunNow = Date.now();
+    // validity: current: a replaced side of a candidate pair is not insight material (5.5)
+    // Codex review class E (T-0089.4.2): same gap and same fix as src/insight/weekly.ts's own
+    // draw query — a candidate accrued clean can be held by the time this preview reads it.
     const { results } = await env.DB.prepare(
       `SELECT c.id, c.a_id, c.b_id, c.score, a.content AS a_content, b.content AS b_content,
               a.tags AS a_tags, b.tags AS b_tags
@@ -1635,6 +1665,10 @@ export async function handleAdminRoutes(
        WHERE c.status = 'pending'
          AND a.tags NOT LIKE '%"status:deprecated"%'
          AND b.tags NOT LIKE '%"status:deprecated"%'
+         AND (a.valid_until IS NULL OR a.valid_until > ${dryRunNow})
+         AND (b.valid_until IS NULL OR b.valid_until > ${dryRunNow})
+         AND a.${NOT_HELD_SQL}
+         AND b.${NOT_HELD_SQL}
          AND ${aScope.clause} AND ${bScope.clause}
        ORDER BY c.score DESC
        LIMIT ?`,

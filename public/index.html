@@ -13,8 +13,10 @@
     <link rel="manifest" href="/manifest.json" />
     <link rel="stylesheet" href="css/main.css" />
     <link rel="stylesheet" href="css/graph.css" />
+    <link rel="stylesheet" href="css/history.css" />
     <link rel="stylesheet" href="css/board.css" />
     <link rel="stylesheet" href="css/projects.css" />
+    <link rel="stylesheet" href="css/trash.css" />
   </head>
 
   <body>
@@ -173,12 +175,8 @@
               <section class="tiles" id="board-tiles" hidden aria-label="Brain at a glance"></section>
               <div class="board" id="board"></div>
               <div class="brief" id="brief" style="display: none"></div>
-              <div class="recall-hero" id="recall-welcome" style="display: none">
-                <div class="eyebrow" data-i18n="recall.eyebrow">Recall</div>
-                <div class="hero-line" data-i18n="recall.hero">Ask me anything you've stored away &mdash; I'll find it and answer in your own words.</div>
-              </div>
-              <!-- Answers append after this point. Home, the brief and the hero
-                   above are siblings of the conversation, not part of it — see
+              <!-- Answers append after this point. Home and the brief above
+                   are siblings of the conversation, not part of it — see
                    clearRecall(), which used to wipe the lot. -->
             </div>
             <div class="filter-bar" style="padding-bottom: 0">
@@ -317,6 +315,9 @@
                 <button class="graph-btn" onclick="loadGraph()" title="Re-lay out" data-i18n="graph.relayout" data-i18n-attr="title"><i class="ti ti-refresh"></i></button>
               </div>
             </div>
+            <!-- Trash at the Memories foot (Q1: not a tab). The menu's Data
+                 group carries the other entry point; both call openTrashSheet(). -->
+            <button type="button" class="mem-trash-link" id="mem-trash-link" onclick="openTrashSheet()"><i class="ti ti-trash"></i> <span data-i18n="trash.link">Trash</span></button>
           </div>
 
           <!-- Projects: a named home for related memories. Membership is a
@@ -656,6 +657,7 @@
         <div class="append-input-wrap">
           <textarea id="append-textarea" placeholder="What's changed or new?" data-i18n="memories.appendPlaceholder" data-i18n-attr="placeholder" rows="3"></textarea>
         </div>
+        <p class="inline-error" id="append-error" hidden></p>
         <div class="append-actions">
           <button class="btn-append-cancel" onclick="closeAppend()" data-i18n="memories.cancel">Cancel</button>
           <button class="btn-append-save" id="append-save-btn" onclick="saveAppend()" data-i18n="memories.appendSave">Update</button>
@@ -673,6 +675,7 @@
           <textarea id="edit-textarea" placeholder="Edit your memory..." data-i18n="memories.editPlaceholder" data-i18n-attr="placeholder"></textarea>
         </div>
         <div class="edit-existing-tags" id="edit-existing-tags"></div>
+        <p class="inline-error" id="edit-error" hidden></p>
         <div class="edit-hint" data-i18n="memories.editHintHtml" data-i18n-html>Tap a tag to remove it. Use <span style="font-style: italic">#hashtags</span> in the text to add one.</div>
         <div class="append-actions">
           <button class="btn-append-cancel" onclick="closeEdit()" data-i18n="memories.cancel">Cancel</button>
@@ -694,10 +697,36 @@
              at which point the actions overflowed the padding box and sat flush
              against the bottom edge of the card. -->
         <div class="view-scroll">
+          <!-- T3/T4 lane S5 (16-t3-t4-trust-spec.md 7.2, UX-E.2): the held
+               banner, first in the sheet since it changes how everything
+               below it should be read - hidden entirely on a memory that
+               is not currently held. -->
+          <div class="view-held" id="view-held" style="display: none">
+            <div class="view-held-line" id="view-held-line"></div>
+            <button type="button" class="card-action-btn" id="view-held-release"><i class="ti ti-lock-open"></i> <span data-i18n="held.release">Release</span></button>
+          </div>
           <div class="view-meta" id="view-meta"></div>
+          <div class="view-auto-save-note" id="view-auto-save-note" style="display: none"></div>
           <div class="view-content" id="view-content-text"></div>
           <div class="view-tags" id="view-tags-container"></div>
           <div class="view-brain" id="view-brain" style="display: none"></div>
+          <!-- T7-E Task 14 (15-t7-wow-spec.md 7.3): shares this row with the
+               status control below it (T-0101.8); hidden entirely on a
+               non-standing memory. -->
+          <div class="view-standing" id="view-standing" style="display: none">
+            <span class="view-standing-line" id="view-standing-line"></span>
+            <button type="button" class="card-action-btn" id="view-standing-stop"><i class="ti ti-pin-off"></i> <span data-i18n="standing.stop">Stop</span></button>
+          </div>
+          <div class="view-status" id="view-status-block">
+            <div class="view-status-title" data-i18n="status.label">Status</div>
+            <div id="view-status" class="status-control" role="radiogroup" aria-label="Status">
+              <button type="button" class="status-option" data-status="canonical" role="radio" aria-checked="false" data-i18n="status.trusted">Trusted</button>
+              <button type="button" class="status-option" data-status="draft" role="radio" aria-checked="false" data-i18n="status.unconfirmed">Unconfirmed</button>
+              <button type="button" class="status-option" data-status="deprecated" role="radio" aria-checked="false" data-i18n="status.wrong">Wrong</button>
+            </div>
+            <div class="status-caption" id="view-status-caption"></div>
+            <div class="status-lock-note" id="view-status-lock-note" style="display: none"></div>
+          </div>
           <div class="view-timeline" id="view-timeline" style="display: none"></div>
           <div class="view-related" id="view-related" style="display: none"></div>
         </div>
@@ -705,7 +734,6 @@
           <button class="btn-view-append" id="view-btn-append"><i class="ti ti-writing"></i> <span data-i18n="memories.append">Append</span></button>
           <button class="btn-view-edit" id="view-btn-edit"><i class="ti ti-pencil"></i> <span data-i18n="memories.edit">Edit</span></button>
           <button class="btn-view-forget" id="view-btn-forget"><i class="ti ti-trash"></i> <span data-i18n="memories.forget">Forget</span></button>
-          <button class="btn-view-forget" id="view-btn-delete-forever"><i class="ti ti-trash-x"></i> <span data-i18n="memories.deleteForever">Delete forever</span></button>
         </div>
       </div>
     </div>
@@ -741,6 +769,17 @@
           <button class="menu-item" onclick="exportMemories('json')"><i class="ti ti-download"></i> <span data-i18n="menu.backupJson">Back up as JSON</span></button>
           <button class="menu-item" onclick="exportMemories('markdown')"><i class="ti ti-markdown"></i> <span data-i18n="menu.exportMarkdown">Export as Markdown</span></button>
           <button class="menu-item" id="restore-btn" onclick="restoreFromBackup()"><i class="ti ti-upload"></i> <span data-i18n="menu.restore">Restore from backup</span></button>
+          <!-- D1.3 (T-0101.2.4): backups do not carry a memory's edit history
+               or its copy in the trash, only the memories themselves. -->
+          <p class="digest-note" data-i18n="menu.backupNote">Backups include your memories, but not their history or the trash.</p>
+          <button class="menu-item" id="menu-trash-btn" onclick="openTrashSheet()"><i class="ti ti-trash"></i> <span data-i18n="trash.link">Trash</span></button>
+        </div>
+
+        <!-- Settings (T-0101.8.3): trash retention and versions kept, shared
+             with the desktop Advanced Settings window (contract 4.6). -->
+        <div class="menu-group">
+          <div class="menu-group-label" data-i18n="settingsPanel.menuGroup">Settings</div>
+          <button class="menu-item" id="menu-settings-btn" onclick="openSettingsSheet()"><i class="ti ti-adjustments"></i> <span data-i18n="settingsPanel.menuItem">History and trash</span></button>
         </div>
 
         <div class="menu-group">
@@ -793,6 +832,54 @@
           <div class="about-credits" id="about-credits" aria-label="About Second Brain" data-i18n="menu.aboutAria" data-i18n-attr="aria-label"></div>
           <button class="menu-item danger" onclick="logout()"><i class="ti ti-logout"></i> <span data-i18n="menu.disconnect">Disconnect</span></button>
         </div>
+      </div>
+    </div>
+
+    <!-- Trash (T-0101.2.2): forgotten memories, Restore and Delete forever.
+         Delete forever lives here ONLY (Q11) — openDeleteForeverConfirm is
+         memory-crud.js's, called with onDone so a row leaves this list too. -->
+    <div id="trash-sheet">
+      <div class="menu-inner patterns-inner">
+        <div class="view-header">
+          <h2 style="margin-bottom: 0" data-i18n="trash.title">Trash</h2>
+          <button class="btn-close-icon" onclick="closeTrashSheet()" aria-label="Close" data-i18n="memories.close" data-i18n-attr="aria-label"><i class="ti ti-x"></i></button>
+        </div>
+        <p class="digest-note" id="trash-intro"></p>
+        <p class="digest-note" id="trash-teammate-note" hidden></p>
+        <div id="trash-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
+        <button class="digest-more" id="trash-more" hidden onclick="loadMoreTrash(this)"></button>
+      </div>
+    </div>
+
+    <!-- Settings panel (T-0101.8.3): trash retention and versions kept.
+         Members see it read-only; admin status reuses team.js's existing
+         GET /team/members probe (teamIsAdmin). -->
+    <div id="settings-sheet">
+      <div class="menu-inner">
+        <div class="view-header">
+          <h2 style="margin-bottom: 0" data-i18n="settingsPanel.title">History and trash</h2>
+          <button class="btn-close-icon" onclick="closeSettingsSheet()" aria-label="Close" data-i18n="memories.close" data-i18n-attr="aria-label"><i class="ti ti-x"></i></button>
+        </div>
+        <p class="digest-note" id="settings-admin-note" data-i18n="settingsPanel.adminOnly" hidden>Only the owner or an admin can change these.</p>
+        <div class="team-open-row">
+          <i class="ti ti-trash"></i>
+          <span data-i18n="settingsPanel.retentionLabel">How long forgotten memories wait in the trash</span>
+          <span class="team-select-wrap"><select class="team-select" id="setting-trash-retention" onchange="onSettingChange('setting-trash-retention', 'TRASH_RETENTION_DAYS')"></select><i class="ti ti-chevron-down"></i></span>
+          <button type="button" class="digest-btn digest-btn--quiet" id="setting-trash-retention-reset" onclick="resetSetting('TRASH_RETENTION_DAYS')" title="Use the default value" data-i18n="settingsPanel.resetAria" data-i18n-attr="title" hidden><span data-i18n="settingsPanel.reset">Use default</span></button>
+        </div>
+        <p class="digest-note settings-row-error" id="setting-trash-retention-error" hidden></p>
+        <p class="digest-note settings-row-note" data-i18n="settingsPanel.retentionHelp">Until then, you can bring a forgotten memory back. Shortening this removes older ones at the next daily cleanup.</p>
+        <div class="team-open-row">
+          <i class="ti ti-history"></i>
+          <span data-i18n="settingsPanel.keepLabel">How many changes are kept per memory</span>
+          <span class="team-select-wrap"><select class="team-select" id="setting-version-keep" onchange="onSettingChange('setting-version-keep', 'VERSION_KEEP')"></select><i class="ti ti-chevron-down"></i></span>
+          <button type="button" class="digest-btn digest-btn--quiet" id="setting-version-keep-reset" onclick="resetSetting('VERSION_KEEP')" title="Use the default value" data-i18n="settingsPanel.resetAria" data-i18n-attr="title" hidden><span data-i18n="settingsPanel.reset">Use default</span></button>
+        </div>
+        <p class="digest-note settings-row-error" id="setting-version-keep-error" hidden></p>
+        <p class="digest-note settings-row-note" data-i18n="settingsPanel.keepHelp">Each change kept is a point you can go back to. Lowering this removes the oldest the next time a memory changes. Raising it does not bring back changes already removed.</p>
+        <!-- No visible stub: this shows only once GET /config's `defaults`
+             carries RECALL_LOG (T-0089.5.5). Its content is that release's. -->
+        <div id="setting-recall-log-row" style="display: none"></div>
       </div>
     </div>
 
@@ -857,6 +944,12 @@
           <h2 style="margin-bottom: 0" data-i18n="loops.title">Open loops</h2>
           <button class="btn-close-icon" onclick="closeLoopsSheet()"><i class="ti ti-x"></i></button>
         </div>
+        <!-- T7-E: "You owe" (outbound) / "Owed to you" (inbound), paging
+             GET /loops?direction=out|in (Design 7.1). -->
+        <div class="loops-tabs" role="tablist" aria-label="Loops direction">
+          <button type="button" class="loops-tab active" id="loops-tab-out" role="tab" aria-selected="true" onclick="setLoopsDirection('out')" data-i18n="loops.youOwe">You owe</button>
+          <button type="button" class="loops-tab" id="loops-tab-in" role="tab" aria-selected="false" onclick="setLoopsDirection('in')" data-i18n="loops.owedToYou">Owed to you</button>
+        </div>
         <div id="loops-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
         <button class="digest-more" id="loops-more" hidden onclick="loadMoreLoops(this)"></button>
       </div>
@@ -871,6 +964,44 @@
           <button class="btn-close-icon" onclick="closeDueSheet()"><i class="ti ti-x"></i></button>
         </div>
         <div id="due-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
+      </div>
+    </div>
+
+    <!-- The decision log (T7-E, Design 4.4, 7.4): every logged decision
+         (ledger:decision) with its outcome, plus a calibration dot plot of
+         how often confident calls came true. js/ledger.js. -->
+    <div id="ledger-sheet">
+      <div class="menu-inner patterns-inner">
+        <div class="view-header">
+          <h2 style="margin-bottom: 0" data-i18n="ledger.title">Decision log</h2>
+          <button class="btn-close-icon" onclick="closeLedgerSheet()"><i class="ti ti-x"></i></button>
+        </div>
+        <div class="loops-tabs" role="tablist" aria-label="Confidence source">
+          <button type="button" class="loops-tab active" id="ledger-source-all" role="tab" aria-selected="true" onclick="setLedgerSource('all')" data-i18n="ledger.sourceAll">All</button>
+          <button type="button" class="loops-tab" id="ledger-source-stated" role="tab" aria-selected="false" onclick="setLedgerSource('stated')" data-i18n="ledger.sourceStated">Stated</button>
+          <button type="button" class="loops-tab" id="ledger-source-inferred" role="tab" aria-selected="false" onclick="setLedgerSource('inferred')" data-i18n="ledger.sourceInferred">Inferred</button>
+        </div>
+        <div class="loops-tabs" role="tablist" aria-label="Decision state">
+          <button type="button" class="loops-tab active" id="ledger-state-open" role="tab" aria-selected="true" onclick="setLedgerState('open')" data-i18n="ledger.stateOpen">Open</button>
+          <button type="button" class="loops-tab" id="ledger-state-resolved" role="tab" aria-selected="false" onclick="setLedgerState('resolved')" data-i18n="ledger.stateResolved">Resolved</button>
+        </div>
+        <p class="digest-note" id="ledger-sentence"></p>
+        <div class="ledger-chart-wrap" id="ledger-chart-wrap" hidden>
+          <div class="legend" id="ledger-legend"></div>
+          <p class="digest-note ledger-chart-scope" id="ledger-chart-scope"></p>
+          <div class="ledger-chart" id="ledger-chart"><svg></svg></div>
+          <button class="digest-more" id="ledger-table-toggle" type="button" onclick="toggleLedgerTable()"></button>
+          <div class="ledger-table-scroll">
+            <table class="data-table" id="ledger-table" hidden>
+              <caption class="vh"></caption>
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="digest-note" id="ledger-caption" hidden></p>
+        <p class="digest-note" id="ledger-topic" hidden></p>
+        <div id="ledger-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
       </div>
     </div>
 
@@ -914,13 +1045,20 @@
     <script src="js/recall.js"></script>
     <script src="js/recent.js"></script>
     <script src="js/remember.js"></script>
+    <script src="js/undo.js"></script>
+    <script src="js/history-view.js"></script>
     <script src="js/memory-crud.js"></script>
     <script src="js/settings.js"></script>
+    <script src="js/trash.js"></script>
+    <script src="js/settings-panel.js"></script>
+    <script src="js/whats-new.js"></script>
+    <script src="js/daily-limit-banner.js"></script>
     <script src="js/patterns.js"></script>
     <script src="js/stale.js"></script>
     <script src="js/loops.js"></script>
     <script src="js/pending-due.js"></script>
     <script src="js/due.js"></script>
+    <script src="js/ledger.js"></script>
     <script src="js/install-guide.js"></script>
     <script src="js/notifications.js"></script>
     <script src="js/integrations.js"></script>

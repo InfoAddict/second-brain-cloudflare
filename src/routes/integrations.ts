@@ -248,7 +248,7 @@ export async function handleIntegrationsRoutes(
       const roots = await ensureTenantBootstrap(env);
       if (auth.userId !== roots.ownerUserId) {
         return json(
-          { ok: false, error: "Only the brain's owner can move memories this connection already synced — they live in the owner's own workspace." },
+          { ok: false, error: "Only the brain's owner can move memories this connection already synced: they live in the owner's own workspace." },
           403,
         );
       }
@@ -265,7 +265,7 @@ export async function handleIntegrationsRoutes(
       // Nothing moves for this page; the caller must re-confirm.
       if (body.expectedTarget && body.expectedTarget !== target) {
         return json(
-          { ok: false, error: "The layer changed since this move was confirmed — reconfirm to continue." },
+          { ok: false, error: "The layer changed since this move was confirmed. Reconfirm to continue." },
           409,
         );
       }
@@ -299,7 +299,7 @@ export async function handleIntegrationsRoutes(
       for (const key of batchKeys) {
         const mapped = record.itemMap[key];
         try {
-          const result = await moveEntry(mapped.entryId, target, env, auth, { actorId: auth.userId, channel: "rest" });
+          const result = await moveEntry(mapped.entryId, target, env, auth, { actorId: auth.userId, channel: "rest" }, undefined, ctx);
           d1Spent += 1;
           switch (result.status) {
             case "shared":
@@ -312,14 +312,22 @@ export async function handleIntegrationsRoutes(
               // Carries vectorIds/workspaceId too (share.ts) so a re-run over
               // an already-moved entry can still repair a stale Vectorize
               // stamp left by a previous failed/skipped re-stamp.
+              // moveEntry can reach no_change straight off its read (cost 1,
+              // already counted above) or after a missed batch whose liveness
+              // re-read found the row already at the target (cost 3: read +
+              // batch + re-read). The status alone doesn't say which; charge
+              // the worst case so the vectorize loop below never overspends.
               alreadyThere++;
+              d1Spent += 2;
               toRestamp.push({ vectorIds: result.vectorIds, workspaceId: result.workspaceId });
               break;
             case "not_found":
-              // A stale itemMap pointer (deleted elsewhere) or an entry outside
-              // the owner's own readable set — either way, not a move, and not
-              // a reason to abort the rest of the batch.
+              // A stale itemMap pointer (deleted elsewhere), an entry outside the
+              // owner's own readable set (cost 1, already counted above), or a
+              // row gone by the time a missed batch's liveness re-read ran (cost
+              // 3). Same can't-tell-which-path reasoning as no_change above.
               missing++;
+              d1Spent += 2;
               break;
             case "forbidden":
               refused++;
@@ -328,8 +336,10 @@ export async function handleIntegrationsRoutes(
               // The row moved (or was forgotten and re-captured) between this call's read and its
               // batch — the same class of transient race the disconnect-purge tests already cover
               // elsewhere in this route. Counted as missing for this pass; the next sync's own
-              // fresh read retries it.
+              // fresh read retries it. Always reached after a missed batch, so it always costs 3:
+              // the read, the batch, and the widened liveness re-read.
               missing++;
+              d1Spent += 2;
               break;
           }
         } catch (e) {
@@ -354,16 +364,23 @@ export async function handleIntegrationsRoutes(
       // regardless of restamp outcome.
       const d1Reserved = d1Spent + 1;
       let vectorizeSpent = 0;
+      // Codex review class A (T-0089.4.2): restampVectorWorkspace's own held-row re-check spends
+      // one D1 read per call (one per entry here, not per chunk — it combines every getByIds
+      // batch's parent ids into a single read), which this projection has to count alongside the
+      // Vectorize cost or the self-throttling below stops protecting the real ceiling.
+      let restampD1Spent = 0;
       let vectorFailures = 0;
       for (const entry of toRestamp) {
         if (!entry.vectorIds.length) continue;
         const chunks = Math.ceil(entry.vectorIds.length / VECTORIZE_GET_BY_IDS_BATCH);
-        const projectedCost = chunks * 2; // one getByIds + one upsert per chunk
-        if (d1Reserved + vectorizeSpent + projectedCost > FREE_PLAN_SUBREQUESTS) {
+        const projectedVectorizeCost = chunks * 2; // one getByIds + one upsert per chunk
+        const projectedD1Cost = 1; // restampVectorWorkspace's own held-row re-check
+        if (d1Reserved + restampD1Spent + projectedD1Cost + vectorizeSpent + projectedVectorizeCost > FREE_PLAN_SUBREQUESTS) {
           vectorFailures++;
           continue;
         }
-        vectorizeSpent += projectedCost;
+        vectorizeSpent += projectedVectorizeCost;
+        restampD1Spent += projectedD1Cost;
         const restamp = await restampVectorWorkspace(env, entry.vectorIds, entry.workspaceId);
         if (!restamp.ok) vectorFailures++;
       }
@@ -456,7 +473,7 @@ export async function handleIntegrationsRoutes(
         ).bind(JSON.stringify(pageIds), ...scope.bindings).all<{ id: string }>();
         const alreadyTrashed = new Set((already ?? []).map((r) => r.id));
         const toProcess = pageIds.filter((id) => !alreadyTrashed.has(id));
-        const result = await trashMirroredEntries(env, auth, toProcess, { provider: provider.id });
+        const result = await trashMirroredEntries(env, auth, toProcess, { provider: provider.id }, ctx);
         purged = tally.purged + alreadyTrashed.size + result.purged;
         skipped = tally.skipped + result.skipped;
         if (remainingKeys.length > page.length) {

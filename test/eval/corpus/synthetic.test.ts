@@ -1,0 +1,291 @@
+import { describe, expect, it } from "vitest";
+import { buildSyntheticCorpus, SYNTHETIC_CORPORA } from "./synthetic";
+import { INJECTION_DOCS, INJECTION_SUBJECTS, PLANT_STYLES, plantText } from "./synthetic-injection";
+import { NOISE_FOOTER } from "./synthetic-noise";
+import { STANDING, UNRELATED_QUERIES } from "./synthetic-standing";
+import { MONTH_DAY_CONTROL_ACCEPTANCE_MRR, MONTH_DAY_CONTROL_FLOOR_SCOPE, MONTH_DAY_CONTROL_GAP_TAG, TEMPORAL_TYPES } from "./synthetic-temporal";
+import { validAt } from "../temporal-oracle";
+import type { GoldenQuery } from "../types";
+
+const DURING_SUBSETS = ["during-before-change", "during-after-change", "backdated-past", "backdated-newest", "retracted-past", "corrected-backdated", "recap-gold"];
+
+const byTag = <T extends { tags?: string[] }>(qs: T[], tag: string): T[] => qs.filter(q => q.tags?.includes(tag));
+const clusters = (qs: { clusterKey?: string }[]) => new Set(qs.map(q => q.clusterKey)).size;
+const built = Object.fromEntries(SYNTHETIC_CORPORA.map(id => [id, buildSyntheticCorpus(id)])) as Record<(typeof SYNTHETIC_CORPORA)[number], ReturnType<typeof buildSyntheticCorpus>>;
+
+describe("synthetic corpora, common", () => {
+  it("rebuilds every seeded corpus identically and changes with the seed", () => {
+    for (const id of SYNTHETIC_CORPORA) {
+      expect(buildSyntheticCorpus(id).dataFingerprint).toEqual(built[id].dataFingerprint);
+      expect(buildSyntheticCorpus(id, 7).dataFingerprint).not.toEqual(buildSyntheticCorpus(id, 8).dataFingerprint);
+    }
+  });
+  it("has unique entry ids, unique query ids and gold that exists", () => {
+    for (const id of SYNTHETIC_CORPORA) {
+      const c = built[id], ids = new Set(c.entries.map(e => e.id));
+      expect(ids.size).toBe(c.entries.length);
+      expect(new Set(c.queries.map(q => q.id)).size).toBe(c.queries.length);
+      for (const q of c.queries) for (const g of q.gold) expect(ids.has(g.id)).toBe(true);
+    }
+  });
+});
+
+describe("temporal", () => {
+  const c = built.temporal;
+  it("dates documents at noon UTC, so the local-time date parser answers the same in every timezone", () => {
+    for (const e of c.entries) expect(e.createdAt % 86_400_000).toBe(12 * 3_600_000);
+  });
+  it("temporal-during has the seven subsets of 6.2 with the stated sizes", () => {
+    const sizeOf = (subset: string) => byTag(c.queries.filter(q => q.category === "temporal-during"), `subset:${subset}`).length;
+    expect(sizeOf("during-before-change")).toBe(TEMPORAL_TYPES.update);
+    expect(sizeOf("during-after-change")).toBe(TEMPORAL_TYPES.update);
+    expect(sizeOf("backdated-past")).toBe(TEMPORAL_TYPES.retro);
+    expect(sizeOf("backdated-newest")).toBe(TEMPORAL_TYPES["retro-norecap"]);
+    expect(sizeOf("retracted-past")).toBe(TEMPORAL_TYPES.retracted);
+    expect(sizeOf("corrected-backdated")).toBe(TEMPORAL_TYPES.corrected);
+    expect(sizeOf("recap-gold")).toBe(TEMPORAL_TYPES["recap-only"]);
+  });
+  it("every forbidden id was an active, un-retracted belief at the question's date", () => {
+    const beliefAt = (e: (typeof c.entries)[number], t: number) => e.createdAt <= t && (e.retractedAt === undefined || e.retractedAt > t);
+    for (const q of c.queries.filter(x => x.category === "temporal-during" && x.forbidden?.length)) {
+      for (const id of q.forbidden!) expect(beliefAt(c.entries.find(e => e.id === id)!, q.expectedAsOf!), `${q.id} forbidden ${id}`).toBe(true);
+    }
+  });
+  it("retracted timelines: bad supersedes old, retraction restores old (D-RET), fix is a neutral later note with no edge from itself", () => {
+    for (const i of c.entries.filter(e => /^tm-retracted-\d+-old$/.test(e.id)).map(e => e.id.split("-")[2])) {
+      expect(c.edges.some(e => e.sourceId === `tm-retracted-${i}-fix` && e.targetId === `tm-retracted-${i}-bad`)).toBe(true);
+      const bad = c.entries.find(e => e.id === `tm-retracted-${i}-bad`)!;
+      expect(bad.retractedAt).toBeDefined();
+      expect(bad.validUntil).toBe(bad.validFrom); // empty window: never actually valid
+      const now = c.queries.find(q => q.id === `tm-q-${i}-now`)!;
+      expect(now.gold.map(g => g.id).sort()).toEqual([`tm-retracted-${i}-fix`, `tm-retracted-${i}-old`].sort());
+      expect(now.forbidden).toEqual([`tm-retracted-${i}-bad`]);
+    }
+  });
+  it("the controls floor is declared", () => {
+    expect(c.floors).toContainEqual({ scope: MONTH_DAY_CONTROL_FLOOR_SCOPE, metric: "mrr10", min: MONTH_DAY_CONTROL_ACCEPTANCE_MRR });
+  });
+  it("names every timeline's subject distinctly, with no numbered siblings", () => {
+    // Every timeline's "now" question, regardless of which knowledge-update subset it carries
+    // (current, ku-corrected or ku-silent, T-0089.2.6): one distinct subject per timeline.
+    const subjects = c.queries.filter(q => q.category === "knowledge-update").map(q => q.text.replace(/^Where is the /, "").replace(/ now\?$/, ""));
+    expect(subjects).toHaveLength(Object.values(TEMPORAL_TYPES).reduce((a, b) => a + b, 0));
+    expect(new Set(subjects).size).toBe(subjects.length);
+    expect(subjects.some(s => /\d/.test(s))).toBe(false);
+  });
+  it("keeps the newer fact from answering the past question (no former-location wording)", () => {
+    for (const e of c.entries.filter(x => /^tm-(update|retro|retro-norecap)-\d+-new$/.test(x.id))) expect(e.content).not.toMatch(/former|previous|used to|was at/i);
+  });
+  it("declares supersession edges and validity, including retractions and post-as-of edits", () => {
+    expect(c.edges.length).toBeGreaterThan(80);
+    expect(c.edges.every(e => e.type === "supersedes")).toBe(true);
+    // retracted's "bad" and corrected's "wrong": both wrong-from-a-date-on, both retracted (T-0089.2.6).
+    expect(c.entries.filter(e => e.retractedAt !== undefined).length).toBe(TEMPORAL_TYPES.retracted + TEMPORAL_TYPES.corrected);
+    const edited = c.entries.filter(e => e.priorVersions);
+    expect(edited).toHaveLength(TEMPORAL_TYPES.edited);
+    for (const e of edited) expect(e.updatedAt!).toBeGreaterThan(Date.UTC(2026, 3, 15));
+  });
+  it("has backdated entries: created after the date the fact became valid, and a newer-created recap of the past", () => {
+    for (const e of c.entries.filter(x => /^tm-retro-\d+-new$/.test(x.id))) expect(e.validFrom!).toBeLessThan(e.createdAt - 30 * 86_400_000);
+    const i = c.entries.find(x => x.id.startsWith("tm-retro-"))!.id.split("-")[2];
+    const created = (k: string) => c.entries.find(x => x.id === `tm-retro-${i}-${k}`)!.createdAt;
+    expect(created("recap")).toBeGreaterThan(created("new"));
+    const now = c.queries.find(q => q.id === `tm-q-${i}-now`)!;
+    expect(now.gold.map(g => g.id)).toEqual([`tm-retro-${i}-new`]);
+  });
+  it("marks exactly the pre-filtered past questions with asOf and gives phrase questions an expected date instead", () => {
+    for (const q of c.queries) {
+      expect(q.asOf !== undefined).toBe(!!q.tags?.includes("subset:prefiltered"));
+      if (q.tags?.some(t => /subset:(phrase|backdated|retracted)/.test(t))) expect(q.expectedAsOf).toBeDefined();
+    }
+    expect(byTag(c.queries, "subset:phrase-dated").every(q => /as of \w+ \d+, 2026/.test(q.text))).toBe(true);
+  });
+  it("has month-day controls that a date parser must not read as a question date, no longer tagged out of the temporal target", () => {
+    const controls = byTag(c.queries, "subset:control-not-asof");
+    expect(controls.length).toBeGreaterThanOrEqual(30);
+    for (const q of controls) {
+      expect(q.text).toMatch(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/);
+      expect(q.asOf).toBeUndefined();
+      expect(q.expectedAsOf).toBeUndefined();
+      // T-0089.2.5 fixed the parser to recognize these as names, not dates, so the controls now score correctly and
+      // no longer need the known-gap exclusion: they join the ordinary temporal category's regression rule like any
+      // other subset. MONTH_DAY_CONTROL_GAP_TAG/_ACCEPTANCE_MRR remain pinned for the gate-mechanics fixtures in
+      // temporal-gate.test.ts and synthetic-acceptance.test.ts, and for SYNTHETIC-CORPORA.md's history of the fix.
+      expect(q.tags).not.toContain(MONTH_DAY_CONTROL_GAP_TAG);
+      expect(MONTH_DAY_CONTROL_GAP_TAG).toBe("gap:temporal-month-day-controls");
+      expect(MONTH_DAY_CONTROL_ACCEPTANCE_MRR).toBe(0.95);
+    }
+  });
+  it("meets the gate's power floors per category, including the split-out as-of gate", () => {
+    for (const cat of ["temporal", "temporal-during", "knowledge-update"]) {
+      const qs = c.queries.filter(q => q.category === cat);
+      expect(qs.length, cat).toBeGreaterThanOrEqual(100);
+      expect(clusters(qs), cat).toBeGreaterThanOrEqual(30);
+    }
+    expect(c.queries.length).toBeGreaterThanOrEqual(200);
+  });
+  it("puts every during-subset query in the temporal-during category, and only those there", () => {
+    // T-0089.2.6: 7 subsets, 225 queries, 190 clusters (during-before-change and during-after-change
+    // share the update timeline's cluster, so they add queries but not distinct clusters; 14-t2-time-spec.md 6.2).
+    const during = c.queries.filter(q => DURING_SUBSETS.some(s => q.tags?.includes(`subset:${s}`)));
+    expect(during).toHaveLength(225);
+    expect(clusters(during)).toBe(190);
+    for (const q of during) expect(q.category).toBe("temporal-during");
+    for (const q of c.queries.filter(q => q.category === "temporal-during")) expect(DURING_SUBSETS.some(s => q.tags?.includes(`subset:${s}`))).toBe(true);
+  });
+  it("gives the retracted-past question the actually-true gold only: ranking the cancelled move first is not rewarded", () => {
+    for (const q of byTag(c.queries, "subset:retracted-past")) {
+      expect(q.gold).toHaveLength(1);
+      expect(q.gold[0].grade).toBe(2);
+      expect(q.gold[0].id).toMatch(/-old$/);
+      const badId = q.gold[0].id.replace(/-old$/, "-bad");
+      expect(c.entries.some(e => e.id === badId)).toBe(true);
+      expect(q.gold.map(g => g.id)).not.toContain(badId);
+    }
+  });
+  it("gives every during-subset query's gold a document that is valid at its expectedAsOf, for every timeline shape", () => {
+    for (const q of c.queries.filter(x => x.category === "temporal-during")) {
+      expect(q.expectedAsOf).toBeDefined();
+      for (const g of q.gold) expect(validAt(c.entries.find(e => e.id === g.id)!, q.expectedAsOf!)).toBe(true);
+    }
+  });
+  it("every during query carries asOfParam equal to expectedAsOf", () => {
+    for (const q of c.queries.filter(x => x.category === "temporal-during")) expect(q.asOfParam).toBe(q.expectedAsOf);
+  });
+  it("cue balance: each cue marks the gold in one subset and the distractors in another (T-0089.2.6)", () => {
+    const during = c.queries.filter(q => q.category === "temporal-during");
+    const entryById = new Map(c.entries.map(e => [e.id, e] as const));
+    const bySubset = new Map<string, typeof during>();
+    for (const q of during) {
+      const subset = q.tags!.find(t => t.startsWith("subset:"))!.slice("subset:".length);
+      bySubset.set(subset, [...(bySubset.get(subset) ?? []), q]);
+    }
+    // Siblings share the gold id's kind-and-index prefix ("tm-update-3-" from "tm-update-3-new").
+    const siblingsOf = (goldId: string) => c.entries.filter(e => e.id.startsWith(goldId.replace(/-[a-z]+$/, "-")));
+    const CUES: Record<string, (doc: (typeof c.entries)[number], siblings: (typeof c.entries), q: GoldenQuery) => boolean> = {
+      "newest document": (doc, siblings) => siblings.some(s => s.id !== doc.id) && siblings.every(s => s.id === doc.id || s.createdAt <= doc.createdAt),
+      "oldest document": (doc, siblings) => siblings.some(s => s.id !== doc.id) && siblings.every(s => s.id === doc.id || s.createdAt >= doc.createdAt),
+      "Correction": doc => /Correction/.test(doc.content),
+      "Looking back": doc => /Looking back/.test(doc.content),
+      "' was '": doc => / was /.test(doc.content),
+      "'is now'": doc => /is now/.test(doc.content),
+      "explicit date": doc => /\d{4}-\d{2}-\d{2}|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(doc.content),
+      "created after T": (doc, _s, q) => doc.createdAt > q.expectedAsOf!,
+    };
+    for (const [cue, test] of Object.entries(CUES)) {
+      const onGold: string[] = [], onDistractor: string[] = [];
+      for (const [subset, qs] of bySubset) {
+        if (qs.every(q => q.gold.every(g => test(entryById.get(g.id)!, siblingsOf(g.id), q)))) onGold.push(subset);
+        // A rival for every query in the subset, not necessarily the same sibling each time: proves the cue has
+        // something non-gold to grab onto throughout the subset, without requiring every sibling to carry it.
+        const distractorIds = (q: GoldenQuery) => [...(q.forbidden ?? []), ...siblingsOf(q.gold[0].id).map(e => e.id).filter(id => !q.gold.some(g => g.id === id))];
+        if (qs.every(q => { const ids = distractorIds(q); return ids.length > 0 && ids.some(id => test(entryById.get(id)!, siblingsOf(q.gold[0].id), q)); })) onDistractor.push(subset);
+      }
+      expect(onGold.length, `cue ${cue} must mark 100% of gold in at least one subset (found in: ${onGold.join(", ") || "none"})`).toBeGreaterThan(0);
+      expect(onDistractor.length, `cue ${cue} must mark 100% of forbidden-or-distractor docs in at least one subset (found in: ${onDistractor.join(", ") || "none"})`).toBeGreaterThan(0);
+    }
+  });
+  it("makes the current answer valid now and its predecessors not, per the declared validity", () => {
+    const now = Date.UTC(2026, 8, 1);
+    for (const q of c.queries.filter(x => x.tags?.includes("subset:current"))) for (const g of q.gold) expect(validAt(c.entries.find(e => e.id === g.id)!, now)).toBe(true);
+    expect(validAt(c.entries.find(e => e.id.endsWith("-old") && e.id.startsWith("tm-update-"))!, now)).toBe(false);
+  });
+});
+
+describe("noise", () => {
+  const c = built.noise, email = new Set(c.entries.filter(e => e.source === "email-gmail").map(e => e.id));
+  const transcript = new Set(c.entries.filter(e => e.source === "codex-session" || e.source === "cursor-session").map(e => e.id));
+  it("shares one identical footer across at least five sender templates", () => {
+    const mails = c.entries.filter(e => email.has(e.id));
+    expect(mails.every(e => e.content.endsWith(NOISE_FOOTER))).toBe(true);
+    const templates = new Set(mails.map(e => e.content.split("\n")[0].replace(/[\w.-]+@/, "@")));
+    expect(templates.size).toBeGreaterThanOrEqual(5);
+  });
+  it("has probes, recurring finance notices and email-correct controls for mail, and the same shape for transcripts", () => {
+    for (const s of ["probe-footer-words", "probe-footer-synonym", "recurring", "email-control", "note-same-topic", "transcript-recurring", "transcript-control", "note-same-topic-transcript", "transcript-probe", "mail-crowding", "transcript-crowding"]) {
+      expect(byTag(c.queries, `subset:${s}`).length, s).toBeGreaterThanOrEqual(10);
+    }
+    const nonDirectGold = c.queries.filter(q => q.gold.every(g => email.has(g.id) || transcript.has(g.id)));
+    expect(nonDirectGold.length / c.queries.length).toBeGreaterThanOrEqual(0.2);
+    expect(byTag(c.queries, "subset:email-control").some(q => /in my email|according to my email/i.test(q.text))).toBe(true);
+    expect(byTag(c.queries, "subset:transcript-control").some(q => /cursor|codex|coding session/i.test(q.text))).toBe(true);
+    expect(byTag(c.queries, "subset:recurring").every(q => /direct deposit/.test(q.text))).toBe(true);
+    expect(byTag(c.queries, "subset:transcript-recurring").every(q => /CI run/.test(q.text))).toBe(true);
+  });
+  it("cannot be solved by source alone: notes, emails and transcripts are all gold, on the same topics", () => {
+    const sourceOf = (id: string) => (email.has(id) ? "email" : transcript.has(id) ? "transcript" : "note");
+    expect(new Set(c.queries.map(q => sourceOf(q.gold[0].id)))).toEqual(new Set(["email", "note", "transcript"]));
+    expect(c.entries.some(e => e.id.startsWith("nz-flightnote-"))).toBe(true);
+    expect(c.entries.some(e => e.id.startsWith("nz-flight-"))).toBe(true);
+    expect(c.entries.some(e => e.id.startsWith("nz-devnote-"))).toBe(true);
+    expect(c.entries.some(e => e.id.startsWith("nz-dev-"))).toBe(true);
+  });
+  it("meets the gate's power floors overall, and on the held-out test split alone", () => {
+    expect(c.queries.length).toBeGreaterThanOrEqual(200);
+    expect(clusters(c.queries)).toBeGreaterThanOrEqual(30);
+    const test = byTag(c.queries, "split:test");
+    expect(test.length).toBeGreaterThanOrEqual(200);
+    expect(clusters(test)).toBeGreaterThanOrEqual(30);
+    // Every query lands in exactly one split, dev and test partition the corpus, and every subset has some test coverage.
+    const dev = byTag(c.queries, "split:dev");
+    expect(test.length + dev.length).toBe(c.queries.length);
+    for (const q of c.queries) expect(q.tags?.includes("split:test") !== q.tags?.includes("split:dev")).toBe(true);
+  });
+  it("gives probe queries only footer or wrapper words, with no mail/transcript vocabulary of their own", () => {
+    for (const q of c.queries.filter(q => q.tags?.some(t => t.startsWith("subset:probe-footer")))) expect(q.text).not.toMatch(/email|deposit|flight|prescription|bill/i);
+    for (const q of c.queries.filter(q => q.tags?.includes("subset:transcript-probe"))) expect(q.text).not.toMatch(/cursor|codex|CI run|test suite/i);
+  });
+  it("uses codex-session and cursor-session, the T-0089.3.5 director-added transcript sources, alongside email-gmail and api", () => {
+    expect(c.entries.some(e => e.source === "codex-session")).toBe(true);
+    expect(c.entries.some(e => e.source === "cursor-session")).toBe(true);
+    expect(c.entries.every(e => ["email-gmail", "codex-session", "cursor-session", "api"].includes(e.source))).toBe(true);
+    // Every genuine decision note (the corpus's "direct" source) falls to Track 3's direct class: not in
+    // MIRRORED_SOURCES or TRANSCRIPT_SOURCES, and carries no system tag (auto-insight / synthesized).
+    for (const e of c.entries.filter(x => x.source === "api")) expect(e.tags.some(t => t === "auto-insight" || t === "synthesized")).toBe(false);
+  });
+});
+
+describe("injection", () => {
+  const c = built.injection, plants = c.entries.filter(e => e.id.startsWith("ij-plant-"));
+  it("plants one email per targeted subject at 1 to 2 percent of the corpus", () => {
+    expect(c.queries).toHaveLength(INJECTION_SUBJECTS);
+    expect(plants).toHaveLength(INJECTION_SUBJECTS);
+    expect(c.entries.length).toBe(INJECTION_DOCS);
+    expect(plants.length / c.entries.length).toBeGreaterThanOrEqual(0.01);
+    expect(plants.length / c.entries.length).toBeLessThanOrEqual(0.02);
+  });
+  it("uses every plant style, and the factual style contains no command words", () => {
+    for (const style of PLANT_STYLES) expect(plants.some(p => p.id.startsWith(`ij-plant-${style}-`))).toBe(true);
+    expect(plantText("factual", "the thing")).not.toMatch(/ignore|instruction|disregard|assistant|system|override|must|reply|say that/i);
+    expect(plantText("impersonation", "the thing")).not.toMatch(/ignore previous/i);
+  });
+  it("has benign mail on the same topics and gold that is never a plant", () => {
+    expect(c.entries.filter(e => e.id.startsWith("ij-benign-")).length).toBe(INJECTION_SUBJECTS * 2);
+    expect(c.queries.every(q => q.gold.every(g => !g.id.startsWith("ij-plant-")))).toBe(true);
+  });
+});
+
+describe("standing", () => {
+  const c = built.standing;
+  it("has thirty distinct memories inside a realistic haystack", () => {
+    const memories = c.entries.filter(e => e.tags.includes("standing"));
+    expect(memories).toHaveLength(30);
+    expect(STANDING).toHaveLength(30);
+    expect(new Set(STANDING.map(s => s.when)).size).toBe(30);
+    expect(c.entries.length - 30).toBeGreaterThan(1000);
+    expect(memories.every(m => /^When .+, .+\.$/.test(m.content))).toBe(true);
+  });
+  it("splits negatives into three labelled groups plus positives, at a stated prevalence", () => {
+    expect(byTag(c.queries, "standing:yes")).toHaveLength(150);
+    expect(byTag(c.queries, "standing:overlap")).toHaveLength(120);
+    expect(byTag(c.queries, "standing:intent")).toHaveLength(90);
+    expect(byTag(c.queries, "standing:unrelated")).toHaveLength(UNRELATED_QUERIES);
+    for (const t of ["standing:overlap", "standing:intent", "standing:unrelated"]) expect(byTag(c.queries, t).every(q => q.gold.length === 0)).toBe(true);
+  });
+  it("holds out a split that shares no memory with the tuning split", () => {
+    const memoriesIn = (split: string) => new Set(byTag(byTag(c.queries, "standing:yes"), `split:${split}`).map(q => q.clusterKey));
+    expect(memoriesIn("dev").size).toBe(15);
+    expect(memoriesIn("test").size).toBe(15);
+    for (const m of memoriesIn("dev")) expect(memoriesIn("test").has(m)).toBe(false);
+  });
+});

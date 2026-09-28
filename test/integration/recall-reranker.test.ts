@@ -25,6 +25,8 @@ describe("recall reranker step", () => {
     const sqlite = makeSqliteD1();
     open.push(sqlite);
     await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN updated_at INTEGER`).run();
+    await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+    await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     IDS.forEach((id, i) => sqlite.seed({ id, content: CONTENT[id], createdAt: 1000 + i, tags: ["work"] }));
     const kv = makeMemoryKV();
     await kv.put(TAG_VOCABULARY_KEY, JSON.stringify({ tags: ["work"], rebuiltAt: Date.now() }));
@@ -77,6 +79,23 @@ describe("recall reranker step", () => {
     expect(ids(on).indexOf(best)).toBeGreaterThanOrEqual(0);
     expect(ids(on).indexOf(best)).toBeLessThan(ids(off).includes(best) ? ids(off).indexOf(best) : Infinity);
     expect(on.diagnostics.rerankMs).toBeTypeOf("number");
+  });
+
+  it("explain reports each scored parent's model percentile and changes neither order nor scores", async () => {
+    const run = async (explain: boolean) => {
+      const s = await setup();
+      const result = await recallEntries({ query: "launch planning tomato", topK: 5, hops: 0, synthesize: false, explain }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: "on" }, {});
+      await Promise.all(s.deferred);
+      return result.matches;
+    };
+    const plain = await run(false);
+    const explained = await run(true);
+    expect(explained.map(({ why: _w, ...rest }) => rest)).toEqual(plain);
+    for (const m of plain) expect(m).not.toHaveProperty("why");
+    // the model's best-scored parent is the last one submitted; the blend lifts it into the list, at percentile 1
+    const pcts = explained.map(m => m.why!.rerank_percentile as number);
+    for (const v of pcts) { expect(v).toBeGreaterThanOrEqual(0); expect(v).toBeLessThanOrEqual(1); }
+    expect(pcts).toContain(1);
   });
 
   it("sends only scoped D1 passage text, never Vectorize metadata or a foreign hit", async () => {

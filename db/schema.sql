@@ -13,8 +13,9 @@ CREATE TABLE IF NOT EXISTS entries (
   contradiction_losses INTEGER DEFAULT 0,
   workspace_id     TEXT NOT NULL DEFAULT '',     -- owning workspace ('' = legacy owner-private rows pending backfill)
   actor_id         TEXT NOT NULL DEFAULT ''      -- user who wrote it ('' = the owner, pre-team writes)
-  -- Runtime ALTER columns (see src/db/init.ts): updated_at, staleness_checked_at,
-  -- when_at, when_kind, when_source, when_label
+  -- Runtime ALTER columns (see src/db/init.ts): updated_at, staleness_checked_at, when_at, when_kind, when_source, when_label, valid_from, valid_until
+  -- valid_from:  when the fact became true (ms). NULL means "since created_at".
+  -- valid_until: when it stopped being true (ms). NULL means "still true".
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at DESC);
@@ -258,6 +259,14 @@ WHERE instr(lower(tags), '"auto-insight"') > 0;
 CREATE INDEX IF NOT EXISTS idx_entries_stale ON entries(workspace_id, id)
 WHERE instr(lower(tags), '"stale:as-of"') > 0;
 
+-- Track 7 (T-0089.7.1, T-0089.7.2): the decision log and standing-memory cache build each
+-- scan only their own marker, not every memory. Neither writes a row on upgrade — the two
+-- tags are new, so both indexes start empty. Must stay in step with src/db/init.ts.
+CREATE INDEX IF NOT EXISTS idx_entries_ledger ON entries(workspace_id, created_at)
+WHERE instr(lower(tags), '"ledger:decision"') > 0;
+CREATE INDEX IF NOT EXISTS idx_entries_standing ON entries(workspace_id, created_at)
+WHERE instr(lower(tags), '"standing:active"') > 0;
+
 -- Web Push subscriptions. One row per subscribed browser/device, scoped to
 -- the workspace it was created against. Must stay in step with src/db/init.ts.
 CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -273,6 +282,27 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id);
+
+-- Sampled recall log (T-0089.5.2 Part A), feeding the golden eval set T-0043. Additive:
+-- old code never reads this table and rollback is a no-op. Opt-in (config RECALL_LOG,
+-- off by default everywhere, D5.2) and sampled by src/recall/log.ts's KV day counter, not
+-- written on every recall. followed_ids starts empty and is filled by Part B (get, append,
+-- update or link on a returned id within 30 minutes) within the same row, never a new one.
+-- Must stay in step with src/db/init.ts.
+CREATE TABLE IF NOT EXISTS recall_log (
+  id           TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  channel      TEXT NOT NULL,             -- mcp | rest
+  query        TEXT NOT NULL,
+  params       TEXT NOT NULL,             -- JSON: topK, filters, hops
+  returned_ids TEXT NOT NULL,             -- JSON array, in order
+  followed_ids TEXT NOT NULL DEFAULT '[]' -- JSON array, filled by Part B within 30 minutes
+);
+
+-- The only read path: the latest row for a workspace within the follow window
+-- (Part B) and the retention purge (oldest-first). One index serves both.
+CREATE INDEX IF NOT EXISTS idx_recall_log_ws ON recall_log(workspace_id, created_at DESC);
 
 -- Content history (4.0, T-0089.1.1). One row per retired state of an entry,
 -- written in the same batch as the change. Must stay in step with src/db/init.ts.
@@ -315,10 +345,24 @@ CREATE TABLE IF NOT EXISTS entries_trash (
   deleted_at   INTEGER NOT NULL,
   deleted_by   TEXT NOT NULL DEFAULT '',
   channel      TEXT NOT NULL DEFAULT '',
-  reason       TEXT NOT NULL DEFAULT 'forget' -- forget | mirror | disconnect
+  reason       TEXT NOT NULL DEFAULT 'forget', -- forget | mirror | disconnect
+  nonce        TEXT NOT NULL DEFAULT ''        -- per-row identity (adv-final MAJOR 1): a
+                                                -- purge can free `id` and a fresh forget can
+                                                -- reuse it, with SQLite reusing its own rowid
+                                                -- on top; every trash mutation pins to this,
+                                                -- not to id (or rowid) alone. '' means this row
+                                                -- predates the column: no mutation may treat an
+                                                -- empty nonce as a match, only as "conflict".
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_trash_deleted ON entries_trash(deleted_at);
+
+-- R5 (budget audit, MINOR, 20-free-tier-ledger.md): listTrash's WHERE clause (src/memory/
+-- trash-list.ts) scopes by workspace_id and orders by deleted_at DESC. Without this, the only
+-- index available (deleted_at above) makes SQLite walk the whole table in deleted_at order,
+-- filtering every row for a workspace match — 1,193 rows read for one 50-row page at 2,000 trash
+-- rows, 5% visible. This lets it seek directly to the reader's own readable workspaces instead.
+CREATE INDEX IF NOT EXISTS idx_entries_trash_workspace_deleted ON entries_trash(workspace_id, deleted_at DESC);
 
 -- Lexical recall index (FTS5, trigram). Plain table, not external-content: entries
 -- has a TEXT PK, so triggers mirror entries.rowid into entries_fts.rowid and sync
