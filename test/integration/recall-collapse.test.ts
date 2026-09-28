@@ -136,6 +136,8 @@ describe("render: the similar-notices line (4.4)", () => {
     const m: RecallMatch = {
       id: "notice1", content: "Statement ready", score: 1, createdAt: Date.UTC(2026, 7, 11, 12), updatedAt: Date.UTC(2026, 7, 11, 12),
       tags: [], source: "email-gmail", isUpdate: false, hop: 0,
+      validFrom: Date.UTC(2026, 7, 11, 12), validFromStated: false, validUntil: null, validityState: "current",
+      supersededBy: null, retractedSource: false,
       similar: [
         { id: "a1b2c3d4", createdAt: Date.UTC(2026, 7, 11, 12) },
         { id: "e5f6a7b8", createdAt: Date.UTC(2026, 7, 4, 12) },
@@ -152,6 +154,8 @@ describe("render: the similar-notices line (4.4)", () => {
     const m: RecallMatch = {
       id: "x", content: "hello", score: 1, createdAt: Date.now(), updatedAt: Date.now(),
       tags: [], source: "api", isUpdate: false, hop: 0,
+      validFrom: Date.now(), validFromStated: false, validUntil: null, validityState: "current",
+      supersededBy: null, retractedSource: false,
     };
     const out = renderRecallText([m], "");
     expect(out).not.toContain("similar");

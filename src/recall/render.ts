@@ -75,6 +75,10 @@ export function renderRecallText(
     const updateLabel = m.isUpdate ? " [updated]" : "";
     const hopLabel = m.hop > 0 ? ` [related · ${hopProvenance(m, contentById)}]` : "";
     const staleLabel = m.staleAsOf ? ` · ${formatAsOfQualifier(m.updatedAt)}` : "";
+    // T-0089.2.1 (spec 5.9): a stated start, and a flag for a dependent built
+    // on a source later marked wrong, ride in the same place as the stale label.
+    const trueSinceLabel = m.validFromStated ? ` · true since ${monthYear(m.validFrom)}` : "";
+    const retractedSourceLabel = m.retractedSource ? " · built on a memory that was later retracted, verify before asserting" : "";
     // Recurring notices the collapse absorbed into this one (4.4): named on
     // the header line, then listed by id so an agent can fetch one directly.
     const similarLabel = m.similar?.length
@@ -86,7 +90,7 @@ export function renderRecallText(
       ? { text: (m.content ?? "").trim(), truncated: false, fullLength: (m.content ?? "").length }
       : snippetOf(m.content, allowanceFor(i, m.score, cfg), { queryTokens: opts.queryTokens });
     const body = s.truncated ? `${s.text}${truncationNote(m.id, s)}` : s.text;
-    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}${similarLabel}\nID: ${m.id}\n${body}`;
+    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}${trueSinceLabel}${retractedSourceLabel}${similarLabel}\nID: ${m.id}\n${body}`;
     // The why line rides outside the budget: asking for an explanation must not change which memories come back.
     const whyLine = m.why ? `why: ${whyText(m, m.why, contentById)}\n` : "";
     const extraLines = `${whyLine}${similarIdsLine}`;
@@ -121,6 +125,7 @@ const RARE_IDF = 3;
 const WHY_MAX_TERMS = 3;
 
 const shortDate = (ms: number) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+const monthYear = (ms: number) => new Date(ms).toLocaleDateString("en-US", { month: "short", year: "numeric" });
 
 /** One plain line saying why a memory came back, from the trace recall already computed. */
 function whyText(m: RecallMatch, why: WhyTrace, contentById: Map<string, string>): string {

@@ -1005,12 +1005,22 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       // builder has no hook of its own, and its SQL always ends in ORDER BY.
       // workspace_id and actor_id come back so the header can say which layer a
       // row is in and who wrote it — the same two facts recall reports.
+      //
+      // The OUTER query's own WHERE/ORDER BY, not the first occurrence in the
+      // string: buildEntryFilterQuery's superseded_by subquery (T-0089.2.1)
+      // carries an earlier WHERE and ORDER BY of its own, which a first-match
+      // splice would target instead, landing a bare `workspace_id` inside a
+      // subquery that joins `edges` and `entries` — ambiguous between the two.
+      // The outer " ORDER BY" is always the LAST one; the subquery's own FROM
+      // is "FROM edges g JOIN entries s", never the literal "FROM entries", so
+      // the last occurrence of that is always the outer one too.
       let { sql, bindings } = buildEntryFilterQuery({ n, tag, after, before, actor: actorId, project: projectRows });
       if (identity) {
         const scope = scopeWhereForRead(identity, { layer: workspace, teamId: teamRead.teamId });
-        sql = sql.includes("WHERE")
-          ? sql.replace(" ORDER BY", ` AND ${scope.clause} ORDER BY`)
-          : sql.replace(" ORDER BY", ` WHERE ${scope.clause} ORDER BY`);
+        const orderByAt = sql.lastIndexOf(" ORDER BY");
+        const fromEntriesAt = sql.lastIndexOf("FROM entries");
+        const hasOuterWhere = sql.slice(fromEntriesAt, orderByAt).includes("WHERE");
+        sql = `${sql.slice(0, orderByAt)} ${hasOuterWhere ? "AND" : "WHERE"} ${scope.clause}${sql.slice(orderByAt)}`;
         bindings = [...bindings.slice(0, -1), ...scope.bindings, ...bindings.slice(-1)];
       }
       const { results } = await env.DB.prepare(sql).bind(...bindings).all();

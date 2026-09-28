@@ -60,8 +60,19 @@ export function buildEntryFilterQuery(params: {
   if (params.after !== undefined) { conds.push(`created_at >= ?`); bindings.push(params.after); }
   if (params.before !== undefined) { conds.push(`created_at <= ?`); bindings.push(params.before); }
 
+  // validity: any: /list and list_recent are listings, not current-facts answers (5.9); valid_from/valid_until and the
+  // superseded_by lookup let both derive the six validity fields with no added query (T-0089.2.1)
+  // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, scoped by the caller's own clause spliced in below
   // scope-exempt: builder only: callers splice the caller's scope in before ORDER BY — routes/recall.ts always, but mcp/server.ts only `if (identity)`, so an identity-less MCP caller gets this SQL unscoped
-  let sql = `SELECT id, content, tags, source, created_at, vector_ids, workspace_id, actor_id FROM entries`;
+  let sql = `SELECT id, content, tags, source, created_at, vector_ids, workspace_id, actor_id, valid_from, valid_until,
+    (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
+       FROM edges g JOIN entries s ON s.id = g.source_id
+      WHERE g.target_id = entries.id AND g.type = 'supersedes'
+        AND s.tags NOT LIKE '%"status:deprecated"%'
+        AND s.workspace_id = entries.workspace_id
+        AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
+      ORDER BY s.created_at DESC LIMIT 1) AS superseded_by_json
+    FROM entries`;
   if (conds.length) sql += ` WHERE ` + conds.join(` AND `);
   sql += ` ORDER BY created_at DESC LIMIT ?`;
   bindings.push(params.n);

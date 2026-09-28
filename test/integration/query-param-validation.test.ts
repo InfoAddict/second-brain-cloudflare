@@ -42,6 +42,10 @@ describe("integer query parameters (#277)", () => {
 
     beforeEach(() => {
       sqlite = makeSqliteD1();
+      // buildEntryFilterQuery's SELECT reads valid_from/valid_until, one of the
+      // columns src/db/init.ts adds by ALTER at runtime rather than in schema.sql.
+      sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+      sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
       for (let i = 0; i < 5; i++) {
         sqlite.seed({ id: `e${i}`, content: `Entry ${i}`, createdAt: 1000 + i * 1000 });
       }

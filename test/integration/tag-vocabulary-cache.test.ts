@@ -97,6 +97,8 @@ function harness(
   sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN when_at INTEGER`).run();
   sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN when_kind TEXT`).run();
   sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN when_source TEXT`).run();
+  sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+  sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   entries.forEach((e, i) => sqlite!.seed({ ...e, createdAt: 1_700_000_000_000 + i }));
 
   const issued: string[] = [];

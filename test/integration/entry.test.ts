@@ -62,6 +62,12 @@ describe("GET /entry", () => {
       // a solo brain: the author lock only ever engages on the company layer.
       can_edit: true,
       timeline: [],
+      valid_from: 1234,
+      valid_from_stated: false,
+      valid_until: null,
+      validity_state: "current",
+      superseded_by: null,
+      retracted_source: false,
     });
     expect(history).toMatchObject({ items: [], footer: { pruned: false, kept: 20, shared_cut_by: null } });
     expect(typeof history.footer.not_recorded_before).toBe("number");

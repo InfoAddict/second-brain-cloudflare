@@ -1049,24 +1049,25 @@ export class D1Mock {
                 importance_score: e.importance_score ?? 0, created_at: e.created_at,
                 workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "",
                 source: e.source ?? "", actor_display_name: author?.name ?? null,
+                valid_until: e.valid_until ?? null,
               };
             });
           return { results };
         }
-        if (s.includes("SELECT id, tags FROM entries WHERE id IN")) {
-          // expandGraph deprecation check.
+        if (s.includes("SELECT id, tags, valid_until FROM entries WHERE id IN")) {
+          // expandGraph deprecation and validity check (T-0089.2.1).
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, tags: e.tags }));
+            .map((e: any) => ({ id: e.id, tags: e.tags, valid_until: e.valid_until ?? null }));
           return { results };
         }
-        if (s.includes("SELECT id, content, tags, source, created_at FROM entries WHERE id IN") && !s.includes("tags NOT LIKE")) {
+        if (s.includes("SELECT id, content, tags, source, created_at, valid_until FROM entries WHERE id IN") && !s.includes("tags NOT LIKE")) {
           // Graph node hydration (/connections, /graph). The `tags NOT LIKE` guard
           // keeps this from shadowing recall's hydration query (same columns, but it
           // applies the auto-pattern/deprecated/kind filters itself further down).
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
+            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at, valid_until: e.valid_until ?? null }));
           return { results };
         }
         if (s.includes("recall_count, importance_score") && s.includes("WHERE id IN")) {
