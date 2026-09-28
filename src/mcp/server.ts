@@ -35,7 +35,7 @@ import { autoCreateProject } from "../projects/autocreate";
 import { listProjects, type ProjectRow } from "../projects/registry";
 import { resolveProjectRead } from "../projects/resolve";
 import { computeAgentBrief } from "../brief/compute";
-import { applyInsightResolution, resolveEntryAction } from "../memory/actions";
+import { applyInsightResolution, resolveDecisionOutcome, resolveEntryAction } from "../memory/actions";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { readEntryHistory } from "../memory/history";
 import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
@@ -431,14 +431,17 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "resolve",
     {
-      description: "Call when the user says something tracked is finished, was never a real task, should come back later, has no date, is still true, or that a suggested insight is right or wrong. Also call after you complete work the user asked you to track. Act only on a clear signal about a specific item; never close several items on your own initiative. Each resolve is recorded in the history with its prior values.",
+      description: "Call when the user says something tracked is finished, was never a real task, should come back later, has no date, is still true, or that a suggested insight is right or wrong. Also call after you complete work the user asked you to track. Act only on a clear signal about a specific item; never close several items on your own initiative. Each resolve is recorded in the history with its prior values.\n\n"
+        + "outcome: after a decision (decision: true) comes up for review, record how it went with result (right, wrong, mixed, or unknown if it's too early) and an optional note. received: something owed to the user (owed_by) arrived. stop_standing: a standing instruction (standing: true) should stop firing; it is kept as an ordinary memory.",
       inputSchema: {
         id: z.string().describe("Exact memory id"),
-        action: z.enum(["done", "not_a_task", "snooze", "clear_date", "confirm_insight", "dismiss_insight", "still_true"]).describe("How to resolve this one item"),
+        action: z.enum(["done", "not_a_task", "snooze", "clear_date", "confirm_insight", "dismiss_insight", "still_true", "outcome", "received", "stop_standing"]).describe("How to resolve this one item"),
         until: z.string().optional().describe("Future date for snooze"),
+        result: z.enum(["right", "wrong", "mixed", "unknown"]).optional().describe("Required with action: outcome — how the decision turned out"),
+        note: z.string().max(1000).optional().describe("Optional detail for outcome, appended to the decision"),
       },
     },
-    async ({ id: rawId, action, until }) => {
+    async ({ id: rawId, action, until, result: outcomeResultParam, note }) => {
       if (!identity) return { content: [{ type: "text", text: "Resolve requires an authenticated identity." }] };
       const id = rawId.trim();
       if (!id) return { content: [{ type: "text", text: "id is required" }] };
@@ -452,8 +455,20 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         const text = result.resolved.length ? `Resolved ${id}: ${action}` : `Already resolved: ${id}`;
         return { content: [{ type: "text", text }] };
       }
+      if (action === "outcome") {
+        if (!outcomeResultParam) return { content: [{ type: "text", text: "result is required for outcome (right, wrong, mixed or unknown)" }] };
+        const outcome = await resolveDecisionOutcome(env, ctx, identity, id, outcomeResultParam, note, mcpChange);
+        if (!outcome.ok) return { content: [{ type: "text", text: outcome.error }] };
+        return { content: [{ type: "text", text: outcome.reply }] };
+      }
       const result = await resolveEntryAction(env, ctx, identity, id, action, until, mcpChange);
       if (!result.ok) return { content: [{ type: "text", text: result.error }] };
+      if (action === "received") {
+        return { content: [{ type: "text", text: `Marked as received: ${result.content}. Undo is available.` }] };
+      }
+      if (action === "stop_standing") {
+        return { content: [{ type: "text", text: `Stopped standing instruction ${id}. It is kept as an ordinary memory. Undo is available.` }] };
+      }
       return { content: [{ type: "text", text: `Resolved ${id}: ${action}${result.when_at ? ` until ${new Date(result.when_at).toISOString()}` : ""}` }] };
     },
   );

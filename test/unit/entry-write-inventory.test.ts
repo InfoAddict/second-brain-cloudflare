@@ -108,12 +108,17 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/integrations/mirror.ts', line: 148, kind: 'snapshot' },
   { file: 'src/lib/team-admin.ts', line: 591, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
-  { file: 'src/memory/actions.ts', line: 64, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 107, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 119, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 173, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 184, kind: 'snapshot' },
+  // MOVED (Task 8, T-0089.7.1/.2/.3): the C13 done-guard and the received/stop_standing
+  // branches landed ahead of the existing done/not_a_task branch, shifting these down; two
+  // new snapshot sites are stop_standing's own tag-only write and resolveDecisionOutcome's.
+  { file: 'src/memory/actions.ts', line: 70, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 128, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 142, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 154, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 166, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 225, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 280, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 291, kind: 'snapshot' },
   // MOVED 218 -> 220, 605 -> 607 (T-0089.1.1 round 2): the trash insert is a plain INSERT, with a comment saying why.
   // MOVED 220 -> 221, 607 -> 608 (T-0089.1.1 round 3): trash.ts imports the shared edge readability guard.
   { file: 'src/memory/trash.ts', line: 221, kind: 'trash' },

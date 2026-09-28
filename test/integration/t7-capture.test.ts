@@ -92,7 +92,7 @@ describe("POST /capture — standing", () => {
     const res = await worker.fetch(req("POST", "/capture", { body: { content: "When X happens, do Y.", standing: true } }), env, ctx);
     expect(res.status).toBe(200);
     await drain();
-    const standingPuts = putSpy.mock.calls.filter(([key]: [string]) => key.startsWith("standing:v1:"));
+    const standingPuts = putSpy.mock.calls.filter(call => (call[0] as string).startsWith("standing:v1:"));
     expect(standingPuts.length).toBeGreaterThan(0);
   });
 });
