@@ -80,14 +80,15 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // path's inline deprecate UPDATE (was 460) is gone: both paths close a window through
   // supersedeStatements (src/memory/validity.ts). The two post-deprecate counter updates (were 513,
   // 515) are one guarded counter builder (486) riding in the supersede batch. The rest shifted.
-  { file: 'src/capture/entry.ts', line: 259, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 298, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 405, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 443, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 450, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 452, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 486, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 503, kind: 'exempt' },
+  // MOVED +11 (T-0089.2.1): buildEntryFilterQuery's superseded_by subquery added lines above these sites; same sites.
+  { file: 'src/capture/entry.ts', line: 270, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 309, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 416, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 454, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 461, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 463, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 497, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 514, kind: 'exempt' },
   // MOVED (T-0089.2.4): lifecycle.ts, actions.ts, trash.ts and undo.ts shift for the retraction hooks; same sites.
   { file: 'src/capture/lifecycle.ts', line: 152, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 229, kind: 'snapshot' },
@@ -130,19 +131,21 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // NEW (T-0089.2.4): the retraction restore and un-retraction re-close UPDATEs (D-RET), and the
   // cascade's flag and unflag UPDATEs; each rides after its own derived snapshot in the same batch,
   // and lands only on the rows that snapshot versioned (nonce).
-  { file: 'src/memory/validity.ts', line: 261, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 330, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 373, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 417, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 265, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 334, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 377, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 421, kind: 'snapshot' },
   // NEW (T-0089.2.1, Task A4): update(valid_from / valid_until) and its propagate UPDATE, each with its validity snapshot.
-  { file: 'src/memory/validity.ts', line: 576, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 594, kind: 'snapshot' },
+  // MOVED +4 (lane A follow-up): earlier lines in this file shifted; same sites.
+  { file: 'src/memory/validity.ts', line: 580, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 598, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
-  // MOVED 1235 -> 1257 (T-0089.2.1): the validity predicate and superseded_by
-  // subquery added lines to the hydration block above this site; same site, shifted only.
-  { file: 'src/recall/search.ts', line: 1257, kind: 'exempt' },
+  // MOVED 1235 -> 1257 -> 1287 (T-0089.2.1): the validity predicate and superseded_by
+  // subquery, and the candidateSignalProjection valid_until comment, added lines
+  // to the hydration block above this site; same site, shifted only.
+  { file: 'src/recall/search.ts', line: 1287, kind: 'exempt' },
   // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
   // retryAfterMs rework added lines above this site; same site, shifted only.
   // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.
@@ -170,7 +173,9 @@ const HYGIENE_EXEMPT = new Set([
   "src/capture/classify.ts:78", "src/routes/admin.ts:1531", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
-  "src/capture/entry.ts:443", "src/capture/entry.ts:503",
+  // MOVED 443 -> 454, 503 -> 514 (T-0089.2.1): buildEntryFilterQuery's superseded_by
+  // subquery added lines above these sites; same sites.
+  "src/capture/entry.ts:454", "src/capture/entry.ts:514",
 ]);
 
 const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");

@@ -35,6 +35,7 @@ function scopeEntryFilterQuery(
 ): { sql: string; bindings: unknown[] } {
   const scope = scopeWhereForRead(identity, { layer, teamId });
   const orderByAt = q.sql.lastIndexOf(" ORDER BY");
+  // scope-exempt: string search over q.sql, which buildEntryFilterQuery already produced and this function is about to scope; not a query of its own
   const fromEntriesAt = q.sql.lastIndexOf("FROM entries");
   const hasOuterWhere = q.sql.slice(fromEntriesAt, orderByAt).includes("WHERE");
   const sql = `${q.sql.slice(0, orderByAt)} ${hasOuterWhere ? "AND" : "WHERE"} ${scope.clause}${q.sql.slice(orderByAt)}`;

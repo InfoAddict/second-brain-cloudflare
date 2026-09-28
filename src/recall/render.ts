@@ -7,6 +7,8 @@ import { computeCompoundStale } from "./compound-stale";
 import type { CompoundStaleSignal } from "./types";
 import { sourceClass } from "./source-trust";
 import { editedCanonicalAt } from "../quarantine/tags";
+import { formatValidityDate } from "../memory/validity";
+import type { ValiditySummary } from "./validity-view";
 
 /** How long the canonical-edit label shows after the dated tag (5.7). Expiry is by date at render time; there is no job. */
 export const EDITED_CANONICAL_LABEL_DAYS = 7;
@@ -54,6 +56,22 @@ export function memoryHeader(m: {
   return `${date}${src}${layer}${editedLabel}${tagList}`;
 }
 
+/**
+ * The bracket `get` and `list_recent` append after `memoryHeader`'s own
+ * bracket for a row that is not current (spec 14 5.9). Null for a current
+ * row — nothing to say. A stated valid_from prints "from <date>"; an
+ * unstated one (UNKNOWN_START, an end-only fact) prints "until <date>" alone.
+ */
+export function validityBracket(v: ValiditySummary, timezone: string): string | null {
+  if (v.validityState === "current") return null;
+  if (v.validityState === "wrong") return "[marked wrong]";
+  const until = formatValidityDate(v.validUntil as number, timezone);
+  const trueWindow = v.validFromStated ? `true from ${formatValidityDate(v.validFrom, timezone)} until ${until}` : `true until ${until}`;
+  return v.validityState === "replaced"
+    ? `[replaced on ${until} by ${v.supersededBy!.id}: ${trueWindow}]`
+    : `[ended ${until}: ${trueWindow}]`;
+}
+
 export function renderRecallText(
   matches: RecallMatch[],
   insight: string,
@@ -77,7 +95,7 @@ export function renderRecallText(
     const staleLabel = m.staleAsOf ? ` · ${formatAsOfQualifier(m.updatedAt)}` : "";
     // T-0089.2.1 (spec 5.9): a stated start, and a flag for a dependent built
     // on a source later marked wrong, ride in the same place as the stale label.
-    const trueSinceLabel = m.validFromStated ? ` · true since ${monthYear(m.validFrom)}` : "";
+    const trueSinceLabel = m.validFromStated ? ` · true since ${monthYear(m.validFrom, cfg.TIMEZONE)}` : "";
     const retractedSourceLabel = m.retractedSource ? " · built on a memory that was later retracted, verify before asserting" : "";
     // Recurring notices the collapse absorbed into this one (4.4): named on
     // the header line, then listed by id so an agent can fetch one directly.
@@ -125,7 +143,8 @@ const RARE_IDF = 3;
 const WHY_MAX_TERMS = 3;
 
 const shortDate = (ms: number) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-const monthYear = (ms: number) => new Date(ms).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+/** "Jun 2026", in the brain's TIMEZONE (T-0089.2.2), for a stated valid_from. */
+const monthYear = (ms: number, timezone: string) => new Date(ms).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: timezone });
 
 /** One plain line saying why a memory came back, from the trace recall already computed. */
 function whyText(m: RecallMatch, why: WhyTrace, contentById: Map<string, string>): string {

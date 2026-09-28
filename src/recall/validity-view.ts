@@ -4,6 +4,9 @@
  * GET /entry, and the MCP get/list_recent/recall text. One function so the
  * four surfaces cannot drift on what "replaced" or "true since" mean.
  */
+import { RETRACTED_SOURCE_TAG, UNKNOWN_START } from "../memory/validity";
+import { getStatus } from "../memory/status";
+
 export type ValidityState = "current" | "replaced" | "ended" | "wrong";
 
 export interface SupersededBy {
@@ -22,8 +25,6 @@ export interface ValiditySummary {
   supersededBy: SupersededBy | null;
   retractedSource: boolean;
 }
-
-const isDeprecatedTag = (tag: string) => tag.toLowerCase() === "status:deprecated";
 
 /** Parses the raw `superseded_by_json` column (5.9's correlated subquery), tolerating its absence. */
 export function parseSupersededBy(raw: string | null | undefined): SupersededBy | null {
@@ -44,20 +45,25 @@ export function validitySummary(row: {
   tags: readonly string[];
   supersededBy?: SupersededBy | null;
 }): ValiditySummary {
-  const validFromStated = row.validFrom !== null && row.validFrom !== undefined;
+  // COALESCE(valid_from, created_at): only a NULL valid_from falls back.
+  // UNKNOWN_START (0) is itself a stated column value ("true from before
+  // any date this brain has", from an end-only fact) — real, but not a
+  // date worth rendering as a start, so validFromStated is false for it too.
+  const hasStatedFrom = row.validFrom !== null && row.validFrom !== undefined;
+  const validFromStated = hasStatedFrom && row.validFrom !== UNKNOWN_START;
   const validUntil = row.validUntil ?? null;
   const supersededBy = row.supersededBy ?? null;
-  const wrong = row.tags.some(isDeprecatedTag);
+  const wrong = getStatus(row.tags as string[]) === "deprecated";
   const validityState: ValidityState =
     wrong ? "wrong" :
     validUntil !== null ? (supersededBy ? "replaced" : "ended") :
     "current";
   return {
-    validFrom: validFromStated ? (row.validFrom as number) : row.createdAt,
+    validFrom: hasStatedFrom ? (row.validFrom as number) : row.createdAt,
     validFromStated,
     validUntil,
     validityState,
     supersededBy,
-    retractedSource: row.tags.includes("retracted-source"),
+    retractedSource: row.tags.includes(RETRACTED_SOURCE_TAG),
   };
 }

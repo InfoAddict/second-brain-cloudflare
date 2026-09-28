@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (216 queries, 112 exceptions, 26 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (218 queries, 114 exceptions, 27 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1484,7 +1484,16 @@ describe("the checker over the real source tree", () => {
     // T-0089.2.1 Task A4 (updateEntryValidity): its read, pinned to the caller's authorized workspace
     // with the replaced rows sharing it (scope-checked), and the propagate "this row's new start landed"
     // guard (by-id). Its two UPDATEs pin the workspace in their own compare-and-set.
-    ).toEqual({ queries: 216, exempt: 112, checked: 26, outerJoin: 1 });
+    // Deliberate: +2 queries, +2 scope-exempt, +1 scope-checked (216/112/26 -> 218/114/27) for
+    // Task B1 (recall's six-field validity contract, spec 5.9): the superseded_by correlated subquery
+    // (GET /recall hydration, GET /entry, MCP get, buildEntryFilterQuery for /list and list_recent) pins
+    // its closer to the outer row's own already-scoped workspace_id — scope-checked, since the lexer
+    // cannot see that pin is by column-to-column comparison rather than a bound value. The two new
+    // queries are buildEntryFilterQuery's own SELECT (now carrying the subquery) counted once for each
+    // of its two callers' distinct scoping shapes. The two scope-exempt string searches
+    // (scopeEntryFilterQuery, list_recent's inline scoping) are `.lastIndexOf("FROM entries")` calls the
+    // checker's text scan reads as queries; they search q.sql itself, not the database.
+    ).toEqual({ queries: 218, exempt: 114, checked: 27, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
