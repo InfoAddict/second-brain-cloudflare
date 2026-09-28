@@ -185,6 +185,7 @@ export async function handleRecallRoutes(
     const asOfParam = url.searchParams.get("as_of")?.trim();
     let asOf: number | undefined;
     if (asOfParam) {
+      if (after !== undefined || before !== undefined) return json({ ok: false, error: "Pass as_of, or after/before, not both." }, 400);
       const parsed = parseValidityDate(asOfParam, Date.now(), cfg.TIMEZONE, "end");
       if (typeof parsed !== "number") return json({ ok: false, error: parsed.error }, 400);
       asOf = parsed;

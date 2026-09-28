@@ -23,6 +23,7 @@ import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
 import { vectorizeFilterState } from "../vectorize/scope";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 import { reasonOverPair, restatesRecent } from "../insight/reason";
 import { MAX_INSIGHTS_PER_RUN, RECENT_INSIGHT_WINDOW, rawInsightText } from "../insight/weekly";
 import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candidates";
@@ -1645,6 +1646,8 @@ export async function handleAdminRoutes(
          AND b.tags NOT LIKE '%"status:deprecated"%'
          AND (a.valid_until IS NULL OR a.valid_until > ${dryRunNow})
          AND (b.valid_until IS NULL OR b.valid_until > ${dryRunNow})
+         AND a.${NOT_HELD_SQL}
+         AND b.${NOT_HELD_SQL}
          AND ${aScope.clause} AND ${bScope.clause}
        ORDER BY c.score DESC
        LIMIT ?`,

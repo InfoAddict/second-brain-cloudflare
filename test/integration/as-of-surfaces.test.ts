@@ -125,6 +125,22 @@ describe("as-of surfaces: MCP recall and GET /recall (5.9)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("as_of combined with after or before is refused on both surfaces (review NIT)", async () => {
+    sqlite = await migrated();
+    sqlite.seed({ id: "e1", content: "marina slip reserved for the season", createdAt: NOW - 10 * DAY });
+    const env = envOf(sqlite, [{ id: "e1", score: 0.9 }]);
+    const isoDate = new Date(NOW - 5 * DAY).toISOString().slice(0, 10);
+
+    const mcpText = await mcpRecall(env, { query: "marina slip", as_of: isoDate, after: NOW - 30 * DAY });
+    expect(mcpText).toBe("Pass as_of, or after/before, not both.");
+    expect(mcpText).not.toContain("—");
+
+    const res = await worker.fetch(req("GET", `/recall?query=marina+slip&as_of=${isoDate}&after=${NOW - 30 * DAY}`), env, ctx);
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBe("Pass as_of, or after/before, not both.");
+  });
+
   it("REST and MCP return the same ids in the same order", async () => {
     sqlite = await migrated();
     await seedScenario(sqlite);

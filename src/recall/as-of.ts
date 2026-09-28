@@ -15,6 +15,7 @@ import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus, type MemoryStatus } from "../memory/status";
 import { buildChain, workspaceReadable, type VersionRow } from "../memory/versions";
 import { currentValidityAt, EFFECTIVE_FROM } from "../memory/validity";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 import type { RecallMatch, RetractedBelief } from "./types";
 
 /** Beliefs shown under/after actually-true results: at most this many, newest retraction first (spec 14 5.7 item 7). */
@@ -129,12 +130,15 @@ export async function enrichWithAsOf(
   const eScope = identity ? scopeWhereForIdRead(scopeWhereForRead(identity, { layer: opts.workspaceFilter, teamId: opts.teamId }, "e.workspace_id")) : null;
   // scope-checked: both branches ARE scoped — sScope/eScope apply the caller's clause to s/e in the ternaries below, invisible to the lexer; the entry_versions subqueries and the edges join are pinned to s.id/e.id, already-scoped ids the caller may read
   // validity: as-of: a belief is, by definition, a deprecated row — never a current-facts answer (5.7 item 5)
+  // KNOWN GAP (review NIT, documented in 21-t2-lane-a-notes.md, not fixed here): retracted_at is
+  // the newest SURVIVING entry_versions row whose prior tags were not deprecated. Once VERSION_KEEP
+  // evicts that row, retracted_at silently reports a later (or absent) moment than the real one.
   const beliefsSql = `
     SELECT s.id, s.content, s.created_at, s.tags, g.target_id AS attached_to,
            (SELECT MAX(v.created_at) FROM entry_versions v WHERE v.entry_id = s.id AND v.tags NOT LIKE '%"status:deprecated"%') AS retracted_at
       FROM edges g CROSS JOIN entries s ON s.id = g.source_id
      WHERE g.type = 'supersedes' AND g.target_id IN (SELECT value FROM json_each(?))
-       AND s.tags LIKE '%"status:deprecated"%' AND s.created_at <= ?${sScope ? ` AND ${sScope.clause}` : ""}
+       AND s.tags LIKE '%"status:deprecated"%' AND s.created_at <= ? AND ${NOT_HELD_SQL}${sScope ? ` AND ${sScope.clause}` : ""}
     UNION ALL
     SELECT e.id, e.content, e.created_at, e.tags, NULL,
            (SELECT MAX(v.created_at) FROM entry_versions v WHERE v.entry_id = e.id AND v.tags NOT LIKE '%"status:deprecated"%')

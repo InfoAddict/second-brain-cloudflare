@@ -1049,6 +1049,7 @@ export function buildMcpServer(
       const cfg = await resolveConfig(env);
       let asOf: number | undefined;
       if (as_of !== undefined) {
+        if (after !== undefined || before !== undefined) return { content: [{ type: "text", text: "Pass as_of, or after/before, not both." }] };
         const parsed = parseValidityDate(as_of, Date.now(), cfg.TIMEZONE, "end");
         if (typeof parsed !== "number") return { content: [{ type: "text", text: parsed.error }] };
         asOf = parsed;
