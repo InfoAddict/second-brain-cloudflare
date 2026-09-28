@@ -51,6 +51,14 @@ export async function checkDuplicateAndContradiction(
   // queryVectorizeScoped a fire-and-forget KV write on filter degradation —
   // src/vectorize/scope.ts itself stays env-free.
   ctx?: { waitUntil(promise: Promise<unknown>): void },
+  opts: {
+    /**
+     * A held write (16-t3-t4-trust-spec.md 5.4 W-a, P6): duplicate flagging still runs (the
+     * embed and Vectorize query above are unconditional), but no model call is made, so a
+     * planted note can never talk its way into a merge or a contradiction verdict.
+     */
+    skipModelCall?: boolean;
+  } = {},
 ): Promise<{
   duplicate: DuplicateResult;
   contradiction: ContradictionResult;
@@ -131,7 +139,7 @@ export async function checkDuplicateAndContradiction(
   let contradiction: ContradictionResult = { detected: false };
   let mergeAction: MergeAction | null = null;
 
-  if (duplicate.status !== "blocked") {
+  if (duplicate.status !== "blocked" && !opts.skipModelCall) {
     const candidates = matches.filter(m => m.score >= CANDIDATE_SCORE_THRESHOLD);
     if (candidates.length) {
       const parentIds = new Set(candidates.map(m => (m.metadata as any)?.parentId ?? m.id));

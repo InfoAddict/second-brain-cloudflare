@@ -24,6 +24,10 @@ import { STANDING_TAG } from "../tags/t7";
 import { standingTouched, type StandingCacheConfig } from "../standing/cache";
 import { buildDecisionCapture } from "../decisions/capture";
 import { buildCommitmentTags, validateT7Capture, type T7CaptureInput, type T7ReplyInfo } from "./t7-capture";
+import { scoreWrite, type QuarantineChannel, type ScoreResult } from "../quarantine/score";
+import { heldTagsFor, holdStatements } from "../quarantine/hold";
+import { countMcpWritesInWindow } from "../quarantine/burst";
+import type { HoldReason } from "../quarantine/tags";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -77,10 +81,13 @@ export function buildEntryFilterQuery(params: {
   return { sql, bindings };
 }
 
+/** Present on "stored" and "flagged" only: held writes never merge, replace, supersede or deprecate (5.4). */
+export interface HeldInfo { reasons: HoldReason[]; score: number }
+
 export type CaptureResult = (
   | { status: "blocked"; matchId: string; score: number }
-  | { status: "stored"; id: string; tags: string[] }
-  | { status: "flagged"; id: string; matchId: string; score: number }
+  | { status: "stored"; id: string; tags: string[]; held?: HeldInfo }
+  | { status: "flagged"; id: string; matchId: string; score: number; held?: HeldInfo }
   | {
     status: "contradiction"; id: string; resolvedConflict: string; reason?: string;
     /** Which window closed (T-0089.2.1): the conflicting row ("older"), or the late-told newcomer ("newer"). */
@@ -234,7 +241,26 @@ export async function captureEntry(
     standingTouched(env, ctx, cfg as StandingCacheConfig, [writeCtx.workspaceId], [{ id: entryId, vector }]);
   };
 
-  const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(c, env, cfg, writeCtx.workspaceId, ctx);
+  // Track 4 (16-t3-t4-trust-spec.md 5.4 W-a): scored BEFORE duplicate and contradiction
+  // detection, so a held write's model calls below can be skipped outright rather than run
+  // and discarded. Only "mcp" and "rest" channels are content-writer channels captureEntry
+  // ever scores; a system job (digest, weekly insight) is never scored (Q-F, 5.1) and takes
+  // neither branch below.
+  let score: ScoreResult | null = null;
+  if (opts.channel === "mcp" || opts.channel === "rest") {
+    const channel: QuarantineChannel = opts.channel;
+    const mcpWritesInWindow = channel === "mcp"
+      ? await countMcpWritesInWindow(env, writeCtx.actorId, Date.now(), cfg.QUARANTINE_WRITE_BURST)
+      : undefined;
+    score = scoreWrite(
+      { content: c, tags: t, source, channel, kind: "create", mcpWritesInWindow, capsuleTagsChanged: t.some(isCapsuleTag) },
+      cfg,
+    );
+  }
+
+  const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(
+    c, env, cfg, writeCtx.workspaceId, ctx, { skipModelCall: score?.hold === true },
+  );
 
   const definesCapsule = t.some(isCapsuleTag);
   if (definesCapsule && getStatus(t) === null) t.push("status:draft");
@@ -493,7 +519,7 @@ export async function captureEntry(
   })();
 
   // versioning: exempt: creation — a new row has no prior state to keep
-  await env.DB.prepare(
+  const insertStatement = env.DB.prepare(
     `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source, when_label, valid_from, valid_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, c, JSON.stringify(finalTags), source, now, now, "[]", writeCtx.workspaceId, writeCtx.actorId,
@@ -503,7 +529,29 @@ export async function captureEntry(
     // paths never generate one, matching every other when_label writer in this codebase.
     (resolvedWhen && "label" in resolvedWhen) ? resolvedWhen.label : null,
     window.valid_from, window.valid_until,
-  ).run();
+  );
+
+  if (score?.hold) {
+    // 5.4: the INSERT (with the tags the write asked for) and the hold's own version, guarded
+    // UPDATE and prune all land in ONE batch, so a crash between them can never leave an
+    // unheld row. No scheduleIndex: a held create is never vectorized (5.3 point 1).
+    const heldTags = heldTagsFor(finalTags, score.reasons);
+    await env.DB.batch([
+      insertStatement,
+      ...holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: cfg.VERSION_KEEP }, {
+        entryId: id, reasons: score.reasons, score: score.score, signals: score.signals, change, heldTags, now,
+      }),
+    ]);
+    ctx.waitUntil(rememberTags(env, finalTags, writeCtx.workspaceId));
+    const held: HeldInfo = { reasons: score.reasons, score: score.score };
+    return withT7(
+      dup.status === "flagged"
+        ? { status: "flagged", id, matchId: dup.matchId, score: dup.score, held }
+        : { status: "stored", id, tags: heldTags, held },
+    );
+  }
+
+  await insertStatement.run();
 
   // Indexed once the outcome is known, with the tags the row will actually keep: a system capture can
   // still be turned into a held draft by a lost compare-and-set below.

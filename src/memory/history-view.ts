@@ -55,6 +55,10 @@ export interface HistoryChangeItem {
   before_status: string | null;
   can_undo: boolean;
   can_restore: boolean;
+  /** 6.5: set when meta.hold is (a `reason: "status"` version that quarantined the row, 5.4). */
+  hold: { reason: string } | null;
+  /** 6.5: set when meta.release is (a `reason: "status"` version that released a hold, 5.6). */
+  release: boolean;
 }
 
 export interface HistoryEventItem {
@@ -114,6 +118,9 @@ export async function buildEntryHistoryFromReads(
 
   const changeItems: HistoryChangeItem[] = chain.rows.map(r => {
     const meta = parseJsonObject(r.meta);
+    const holdMeta = meta.hold && typeof meta.hold === "object" ? (meta.hold as Record<string, unknown>) : null;
+    const reasons = holdMeta && Array.isArray(holdMeta.reasons) ? (holdMeta.reasons as unknown[]) : null;
+    const primaryReason = reasons && typeof reasons[0] === "string" ? (reasons[0] as string) : null;
     const verdict = canRevert(identity, { workspace_id: row.workspace_id, actor_id: row.actor_id }, r, newestSeq, visibleSeqs, { ownerUserId });
     const isNewest = r.seq === newestSeq;
     return {
@@ -128,6 +135,8 @@ export async function buildEntryHistoryFromReads(
       before_status: getStatus(parseTags(r.tags)),
       can_undo: isNewest && verdict.ok,
       can_restore: !isNewest && verdict.ok,
+      hold: primaryReason ? { reason: primaryReason } : null,
+      release: meta.release !== undefined && meta.release !== null,
     };
   });
 

@@ -309,7 +309,10 @@ function formatHistoryReply(
 
   const changeLines = changes.map((c) => {
     const before = `before: "${c.before_preview}"`;
-    return `- v${c.seq} · ${historyRowDate(c.at)} · ${HISTORY_REASON_LABELS[c.reason] ?? c.reason} · by ${c.actor_name} ${historyActorVia(c.client, c.channel)} · ${before}`;
+    // 6.5: a hold or release is recorded as a "status" version, but never shown as a plain
+    // "status changed" — P7 keeps the reason visible without ever showing the held text.
+    const label = c.release ? "released" : c.hold ? `held (${c.hold.reason})` : (HISTORY_REASON_LABELS[c.reason] ?? c.reason);
+    return `- v${c.seq} · ${historyRowDate(c.at)} · ${label} · by ${c.actor_name} ${historyActorVia(c.client, c.channel)} · ${before}`;
   });
   const eventLines = events.map((e) => `- ${historyRowDate(e.at)} · ${e.event} by ${e.actor_name}`);
   const edgeLines = edges.map((e) => e.source_id === id ? `- Supersedes ${e.target_id}` : `- Superseded by ${e.source_id}`);
@@ -680,12 +683,26 @@ export function buildMcpServer(
           event: result.status === "stored" || result.status === "flagged" ? "created" : "updated",
           payload: { captureStatus: result.status, channel: "mcp", ...(client ? { client } : {}) },
         });
+        // 5.4: the hold's own event, written alongside the write's own — never instead of it.
+        if ((result.status === "stored" || result.status === "flagged") && result.held) {
+          auditEvent(env, ctx, {
+            entryId: result.id,
+            actorId: identity.userId,
+            event: "held",
+            payload: { reasons: result.held.reasons, score: result.held.score, channel: "mcp", ...(client ? { client } : {}) },
+          });
+        }
       }
       if (result.status === "t7_refused") {
         return { content: [{ type: "text", text: result.error }] };
       }
       if (result.status === "blocked") {
         return { content: [{ type: "text", text: `Not stored: this is a ${(result.score * 100).toFixed(0)}% match with memory ${result.matchId}, which already exists.` }] };
+      }
+      // 5.5: a held create never reaches the merge/contradiction replies below — a held write
+      // skips all of that (5.4) — so this is checked right after the early-return statuses.
+      if ((result.status === "stored" || result.status === "flagged") && result.held) {
+        return { content: [{ type: "text", text: `Stored, but held out of recall: ${holdReasonPhrase(result.held.reasons[0])}. The user can release it. ID: ${result.id}` }] };
       }
       if (result.status === "contradiction" || result.status === "contradiction_protected") {
         const timezone = (await resolveConfig(env)).TIMEZONE;

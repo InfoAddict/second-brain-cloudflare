@@ -185,6 +185,15 @@ export async function handleCaptureRoutes(
         event: result.status === "stored" || result.status === "flagged" ? "created" : "updated",
         payload: { captureStatus: result.status, channel: "rest" },
       });
+      // 5.4: the hold's own event, written alongside the write's own.
+      if ((result.status === "stored" || result.status === "flagged") && result.held) {
+        auditEvent(env, ctx, {
+          entryId: result.id,
+          actorId: identity.userId,
+          event: "held",
+          payload: { reasons: result.held.reasons, score: result.held.score, channel: "rest" },
+        });
+      }
     }
 
     if (result.status === "blocked") {
@@ -229,12 +238,17 @@ export async function handleCaptureRoutes(
         warning: "similar",
         matchId: result.matchId,
         score: parseFloat((result.score * 100).toFixed(1)),
+        held: result.held ? { reason: result.held.reasons[0] } : null,
         message: message ?? "Stored but similar entry exists: tagged as duplicate-candidate",
       }, ignoredReservedTags, t7Notes));
     }
     // Additive: older clients ignore the extra field, and the dashboard uses it
     // to show what was filed under what.
-    return json(withReservedNote({ ok: true, id: result.id, tags: result.tags ?? [], message: await t7Message() }, ignoredReservedTags, t7Notes));
+    return json(withReservedNote({
+      ok: true, id: result.id, tags: result.tags ?? [],
+      held: result.held ? { reason: result.held.reasons[0] } : null,
+      message: await t7Message(),
+    }, ignoredReservedTags, t7Notes));
   }
 
   // POST /append
