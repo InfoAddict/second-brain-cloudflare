@@ -1018,6 +1018,174 @@
   color: var(--text-primary);
 }
 
+/* T7-E: the loops panel's two groups ("You owe", "Owed to you"), each its
+   own small caps label above its own rows — .task's own top border already
+   separates rows within a group, so only the group boundary itself needs a
+   gap. */
+.loops-group + .loops-group {
+  margin-top: 14px;
+}
+
+/* UI reviewer final pass: the app has no other board-panel section label to
+   match, and the monospace eyebrow used elsewhere (.brief-eyebrow,
+   .view-status-title) reads as a plain small-caps label here instead - the
+   app's own sans font, uppercase and letter-spaced. */
+.loops-group-title {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+/* T7-E (Design 7.4): the decision log's calibration dot plot. A hollow ring
+   at "you said" and a filled dot at "came true", joined by a connector — 1
+   hue (--s1) plus a de-emphasis gray (--data), never color alone (ring vs
+   filled dot, plus the legend). Validated with the dataviz skill's
+   validate_palette.js; see the commit body for the run. */
+.ledger-chart-wrap {
+  margin: 10px 0;
+}
+
+.ledger-chart-scope {
+  margin: -4px 0 8px;
+}
+
+/* UI reviewer final pass: .legend-item's shared 13px (chart.js's own growth-
+   chart legend also uses it) reads noticeably larger next to this sheet's
+   12px .digest-note paragraphs on either side. Scoped here rather than
+   changed on the shared class, which chart.js's legend still wants. */
+#ledger-legend .legend-item {
+  font-size: 12px;
+}
+
+/*
+ * UI review round 2 (MAJOR): four columns (range, n, you said to came true,
+ * stated/estimated) still do not always fit 390px next to each other at a
+ * readable size, and a hard clip with no cue read as missing data. Scrolls
+ * (so nothing is actually lost) AND fades the right edge when there is more
+ * to see, so the cue is there without a redundant fade on a table that
+ * already fits.
+ */
+.ledger-table-scroll {
+  position: relative;
+  overflow-x: auto;
+}
+
+.ledger-table-scroll.has-overflow::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 28px;
+  background: linear-gradient(to right, transparent, var(--bg));
+  pointer-events: none;
+}
+
+/* Deliberately its own class, not .chart: the dot plot's natural height is
+   fixed by its row count (30px per bucket, 5 buckets), not the activity
+   chart's flex-filled panel height, and .chart's own mobile media query
+   (height: 240px at <= 700px) would otherwise win the cascade here since
+   this rule loads after it with equal specificity. */
+.ledger-chart {
+  position: relative;
+  width: 100%;
+  height: 190px;
+}
+
+.ledger-chart svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.cal-grid line {
+  stroke: var(--surface-3);
+  stroke-width: 1;
+}
+
+.cal-connector {
+  stroke: var(--data);
+  stroke-width: 2;
+}
+
+.cal-mark-ring {
+  fill: var(--bg-card);
+  stroke: var(--data);
+  stroke-width: 2;
+}
+
+.cal-mark-dot {
+  fill: var(--s1);
+  stroke: var(--bg-card);
+  stroke-width: 2;
+}
+
+.cal-bucket-label,
+.cal-n-label,
+.cal-not-enough {
+  font-size: 11px;
+  fill: var(--text-secondary);
+  font-family: var(--font-sans);
+}
+
+.cal-row-hit {
+  cursor: pointer;
+}
+
+.cal-row-hit:focus-visible rect {
+  outline: 2px solid var(--accent-ink);
+}
+
+.cal-mark {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+
+.cal-mark--ring {
+  background: var(--bg-card);
+  border: 2px solid var(--data);
+}
+
+.cal-mark--dot {
+  background: var(--s1);
+  border: 2px solid var(--bg-card);
+  box-shadow: 0 0 0 1px var(--data);
+}
+
+.ledger-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill, 999px);
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+.ledger-chip--good {
+  color: var(--good);
+}
+
+.ledger-chip--danger {
+  color: var(--danger);
+}
+
+.ledger-chip--warn {
+  color: var(--warn);
+}
+
 /* ── Upkeep and connected sources ─────────────────────────────────────── */
 .task {
   display: flex;
@@ -1060,6 +1228,29 @@
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* UI review round 2: at the loops panel's narrow column width (span3), two
+   labels as long as "Received" and "Not a commitment" next to wrapped
+   content spilled outside the card. The actions move under the text
+   instead, left-aligned and compact, scoped to the loops panel only so the
+   upkeep/connected-sources panel's own .task rows are untouched. */
+.loops-group .task {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.loops-group .task-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+/* UI review round 2 (NIT): the sheet's own rows keep the side-by-side
+   layout (there is room at 390px), but centering the actions against a
+   two- or three-line title read as misaligned with it. Top-aligned instead. */
+#loops-list .task {
+  align-items: flex-start;
 }
 
 .board .src .ti {
