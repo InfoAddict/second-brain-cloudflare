@@ -142,14 +142,16 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
-  // MOVED 1235 -> 1257 -> 1287 (T-0089.2.1): the validity predicate and superseded_by
-  // subquery, and the candidateSignalProjection valid_until comment, added lines
-  // to the hydration block above this site; same site, shifted only.
-  { file: 'src/recall/search.ts', line: 1287, kind: 'exempt' },
+  // MOVED 1235 -> 1257 -> 1287 -> 1291 (T-0089.2.1): the validity predicate and superseded_by
+  // subquery, the candidateSignalProjection valid_until comment, and B2's validity-reader-inventory
+  // marker added lines to the hydration block above this site; same site, shifted only.
+  { file: 'src/recall/search.ts', line: 1291, kind: 'exempt' },
   // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
   // retryAfterMs rework added lines above this site; same site, shifted only.
   // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.
-  { file: 'src/routes/admin.ts', line: 1531, kind: 'exempt' },
+  // MOVED 1531 -> 1534 -> 1540 (T-0089.2.1): the insights dry-run pair query's validity predicate,
+  // then B2's due/loops/vectorize-pending validity-reader-inventory markers, added lines above this site; same site.
+  { file: 'src/routes/admin.ts', line: 1540, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
   // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
@@ -158,7 +160,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED 93 -> 131 (T-0089.1.1 round 5): failure counting and demotion above the batch; same site.
   // MOVED 131 -> 151 (T-0089.1.1, budget auditor R11): the 128 KB nightly cap and its skip count.
   { file: 'src/vectorize/pending.ts', line: 165, kind: 'exempt' },
-  { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
+  // MOVED 367 -> 368 (T-0089.2.1): candidateSql's now parameter shifted this by one line; same site.
+  { file: 'src/when/pass.ts', line: 368, kind: 'exempt' },
 ];
 
 /**
@@ -169,8 +172,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
  */
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:86", "src/staleness/pass.ts:96",
-  "src/when/pass.ts:367",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1531", // /classify-pending and applyClassification (hygiene)
+  "src/when/pass.ts:368",
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1540", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   // MOVED 443 -> 454, 503 -> 514 (T-0089.2.1): buildEntryFilterQuery's superseded_by

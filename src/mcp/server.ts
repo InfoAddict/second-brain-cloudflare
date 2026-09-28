@@ -1158,10 +1158,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       }
 
       const scope = identity ? scopeWhereForRead(identity) : null;
-      // validity: any: get is a single-memory fetch, not a current-facts answer (5.9)
       // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by the caller's clause above
       const row = await env.DB.prepare(
         // scope-exempt: identity-less branch: production MCP always resolves an identity (src/mcp/handler.ts); this arm is unit fixtures only
+        // validity: any: get is a single-memory fetch, not a current-facts answer (5.9)
         `SELECT id, content, tags, source, created_at, workspace_id, actor_id, valid_from, valid_until,
                 (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
                    FROM edges g JOIN entries s ON s.id = g.source_id

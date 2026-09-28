@@ -1,14 +1,16 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
-import { OPEN_LOOP_SQL } from "../../src/memory/loops";
+import { openLoopSql } from "../../src/memory/loops";
 import {
   OWED_TO_ME_SQL,
-  OPEN_OUTBOUND_SQL,
-  OPEN_INBOUND_SQL,
+  openOutboundSql,
+  openInboundSql,
   directionOf,
   counterpartySlug,
   counterpartyName,
 } from "../../src/commitments/direction";
+
+const NOW = Date.now();
 
 let sq: SqliteD1 | null = null;
 afterEach(() => {
@@ -36,6 +38,9 @@ const FIXTURE: Fixture[] = [
 
 async function seeded(): Promise<SqliteD1> {
   const s = makeSqliteD1();
+  // valid_until is one of the columns src/db/init.ts adds by ALTER at
+  // runtime rather than in schema.sql; openLoopSql reads it.
+  s.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   FIXTURE.forEach((row, i) => s.seed({ id: row.id, content: "x", createdAt: i, tags: row.tags }));
   return s;
 }
@@ -50,9 +55,9 @@ async function ids(s: SqliteD1, whereSql: string): Promise<string[]> {
 describe("OPEN_OUTBOUND_SQL and OPEN_INBOUND_SQL", () => {
   it("partition OPEN_LOOP_SQL exactly: every open row is in exactly one direction, closed rows in neither", async () => {
     sq = await seeded();
-    const open = new Set(await ids(sq, OPEN_LOOP_SQL));
-    const outbound = await ids(sq, OPEN_OUTBOUND_SQL);
-    const inbound = await ids(sq, OPEN_INBOUND_SQL);
+    const open = new Set(await ids(sq, openLoopSql(NOW)));
+    const outbound = await ids(sq, openOutboundSql(NOW));
+    const inbound = await ids(sq, openInboundSql(NOW));
 
     expect(new Set(outbound).has("outbound-done")).toBe(false);
     expect(new Set(inbound).has("inbound-done")).toBe(false);
@@ -69,8 +74,8 @@ describe("OPEN_OUTBOUND_SQL and OPEN_INBOUND_SQL", () => {
 
   it("outbound is every open row without the inbound marker; inbound is every open row with it", async () => {
     sq = await seeded();
-    const outbound = await ids(sq, OPEN_OUTBOUND_SQL);
-    const inbound = await ids(sq, OPEN_INBOUND_SQL);
+    const outbound = await ids(sq, openOutboundSql(NOW));
+    const inbound = await ids(sq, openInboundSql(NOW));
 
     expect(outbound).toEqual(expect.arrayContaining(["outbound-open", "outbound-open-2"]));
     expect(inbound).toEqual(expect.arrayContaining(["inbound-open", "inbound-open-no-counterparty"]));

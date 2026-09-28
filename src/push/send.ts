@@ -6,7 +6,7 @@
  */
 import type { Env } from "../env";
 import { resolveConfig, type Config } from "../config";
-import { DUE_SQL } from "../when/input";
+import { dueSql } from "../when/input";
 import { NOT_HELD_SQL } from "../quarantine/tags";
 import { encryptWebPush } from "./crypto";
 import { vapidAuthHeader } from "./vapid";
@@ -470,9 +470,10 @@ async function prepareWorkspacePush(env: Env, workspaceId: string, now: number, 
   };
   push.delivery = await readDeliveryMap(env, workspaceId);
   const delivered = Object.fromEntries(Object.entries(push.delivery).map(([id, record]) => [id, record.w]));
+  // validity: current: a superseded due item never pushes (5.5)
   push.dueRows = ((await env.DB.prepare(
     `SELECT id, content, when_at, when_label, tags FROM entries
-     WHERE ${DUE_SQL} AND ${NOT_HELD_SQL} AND when_at <= ? AND workspace_id = ?
+     WHERE ${dueSql(now)} AND ${NOT_HELD_SQL} AND when_at <= ? AND workspace_id = ?
      ORDER BY EXISTS (SELECT 1 FROM json_each(?) d WHERE d.key = entries.id AND d.value = entries.when_at), when_at ASC
      LIMIT ?`,
   ).bind(now, workspaceId, JSON.stringify(delivered), DUE_WINDOW).all()).results ?? []) as Record<string, any>[];
@@ -560,7 +561,7 @@ const okCount = (sends: SendRecord[]) => sends.filter(s => s.result === "ok").le
 export type PushSkip = "busy" | "kv_write_failed";
 
 /**
- * Pushes due items (overdue and due today, DUE_SQL) for one workspace to
+ * Pushes due items (overdue and due today, dueSql) for one workspace to
  * each subscription that has not yet had them at their current when_at.
  * POST /push/run calls this once per readable workspace with one shared
  * budget, which also carries one shared run lease; alone it gets its own.

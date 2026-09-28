@@ -533,6 +533,7 @@ export async function recallEntries(
     const memberBindings: string[] = [];
     if (tag) { memberConds.push(`tags LIKE ? ${TAG_LIKE_ESCAPE}`); memberBindings.push(tagLikePattern(tag)); }
     if (projectFilter) { memberConds.push(projectFilter.clause); memberBindings.push(...projectFilter.bindings); }
+    // validity: current: these ids feed the same final hydration below, whose d1Filters is the authoritative current-only predicate (5.5); no separate pool-slot argument applies to a tag/project scan
     // scope-checked: the caller's clause IS applied — tagScopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus tag scan
     const { results: tagRows } = await env.DB.prepare(
       `SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE ${memberConds.join(" AND ")}${tagScopeSql} AND ${NOT_HELD_SQL}`
@@ -690,6 +691,7 @@ export async function recallEntries(
   for (let i = 0; i < candidateIds.length; i += rcBatchSize) {
     const batch = candidateIds.slice(i, i + rcBatchSize);
     const rcPlaceholders = batch.map(() => "?").join(", ");
+    // validity: current: valid_until rides in candidateSignalProjection; the evidence-slot JS re-check below is this read's only current-only enforcement (5.5)
     // scope-checked: rcScopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
     const { results: rows } = await env.DB.prepare(
       `SELECT ${candidateSignalProjection} FROM entries WHERE id IN (${rcPlaceholders})${rcScopeSql}`
@@ -767,6 +769,7 @@ export async function recallEntries(
       const known = new Map(rcRows.filter(r => r.content !== undefined).map(r => [r.id, r.content as string]));
       const need = ids.filter(id => !known.has(id) && scopedParents.has(id));
       if (need.length) {
+        // validity: current: every id here already passed the current-only filters above (d1Map or the evidence-slot re-check); this is a content-only re-fetch, not a new candidate source
         // scope-exempt: by-id: every id here came from rcRows, the scoped candidate-signal read above (inScope filters to it). The scope clause is left out on purpose: with it SQLite plans a scan of the caller's whole workspace instead of <=30 primary-key lookups, which costs rows_read in proportion to the brain's size on every recall
         const { results } = await env.DB.prepare(
           `SELECT id, content FROM entries WHERE id IN (${need.map(() => "?").join(", ")})`
@@ -935,6 +938,7 @@ export async function recallEntries(
     const { results } = await env.DB.prepare(
       // scope-checked: d1Filters applies scopeWhereForIdRead(scope) above; the lexer cannot see the leading AND inside that JS fragment
       // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by d1Filters above — so it can never cross a workspace boundary
+      // validity: current: d1Filters carries the predicate (5.5)
       `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id, valid_from, valid_until,
               (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
                  FROM edges g JOIN entries s ON s.id = g.source_id

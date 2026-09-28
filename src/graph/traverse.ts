@@ -128,9 +128,9 @@ async function readableAndDeprecatedAmong(
   for (let i = 0; i < ids.length; i += take) {
     const batch = ids.slice(i, i + take);
     const ph = batch.map(() => "?").join(", ");
-    // validity: any: this verdict feeds both recall's current-only hops and
-    // connections/graph's include-everything view; the caller decides which to keep
+    // This verdict feeds both recall's current-only hops and connections/graph's include-everything view; the caller decides which to keep
     // scope-checked: scopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
+    // validity: any: valid_until rides along for whichever caller wants it; expandGraph itself decides current vs any
     const { results } = await env.DB.prepare(
       `SELECT id, tags, valid_until FROM entries WHERE id IN (${ph})${scopeSql}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
@@ -346,6 +346,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
     // the patterns bind once, and both its read and the edge scan carry the caller's scope.
     // Needs an identity: the route always has one, the identity-less cron callers never pass a project.
     const project = scope && opts.project ? projectFilterSql(opts.project) : null;
+    // validity: any: member ids only, feeding the same node hydration below that carries valid_until (5.5)
     const { results } = await env.DB.prepare(
       project && scope
         ? `WITH member AS (SELECT id FROM entries WHERE ${project.clause} AND ${scope.clause})

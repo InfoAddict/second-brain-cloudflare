@@ -7,10 +7,10 @@ import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { isTopicTagSql } from "../compression/eligibility";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, STALE_AS_OF } from "../memory/stale";
-import { OPEN_LOOP_SQL } from "../memory/loops";
+import { openLoopSql } from "../memory/loops";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { D1_MAX_BOUND_PARAMS } from "../constants";
-import { DUE_WITHIN_MS, DUE_SQL } from "../when/input";
+import { DUE_WITHIN_MS, dueSql } from "../when/input";
 import { parseTags } from "../insight/candidates";
 import { STORED_DATA_NOTICE, storedLine } from "../lib/stored-data";
 import { NOT_HELD_SQL } from "../quarantine/tags";
@@ -44,13 +44,16 @@ const RESURFACE_MIN_IMPORTANCE = 3;
  * genuine reminder. task:done is excluded because a finished commitment is
  * not a reminder either; it is history.
  */
-const RESURFACE_FILTER = `created_at < ? AND importance_score >= ?
+// validity: current: a replaced memory is not resurfaced (5.5). `now` is interpolated,
+// not bound, matching dueSql/openLoopSql (src/when/input.ts, src/memory/loops.ts).
+const resurfaceFilter = (now: number) => `created_at < ? AND importance_score >= ?
          AND tags NOT LIKE '%"status:deprecated"%'
          AND tags NOT LIKE '%"auto-pattern"%'
          AND tags NOT LIKE '%"auto-insight"%'
          AND tags NOT LIKE '%"synthesized"%'
          AND tags NOT LIKE '%"kind:episodic"%'
          AND tags NOT LIKE '%"task:done"%'
+         AND (valid_until IS NULL OR valid_until > ${now})
          AND ${NOT_HELD_SQL}`;
 
 /** How far back "recently shown" reaches when excluding a repeat pick. */
@@ -168,12 +171,13 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
     // gating the chip on one while the feed had none meant an untagged
     // remember(when: ...) moved GET /due but never this count (review
     // finding). The two share one predicate so they cannot disagree again.
+    // validity: current: open_loops and due must not count a replaced row (5.5)
     env.DB.prepare(
       `SELECT
          SUM(CASE WHEN vector_ids = '[]' AND ${INDEXABLE_SQL} THEN 1 ELSE 0 END) AS unindexed,
          SUM(CASE WHEN ${STALE_REVIEW_SQL} THEN 1 ELSE 0 END) AS stale,
-         SUM(CASE WHEN ${OPEN_LOOP_SQL} THEN 1 ELSE 0 END) AS open_loops,
-         SUM(CASE WHEN ${DUE_SQL} AND when_at <= ? THEN 1 ELSE 0 END) AS due,
+         SUM(CASE WHEN ${openLoopSql(now)} THEN 1 ELSE 0 END) AS open_loops,
+         SUM(CASE WHEN ${dueSql(now)} AND when_at <= ? THEN 1 ELSE 0 END) AS due,
          COUNT(*) AS total
        FROM entries WHERE ${scope.clause}`,
     ).bind(now + DUE_WITHIN_MS, ...scope.bindings).first() as Promise<Record<string, any> | null>,
@@ -182,9 +186,10 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
     // same row shape GET /loops returns, so the panel and the sheet behind it
     // read identically. One added query, the cost Task A's brief accepts for
     // showing anything beyond a bare count.
+    // validity: current: a replaced loop is not open (5.5)
     env.DB.prepare(
       `SELECT id, content, source, tags, created_at FROM entries
-       WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
+       WHERE ${openLoopSql(now)} AND ${scope.clause}
        ORDER BY created_at DESC LIMIT 3`,
     ).bind(...scope.bindings).all(),
   ]);
@@ -231,15 +236,17 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
   let resurfaceRow = priorState.day === today && priorState.shownId && !priorState.dismissed.includes(priorState.shownId)
     // Same-day stability: fetch the exact row rather than re-selecting, so a
     // second app open the same day shows the same memory. Falls through to a
-    // fresh pick below if the row is gone (deleted, or moved out of scope).
+    // fresh pick below if the row is gone (deleted, moved out of scope, or
+    // replaced since it was shown — a superseded fact is not worth re-reading).
+    // validity: current: a row replaced since it was shown falls through to a fresh pick (5.5)
     ? await env.DB.prepare(
-        `SELECT id, content, source, tags, created_at FROM entries WHERE id = ? AND ${scope.clause}`,
-      ).bind(priorState.shownId, ...scope.bindings).first() as ResurfaceRow | null
+        `SELECT id, content, source, tags, created_at FROM entries WHERE id = ? AND (valid_until IS NULL OR valid_until > ?) AND ${scope.clause}`,
+      ).bind(priorState.shownId, now, ...scope.bindings).first() as ResurfaceRow | null
     : null;
 
   let nextState = priorState;
   if (!resurfaceRow) {
-    resurfaceRow = await pickResurface(env, scope, resurfaceBefore, topics, excluded, today) ?? null;
+    resurfaceRow = await pickResurface(env, scope, resurfaceBefore, topics, excluded, today, now) ?? null;
     if (resurfaceRow) nextState = withShown(priorState, resurfaceRow.id, today);
   }
   if (!preview && nextState !== priorState) {
@@ -325,12 +332,14 @@ export async function readAgentBrief(
     const rows = results as unknown as (BriefRow & { total: number })[];
     return { total: rows[0]?.total ?? 0, items: rows.slice(0, cap).map(({ id, content, when_at }) => ({ id, content, ...(when_at != null ? { when_at } : {}) })) };
   };
+  // validity: current: a replaced due item or loop must not appear in this agent's own brief (5.5)
   const queries: Record<BriefPart, () => Promise<BriefSection>> = {
     due: () => run(`SELECT id, content, when_at, COUNT(*) OVER() AS total FROM entries
-      WHERE ${DUE_SQL} AND when_at <= ? AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+      WHERE ${dueSql(now)} AND when_at <= ? AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
       ORDER BY when_at ASC, id ASC LIMIT 5`, 5, [now + DUE_WITHIN_MS]),
+    // validity: current: openLoopSql carries the predicate (5.5)
     loops: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
-      WHERE ${TASK_INDEXED} AND ${OPEN_LOOP_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+      WHERE ${TASK_INDEXED} AND ${openLoopSql(now)} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
       ORDER BY created_at DESC, id DESC LIMIT 5`, 5),
     stale: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
       WHERE ${STALE_INDEXED} AND ${STALE_REVIEW_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
@@ -435,6 +444,7 @@ async function pickResurface(
   topics: { tag: string; count: number }[],
   excluded: string[],
   today: number,
+  now: number,
 ): Promise<ResurfaceRow | undefined> {
   const budget = Math.max(0, Math.floor((D1_MAX_BOUND_PARAMS - 1) / 2) - 2 - scope.bindings.length);
   // This is the one statement that binds scope twice. When workspaces plus a wide project filter
@@ -450,24 +460,26 @@ async function pickResurface(
 
   const exclusionClause = boundExcluded.length ? `AND id NOT IN (${boundExcluded.map(() => "?").join(", ")})` : "";
 
-  let activeFilter = RESURFACE_FILTER;
+  let activeFilter = resurfaceFilter(now);
   let extraFilterBindings: string[] = [];
 
   if (topicTags.length) {
     const topicClause = `(${topicTags.map(() => `tags LIKE ? ${TAG_LIKE_ESCAPE}`).join(" OR ")})`;
     const topicPatterns = topicTags.map(tagLikePattern);
+    // validity: current: resurfaceFilter carries the predicate (5.5)
     const preferredCount = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM entries
-       WHERE (${RESURFACE_FILTER}) AND ${topicClause} ${exclusionClause} AND ${scope.clause}`,
+       WHERE (${resurfaceFilter(now)}) AND ${topicClause} ${exclusionClause} AND ${scope.clause}`,
     ).bind(resurfaceBefore, RESURFACE_MIN_IMPORTANCE, ...topicPatterns, ...boundExcluded, ...scope.bindings)
       .first() as Record<string, any> | null;
     if (((preferredCount?.n as number) ?? 0) > 0) {
-      activeFilter = `(${RESURFACE_FILTER}) AND ${topicClause}`;
+      activeFilter = `(${resurfaceFilter(now)}) AND ${topicClause}`;
       extraFilterBindings = topicPatterns;
     }
   }
 
   const filterBindings = [resurfaceBefore, RESURFACE_MIN_IMPORTANCE, ...extraFilterBindings];
+  // validity: current: resurfaceFilter (in activeFilter) carries the predicate (5.5)
   const { results } = await env.DB.prepare(
     `SELECT id, content, source, tags, created_at FROM entries
      WHERE (${activeFilter}) ${exclusionClause} AND ${scope.clause}
