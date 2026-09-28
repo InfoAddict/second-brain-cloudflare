@@ -73,10 +73,9 @@ function scanInventory(): Site[] {
 // combining rather than hand-reconciling two independently-tracked line sets, same reasoning as
 // every prior cross-track merge this table records — see the history further below.
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
-  // MOVED to real --inventory output (T-0089.4.2, Codex review classes A-D, the too_long
-  // simplification, R20's batchEmbeds fix, and Codex recheck classes E/A): the embed gate, the
-  // too_long hold redesign, the held-row model-prompt filters and the restamp race fix all
-  // shifted, added or removed entries-write sites. Recomputed against the real scanner output.
+  // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): v4/t34-w's own class E/A/R20
+  // deltas and release/v4's own Track 2 lane B (as-of) deltas are independently-tracked from the
+  // same base c0eed34b — recomputed against the real scanner output on the merged tree.
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
   { file: 'src/capture/entry.ts', line: 370, kind: 'snapshot' },
@@ -108,25 +107,21 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/actions.ts', line: 250, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 291, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 303, kind: 'snapshot' },
-  // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): v4/t34-w's own class E/A/R20
-  // deltas and release/v4's own Track 2 lane B (as-of) deltas are independently-tracked from the
-  // same base c0eed34b — recomputed against the real scanner output on the merged tree below,
-  // not hand-combined. History from both branches kept for provenance.
   { file: 'src/memory/trash.ts', line: 230, kind: 'trash' },
   { file: 'src/memory/trash.ts', line: 623, kind: 'exempt' },
   { file: 'src/memory/undo.ts', line: 184, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 479, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 515, kind: 'exempt' },
-  { file: 'src/memory/validity.ts', line: 161, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 301, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 370, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 413, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 457, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 616, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 634, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 165, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 305, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 374, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 417, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 461, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 620, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 638, kind: 'snapshot' },
   { file: 'src/quarantine/hold.ts', line: 113, kind: 'snapshot' },
-  { file: 'src/recall/search.ts', line: 1292, kind: 'exempt' },
-  { file: 'src/routes/admin.ts', line: 1563, kind: 'exempt' },
+  { file: 'src/recall/search.ts', line: 1311, kind: 'exempt' },
+  { file: 'src/routes/admin.ts', line: 1564, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 87, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 97, kind: 'exempt' },
   { file: 'src/vectorize/pending.ts', line: 165, kind: 'exempt' },
@@ -142,9 +137,9 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:87", "src/staleness/pass.ts:97",
   // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): recomputed against the real
-  // scanner output on the merged tree below, not hand-combined.
+  // scanner output on the merged tree.
   "src/when/pass.ts:373",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1563", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1564", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   // MOVED 540/601 -> 589/650 -> 591/652 -> 598/659 -> 600/661 (T-0089.4.2, Lane W): W1's scoring

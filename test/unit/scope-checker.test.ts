@@ -1492,11 +1492,11 @@ describe("the checker over the real source tree", () => {
     // (Track 7-C decisions/commitments wiring, see history above) are independently-tracked deltas
     // from the same base — recomputed against the real scanner output after combining rather than
     // hand-reconciling the two.
-    // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): v4/t34-w's own class E/A
-    // deltas and release/v4's own Track 2 lane B (as-of) deltas are independently-tracked from the
-    // same base c0eed34b — recomputed against the real scanner output on the merged tree, PLACEHOLDER
-    // pending that measurement, not hand-combined.
-    ).toEqual({ queries: 229, exempt: 115, checked: 31, outerJoin: 1 });
+    // MOVED 229/115/31/1 -> 230/116/31/1 (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2):
+    // v4/t34-w's own class E/A deltas (+1 query, +1 documented exception: restampVectorWorkspace's
+    // isHeld re-check) and release/v4's own Track 2 lane B (as-of) deltas are independently-tracked
+    // from the same base c0eed34b — recomputed against the real scanner output on the merged tree.
+    ).toEqual({ queries: 230, exempt: 116, checked: 31, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
