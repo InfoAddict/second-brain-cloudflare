@@ -1,6 +1,6 @@
 import { MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS, projectSlugError, projectTagError, withProjectTag, PROJECT_SLUG_RE, reservedTagsNote, stripNewReservedTags } from "../tags/system";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveConfig } from "../config";
+import { resolveConfig, type Config } from "../config";
 import { z } from "zod";
 import type { Env } from "../env";
 import { RECALL_MAX_TOP_K, SEMANTIC_UNAVAILABLE_DETAIL, VECTORIZE_FIX_HINT } from "../constants";
@@ -732,11 +732,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       if (content === undefined && (tags !== undefined || volatility !== undefined)) return { content: [{ type: "text", text: "To change tags or volatility, pass content too." }] };
       if (content !== undefined && valid_from !== undefined) return { content: [{ type: "text", text: VALIDITY_WITH_CONTENT_ERROR }] };
       const validityCfg = hasValidity ? await resolveConfig(env) : null;
-      const validity = hasValidity ? parseValidityInput({ valid_from, valid_until }, Date.now(), validityCfg!.TIMEZONE, { allowNull: true }) : null;
+      const validity = hasValidity ? parseValidityInput({ valid_from, valid_until }, Date.now(), (validityCfg as Config).TIMEZONE, { allowNull: true }) : null;
       if (validity && "error" in validity) return { content: [{ type: "text", text: validity.error }] };
       const setValidity = async (workspaceId: string): Promise<string> => {
-        const r = await updateEntryValidity(env, id, validity!.value as { from?: number | null; until?: number | null }, mcpChange, validityCfg!, workspaceId);
-        if (r.status === "updated") return updateValidityReply(id, r, validityCfg!.TIMEZONE);
+        const r = await updateEntryValidity(env, id, validity!.value as { from?: number | null; until?: number | null }, mcpChange, validityCfg as Config, workspaceId);
+        if (r.status === "updated") return updateValidityReply(id, r, (validityCfg as Config).TIMEZONE);
         if (r.status === "refused") return r.error;
         if (r.status === "no_change") return `Entry ${id} already has those dates; nothing changed.`;
         if (r.status === "conflict") return `Entry ${id} changed while saving, so nothing was written. Please try again.`;

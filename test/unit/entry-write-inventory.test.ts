@@ -130,13 +130,13 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // NEW (T-0089.2.4): the retraction restore and un-retraction re-close UPDATEs (D-RET), and the
   // cascade's flag and unflag UPDATEs; each rides after its own derived snapshot in the same batch,
   // and lands only on the rows that snapshot versioned (nonce).
-  { file: 'src/memory/validity.ts', line: 261, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 330, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 373, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 417, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 265, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 334, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 377, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 421, kind: 'snapshot' },
   // NEW (T-0089.2.1, Task A4): update(valid_from / valid_until) and its propagate UPDATE, each with its validity snapshot.
-  { file: 'src/memory/validity.ts', line: 576, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 594, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 580, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 598, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
