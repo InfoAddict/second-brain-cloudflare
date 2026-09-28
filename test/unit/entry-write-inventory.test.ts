@@ -149,8 +149,9 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // the merged tree rather than hand-reconciling this branch's own line-history comments against
   // T-0089.5.2's recall log hook and lane A's supersededBySql fix.
   // MOVED -2 (director's R16 request): asOfPredicateSql inlined into its two keyword-search
-  // template literals instead of a precomputed variable, so the R16 class guard can see it; same site.
-  { file: 'src/recall/search.ts', line: 1304, kind: 'exempt' },
+  // template literals instead of a precomputed variable, so the R16 class guard can see it.
+  // MOVED +2 (Task B6, T-0089.2.3): intent threaded into directOptions/rootOptions above; same site.
+  { file: 'src/recall/search.ts', line: 1306, kind: 'exempt' },
   // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
   // retryAfterMs rework added lines above this site; same site, shifted only.
   // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.

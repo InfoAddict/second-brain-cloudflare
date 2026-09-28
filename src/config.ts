@@ -90,6 +90,11 @@ export const DEFAULTS = {
   TAG_BOOST_MAX: 1.5,
   CONTRADICTION_IMPORTANCE_STEP: 1.0,
 
+  // A mild score demotion for a stale:as-of row under a "current" query intent (spec 14 5.8/B6).
+  // 1.0 (off) until the as-of eval gate passes on knowledge-update:ku-silent with no regression on
+  // ku-silent-true/ku-silent-fresh (director, 2026-09-27); the real value is 0.9.
+  STALE_PENALTY: 1.0,
+
   // ── Models (src/lib/ai.ts) ──
   LLM_MODEL: "@cf/meta/llama-4-scout-17b-16e-instruct",
   EMBEDDING_MODEL: "@cf/baai/bge-small-en-v1.5",
@@ -239,6 +244,7 @@ export const RULES: Record<ConfigKey, Rule> = {
   TAG_BOOST_STEP: { kind: "number", min: 0, max: 1 },
   TAG_BOOST_MAX: { kind: "number", min: 1, max: 5 },
   CONTRADICTION_IMPORTANCE_STEP: { kind: "number", min: 0, max: 5 },
+  STALE_PENALTY: { kind: "number", min: 0.5, max: 1.0 },
 
   RERANK_MODE: { kind: "string" },
 

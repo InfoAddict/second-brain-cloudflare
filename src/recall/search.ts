@@ -729,11 +729,13 @@ export async function recallEntries(
   const rootFusedForRerank = notHeld(rootFusedMatches);
 
   // The traced variant is for explain only: off, recall runs the plain reranker it always ran.
-  const directOptions = { d1Sources };
+  // intent (5.8/B6): stale_penalty applies only under "current" — profile.intent is the same
+  // classification authorityAlignment already reads above, not a second guess.
+  const directOptions = { d1Sources, intent: profile.intent };
   const directTraced = explain ? rerankWithTimeDecayTraced(fusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions) : undefined;
   let directReranked = directTraced ? directTraced.map(t => t.match) : rerankWithTimeDecay(fusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions);
   // The root view is computed here, beside the direct one, so a single model batch can cover both.
-  const rootOptions = { useRecallFrequency: false, d1Sources };
+  const rootOptions = { useRecallFrequency: false, d1Sources, intent: profile.intent };
   const rootTraced = explain && hops > 0 ? rerankWithTimeDecayTraced(rootFusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
   let rootReranked = rootTraced.length ? rootTraced.map(t => t.match)
     : hops > 0 ? rerankWithTimeDecay(rootFusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];

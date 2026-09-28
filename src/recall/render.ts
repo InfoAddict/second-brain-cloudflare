@@ -209,6 +209,7 @@ function whyText(m: RecallMatch, why: WhyTrace, contentById: Map<string, string>
     if (mult.tag_boost > 1) parts.push("tag match");
     if (mult.frequency > 1) parts.push("recalled before");
     if (mult.source_weight < 1) parts.push(`${sourceClass(m.source, m.tags)} source ×${mult.source_weight}`);
+    if (mult.stale_penalty < 1) parts.push("possibly out of date");
   }
   if (why.rerank_move) parts.push(`reranked ${why.rerank_move}`);
   if (why.graph) {
