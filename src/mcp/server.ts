@@ -23,6 +23,7 @@ import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
 import { WHEN_KIND_VALUES, parseExplicitWhen } from "../when/input";
 import { recallEntries } from "../recall/search";
+import { maybeMarkFollowed, maybeMarkFollowedMany } from "../recall/log";
 import { renderRecallText, memoryHeader } from "../recall/render";
 import { RECALL_OUTPUT_BUDGET, SNIPPET_MAX_CHARS, snippetOf, truncationNote } from "../recall/snippet";
 import { buildPromptCapsule } from "../prompt-capsule/build";
@@ -638,6 +639,9 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       if (identity) {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "mcp" } });
       }
+      // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
+      // that the recall was used. No-op unless RECALL_LOG is on.
+      ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id, id, Date.now()));
 
       return {
         content: [{
@@ -710,6 +714,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
 
       if (identity && result.status === "updated") {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "mcp" } });
+      }
+      // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
+      // that the recall was used. No-op unless RECALL_LOG is on.
+      if (result.status === "updated") {
+        ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id, id, Date.now()));
       }
 
       if (!result.vectorIds) {
@@ -878,7 +887,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const projectRows = await resolveProjectArg(project, workspace, teamRead.teamId);
       if (typeof projectRows === "string") return { content: [{ type: "text", text: projectRows }] };
       const cfg = await resolveConfig(env);
-      const { matches, insight, semanticUnavailable, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId });
+      const { matches, insight, semanticUnavailable, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain, channel: "mcp" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId });
 
       const notice = semanticUnavailable
         ? `Note: semantic search was unavailable or incomplete for this query, so these results may be keyword matches only. ${SEMANTIC_UNAVAILABLE_DETAIL}\n\n`
@@ -1016,6 +1025,9 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       if (!row) {
         return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       }
+      // T-0089.5.2 Part B: a get on a recently-recalled id is implicit feedback that
+      // the recall was used ("the agent opened it"). No-op unless RECALL_LOG is on.
+      ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id as string, id, Date.now()));
       const tags: string[] = JSON.parse(row.tags ?? "[]");
       // get is the tool an agent calls before acting on a memory, so it is the
       // one that can least afford to omit "this is shared, and someone else
@@ -1102,6 +1114,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
 
       const edge = await createEdge(source_id, target_id, type, { provenance: "explicit", weight: 1.0, workspaceId: source.workspace_id }, env);
       if (!edge) return { content: [{ type: "text", text: "Cannot link an entry to itself." }] };
+      // T-0089.5.2 Part B: a link on a recently-recalled id is implicit feedback that
+      // the recall was used. Checked for both ends together (one shared read-then-write,
+      // not two racing ones). No-op unless RECALL_LOG is on.
+      ctx.waitUntil(maybeMarkFollowedMany(env, await resolveConfig(env), source.workspace_id, [source_id, target_id], Date.now()));
       return { content: [{ type: "text", text: `Linked ${edge.source_id} → ${edge.target_id} (${edgeLabel(edge.type)}).` }] };
     }
   );

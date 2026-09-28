@@ -11,6 +11,7 @@ import { captureEntry } from "../capture/entry";
 import { appendToEntry, updateEntryContent } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
+import { maybeMarkFollowed } from "../recall/log";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
 import { parseExplicitWhen } from "../when/input";
 import { contentByteLength, isOverContentLimit, tooLargeRestBody, MAX_CONTENT_BYTES } from "../lib/content-size";
@@ -224,6 +225,9 @@ export async function handleCaptureRoutes(
     }
 
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "rest" } });
+    // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
+    // that the recall was used. No-op unless RECALL_LOG is on.
+    ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id, id, Date.now()));
 
     return json({
       ok: true,
@@ -302,6 +306,9 @@ export async function handleCaptureRoutes(
 
     // Only a write that happened is audited.
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "rest" } });
+    // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
+    // that the recall was used. No-op unless RECALL_LOG is on.
+    ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id, id, Date.now()));
 
     if (!result.vectorIds) {
       return json(withReservedNote({
