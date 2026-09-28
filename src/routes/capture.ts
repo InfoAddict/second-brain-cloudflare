@@ -215,19 +215,21 @@ export async function handleCaptureRoutes(
       return json(tooLargeRestBody(), 413);
     }
 
+    const cfg = await resolveConfig(env);
     let indexed: boolean;
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx);
+      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx);
     } catch (e) {
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
 
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "rest" } });
     // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
-    // that the recall was used. No-op unless RECALL_LOG is on.
-    ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id, id, Date.now()));
+    // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+    // hand from appendToEntry above, so this adds no second KV read.
+    ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
 
     return json({
       ok: true,
@@ -293,7 +295,8 @@ export async function handleCaptureRoutes(
     // Absent (undefined) means "leave the tags alone", so nothing was ignored.
     const { ignored: ignoredReservedTags } = stripNewReservedTags(replaceTags ?? []);
 
-    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx);
+    const cfg = await resolveConfig(env);
+    const result = await updateEntryContent(env, id, newContent, cfg, updateVol.value, replaceTags, writeCtx);
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {
@@ -307,8 +310,9 @@ export async function handleCaptureRoutes(
     // Only a write that happened is audited.
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "rest" } });
     // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
-    // that the recall was used. No-op unless RECALL_LOG is on.
-    ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id, id, Date.now()));
+    // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+    // hand from updateEntryContent above, so this adds no second KV read.
+    ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
 
     if (!result.vectorIds) {
       return json(withReservedNote({

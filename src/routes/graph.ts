@@ -60,8 +60,9 @@ export async function handleGraphRoutes(
     if (!edge) return json({ ok: false, error: "Cannot link an entry to itself" }, 400);
     // T-0089.5.2 Part B: a link on a recently-recalled id is implicit feedback that
     // the recall was used. Checked for both ends together (one shared read-then-write,
-    // not two racing ones). No-op unless RECALL_LOG is on.
-    ctx.waitUntil(maybeMarkFollowedMany(env, await resolveConfig(env), source.workspace_id, [sourceId, targetId], Date.now()));
+    // not two racing ones); config is only resolved if a matching row is found, so the
+    // common case (RECALL_LOG never turned on) costs no KV read.
+    ctx.waitUntil(maybeMarkFollowedMany(env, source.workspace_id, [sourceId, targetId], Date.now()));
     return json({ ok: true, source_id: edge.source_id, target_id: edge.target_id, type: edge.type });
   }
 

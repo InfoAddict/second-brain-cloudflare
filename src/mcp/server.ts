@@ -617,9 +617,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: tooLargeMcpMessage("append") }] };
       }
 
+      const cfg = await resolveConfig(env);
       let indexed: boolean;
       try {
-        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx);
+        indexed = await appendToEntry(env, id, existingContent, a, tags, source, cfg, volatility as Volatility | undefined, writeCtx);
       } catch (e) {
         console.error("Append failed:", e);
         return {
@@ -640,8 +641,9 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "mcp" } });
       }
       // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
-      // that the recall was used. No-op unless RECALL_LOG is on.
-      ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id, id, Date.now()));
+      // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+      // hand from appendToEntry above, so this adds no second KV read.
+      ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
 
       return {
         content: [{
@@ -697,7 +699,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const { ignored: ignoredReservedTags } = stripNewReservedTags(tags ?? []);
       const noteSuffix = ignoredReservedTags.length ? ` ${reservedTagsNote(ignoredReservedTags)}` : "";
 
-      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx);
+      const cfg = await resolveConfig(env);
+      const result = await updateEntryContent(env, id, newContent, cfg, volatility as Volatility | undefined, tags, writeCtx);
 
       // Only reachable if the entry was deleted between the guard read and the write.
       if (result.status === "not_found") {
@@ -716,9 +719,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "mcp" } });
       }
       // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
-      // that the recall was used. No-op unless RECALL_LOG is on.
+      // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+      // hand from updateEntryContent above, so this adds no second KV read.
       if (result.status === "updated") {
-        ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id, id, Date.now()));
+        ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
       }
 
       if (!result.vectorIds) {
@@ -1026,8 +1030,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       }
       // T-0089.5.2 Part B: a get on a recently-recalled id is implicit feedback that
-      // the recall was used ("the agent opened it"). No-op unless RECALL_LOG is on.
-      ctx.waitUntil(maybeMarkFollowed(env, await resolveConfig(env), row.workspace_id as string, id, Date.now()));
+      // the recall was used ("the agent opened it"). Checks recall_log first and only
+      // resolves config if a matching row is found, so the common (RECALL_LOG never
+      // turned on, table empty) case costs one cheap D1 read and no KV read at all.
+      ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id as string, id, Date.now()));
       const tags: string[] = JSON.parse(row.tags ?? "[]");
       // get is the tool an agent calls before acting on a memory, so it is the
       // one that can least afford to omit "this is shared, and someone else
@@ -1116,8 +1122,9 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       if (!edge) return { content: [{ type: "text", text: "Cannot link an entry to itself." }] };
       // T-0089.5.2 Part B: a link on a recently-recalled id is implicit feedback that
       // the recall was used. Checked for both ends together (one shared read-then-write,
-      // not two racing ones). No-op unless RECALL_LOG is on.
-      ctx.waitUntil(maybeMarkFollowedMany(env, await resolveConfig(env), source.workspace_id, [source_id, target_id], Date.now()));
+      // not two racing ones); config is only resolved if a matching row is found, so the
+      // common case (RECALL_LOG never turned on) costs no KV read.
+      ctx.waitUntil(maybeMarkFollowedMany(env, source.workspace_id, [source_id, target_id], Date.now()));
       return { content: [{ type: "text", text: `Linked ${edge.source_id} → ${edge.target_id} (${edgeLabel(edge.type)}).` }] };
     }
   );
