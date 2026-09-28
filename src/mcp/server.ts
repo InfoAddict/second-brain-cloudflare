@@ -643,7 +643,7 @@ export function buildMcpServer(
       if (result.status === "contradiction") {
         const text = result.supersede
           ? supersedeReply(result.id, result.resolvedConflict, result.supersede, (await resolveConfig(env)).TIMEZONE)
-          : `Stored. ID: ${result.id}. It replaces entry ${result.resolvedConflict}.`;
+          : `Stored. ID: ${result.id}. It replaces memory ${result.resolvedConflict}.`;
         return { content: [{ type: "text", text: `${text}${noteSuffix}` }] };
       }
       if (result.status === "contradiction_protected") {
@@ -777,8 +777,8 @@ export function buildMcpServer(
         const r = await updateEntryValidity(env, id, validity!.value as { from?: number | null; until?: number | null }, mcpChange, validityCfg as Config, workspaceId);
         if (r.status === "updated") return updateValidityReply(id, r, (validityCfg as Config).TIMEZONE);
         if (r.status === "refused") return r.error;
-        if (r.status === "no_change") return `Entry ${id} already has those dates; nothing changed.`;
-        if (r.status === "conflict") return `Entry ${id} changed while saving, so nothing was written. Please try again.`;
+        if (r.status === "no_change") return `Memory ${id} already has those dates; nothing changed.`;
+        if (r.status === "conflict") return `Memory ${id} changed while saving, so nothing was written. Please try again.`;
         return `No entry found with ID: ${id}`;
       };
       if (content === undefined) {

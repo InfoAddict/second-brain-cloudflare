@@ -102,8 +102,8 @@ export function supersedeReply(
 ): string {
   const date = formatValidityDate(closed.at, timezone);
   return closed.direction === "older"
-    ? `Stored. ID: ${id}. It replaces entry ${conflictId} ("${closed.conflictPreview}"), which is kept as history: true until ${date}. If that was wrong, undo(${conflictId}) makes ${conflictId} current again.`
-    : `Stored. ID: ${id} as history: it was true until ${date}, when entry ${conflictId} began.`;
+    ? `Stored. ID: ${id}. It replaces memory ${conflictId} ("${closed.conflictPreview}"), which is kept as history: true until ${date}. If that was wrong, undo(${conflictId}) makes ${conflictId} current again.`
+    : `Stored. ID: ${id} as history: it was true until ${date}, when memory ${conflictId} began.`;
 }
 
 export interface Window { id: string; from: number; until: number | null; workspaceId: string; status: MemoryStatus | null }
@@ -513,12 +513,12 @@ export function validityReplySuffix(v: ValidityOutcome, subject: string, kind: "
   let text = "";
   if (v.restored.length === 1) {
     const [r] = v.restored;
-    text += kind === "forget" ? ` The older memory ${r.id} is current again.` : ` Entry ${r.id} ("${r.preview}") is current again.`;
+    text += kind === "forget" ? ` The older memory ${r.id} is current again.` : ` Memory ${r.id} ("${r.preview}") is current again.`;
   } else if (v.restored.length > 1) {
     text += ` ${v.restored.length} older memories are current again: ${v.restored.map(r => r.id).join(", ")}.`;
   }
-  if (v.reclosed.length === 1) text += ` Entry ${v.reclosed[0].id} is replaced by ${subject} again.`;
-  else if (v.reclosed.length > 1) text += ` Entries ${v.reclosed.map(r => r.id).join(", ")} are replaced by ${subject} again.`;
+  if (v.reclosed.length === 1) text += ` Memory ${v.reclosed[0].id} is replaced by ${subject} again.`;
+  else if (v.reclosed.length > 1) text += ` Memories ${v.reclosed.map(r => r.id).join(", ")} are replaced by ${subject} again.`;
   if (v.flagged === 1) text += " 1 memory built on it was flagged for a check.";
   else if (v.flagged > 1) text += ` ${v.flagged} memories built on it were flagged for a check.`;
   return text;
@@ -604,7 +604,7 @@ export async function updateEntryValidity(
   if (blocking) {
     return {
       status: "refused", field: "valid_from",
-      error: `Entry ${blocking.id} began on ${formatValidityDate(blocking.from, cfg.TIMEZONE)}, so ${id} cannot start before that. Nothing changed.`,
+      error: `Memory ${blocking.id} began on ${formatValidityDate(blocking.from, cfg.TIMEZONE)}, so ${id} cannot start before that. Nothing changed.`,
     };
   }
 
@@ -655,12 +655,12 @@ export async function updateEntryValidity(
 export function updateValidityReply(id: string, r: Extract<UpdateValidityResult, { status: "updated" }>, timezone: string): string {
   const d = (ms: number) => formatValidityDate(ms, timezone);
   let text: string;
-  if (r.changed.from && r.validUntil !== null) text = `Entry ${id} is now recorded as true from ${d(r.effectiveFrom)} until ${d(r.validUntil)}. It stays in history and is left out of current answers. Undo is available.`;
-  else if (r.changed.from) text = `Entry ${id} is now recorded as true from ${d(r.effectiveFrom)}.`;
-  else if (r.validUntil === null) text = `Entry ${id} is current again. Undo is available.`;
-  else text = `Entry ${id} is now recorded as true until ${d(r.validUntil)}. It stays in history and is left out of current answers. Undo is available.`;
-  if (r.propagated.length === 1) text += ` Entry ${r.propagated[0]}'s end date moved to match.`;
-  else if (r.propagated.length > 1) text += ` Entries ${r.propagated.join(", ")} had their end dates moved to match.`;
+  if (r.changed.from && r.validUntil !== null) text = `Memory ${id} is now recorded as true from ${d(r.effectiveFrom)} until ${d(r.validUntil)}. It stays in history and is left out of current answers. Undo is available.`;
+  else if (r.changed.from) text = `Memory ${id} is now recorded as true from ${d(r.effectiveFrom)}.`;
+  else if (r.validUntil === null) text = `Memory ${id} is current again. Undo is available.`;
+  else text = `Memory ${id} is now recorded as true until ${d(r.validUntil)}. It stays in history and is left out of current answers. Undo is available.`;
+  if (r.propagated.length === 1) text += ` Memory ${r.propagated[0]}'s end date moved to match.`;
+  else if (r.propagated.length > 1) text += ` Memories ${r.propagated.join(", ")} had their end dates moved to match.`;
   return text;
 }
 

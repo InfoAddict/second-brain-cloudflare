@@ -121,7 +121,7 @@ describe("update and POST /update", () => {
   it("update valid_until ends a fact; undo restores it", async () => {
     await seed("acme");
     const text = await mcp("update", { id: "acme", valid_until: "2026-05" });
-    expect(text).toBe("Entry acme is now recorded as true until May 1, 2026. It stays in history and is left out of current answers. Undo is available.");
+    expect(text).toBe("Memory acme is now recorded as true until May 1, 2026. It stays in history and is left out of current answers. Undo is available.");
     expect((await row("acme")).valid_until).toBe(Date.UTC(2026, 4, 1));
     const [v] = await versions("acme");
     expect(v.reason).toBe("validity");
@@ -132,7 +132,7 @@ describe("update and POST /update", () => {
 
   it("update valid_until null reopens it", async () => {
     await seed("acme", { validUntil: Date.UTC(2026, 4, 1) });
-    expect(await mcp("update", { id: "acme", valid_until: null })).toBe("Entry acme is current again. Undo is available.");
+    expect(await mcp("update", { id: "acme", valid_until: null })).toBe("Memory acme is current again. Undo is available.");
     expect((await row("acme")).valid_until).toBeNull();
   });
 
@@ -153,7 +153,7 @@ describe("update and POST /update", () => {
     await seed("acme", { createdAt: Date.UTC(2026, 5, 1) });
     expect(await mcp("update", { id: "acme", valid_until: "2026-05" }))
       .toBe("That end date is before this memory's start (Jun 1, 2026). Pass valid_from too if it began earlier.");
-    expect(await mcp("update", { id: "acme", valid_from: "2026-01", valid_until: "2026-05" })).toMatch(/^Entry acme is now recorded as true from Jan 1, 2026 until May 1, 2026\./);
+    expect(await mcp("update", { id: "acme", valid_from: "2026-01", valid_until: "2026-05" })).toMatch(/^Memory acme is now recorded as true from Jan 1, 2026 until May 1, 2026\./);
   });
 
   it("update valid_from propagates to the row it replaced and refuses a move before that row's start", async () => {
@@ -161,11 +161,11 @@ describe("update and POST /update", () => {
     await seed("austin", { createdAt: Date.UTC(2026, 7, 1), validFrom: Date.UTC(2026, 5, 1) });
     await sqlite.db.prepare(`INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id) VALUES ('s', 'austin', 'denver', 'supersedes', 1, 'system', '{}', 1, 1, ?)`).bind(ws).run();
     const text = await mcp("update", { id: "austin", valid_from: "2026-05" });
-    expect(text).toBe("Entry austin is now recorded as true from May 1, 2026. Entry denver's end date moved to match.");
+    expect(text).toBe("Memory austin is now recorded as true from May 1, 2026. Memory denver's end date moved to match.");
     expect((await row("denver")).valid_until).toBe(Date.UTC(2026, 4, 1));
     const [pv] = (await versions("denver")).slice(-1);
     expect(JSON.parse(pv.meta)).toMatchObject({ cause: "propagate", by: "austin" });
-    expect(await mcp("update", { id: "austin", valid_from: "2023-06" })).toBe("Entry denver began on Jan 1, 2024, so austin cannot start before that. Nothing changed.");
+    expect(await mcp("update", { id: "austin", valid_from: "2023-06" })).toBe("Memory denver began on Jan 1, 2024, so austin cannot start before that. Nothing changed.");
     expect((await row("austin")).valid_from).toBe(Date.UTC(2026, 4, 1));
   });
 

@@ -325,7 +325,7 @@ describe("surfaces", () => {
     const until = (await row("old")).valid_until;
     const date = new Date(until).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
     const preview = "Lives in Denver, in the house on Elm Street near the park and the old library".slice(0, 60);
-    expect(text).toBe(`Stored. ID: ${id}. It replaces entry old ("${preview}"), which is kept as history: true until ${date}. If that was wrong, undo(old) makes old current again.`);
+    expect(text).toBe(`Stored. ID: ${id}. It replaces memory old ("${preview}"), which is kept as history: true until ${date}. If that was wrong, undo(old) makes old current again.`);
     expect(text).not.toMatch(/—/);
   });
 
@@ -335,7 +335,7 @@ describe("surfaces", () => {
     const r = await capture("Lived in Boston", { validity: { from: Date.UTC(2018, 0, 1) } });
     const { supersedeReply } = await import("../../src/memory/validity");
     expect(supersedeReply((r as any).id, (r as any).resolvedConflict, (r as any).supersede, "UTC")).toBe(
-      `Stored. ID: ${(r as any).id} as history: it was true until Jan 1, 2024, when entry denver began.`);
+      `Stored. ID: ${(r as any).id} as history: it was true until Jan 1, 2024, when memory denver began.`);
   });
 
   it("POST /capture returns the supersede fields", async () => {
