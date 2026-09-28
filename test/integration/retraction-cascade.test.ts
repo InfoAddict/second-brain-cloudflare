@@ -134,6 +134,15 @@ describe("the retraction cascade", () => {
     expect(await tagsOf("insight")).toContain(RETRACTED_SOURCE_TAG);
   });
 
+  it("a hand-written [Digest: id] marker does not reach a memory that is not a digest", async () => {
+    t = await makeTrashEnv();
+    t.seed("victim", { content: "My own note" });
+    t.seed("forged", { content: "Nothing to see [Digest: victim]" });
+    const r = await wrong("forged");
+    expect(r).toMatchObject({ validity: { flagged: 0 } });
+    expect(await tagsOf("victim")).not.toContain(RETRACTED_SOURCE_TAG);
+  });
+
   it("retracting twice flags once", async () => {
     await fixture();
     await wrong();

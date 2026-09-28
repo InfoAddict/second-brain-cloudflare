@@ -201,13 +201,17 @@ const dependentsOf = (pairs: string) =>
   // scope-exempt: by-id: dependents of the caller's authorized rows; each statement pins the workspace
   `(SELECT g.source_id FROM edges g WHERE g.type IN ('drawn_from', 'caused_by') AND g.target_id IN ${ids(pairs)}
      UNION SELECT ${digestOf("xd")} FROM entries xd WHERE xd.id IN ${ids(pairs)})`;
-/** The retracted row the dependent `d` was built on, when the entry point's write landed. */
+/**
+ * The retracted row the dependent `d` was built on, when the entry point's write landed. A digest
+ * counts only as what markSourcesRolledUp made it: a synthesized row named by a rolled-up source,
+ * so a hand-written "[Digest: id]" cannot flag an ordinary memory.
+ */
 const builtOn = (p: Params, pairs: string, d: string, landed: LandedGuard) =>
   // scope-checked: x is one of the caller's authorized rows (pairs pin id and workspace), d shares its workspace
   `(SELECT x.id FROM entries x
      WHERE x.id IN ${ids(pairs)} AND ${authorized(pairs, "x")} AND x.workspace_id = ${d}.workspace_id AND x.id <> ${d}.id
        AND (EXISTS (SELECT 1 FROM edges g WHERE g.source_id = ${d}.id AND g.target_id = x.id AND g.type IN ('drawn_from', 'caused_by'))
-            OR ${d}.id = ${digestOf("x")})
+            OR (${d}.id = ${digestOf("x")} AND x.tags LIKE '%"rolled-up"%' AND ${d}.tags LIKE '%"synthesized"%'))
        AND (${landed(p)})
      ORDER BY x.id LIMIT 1)`;
 /** System-derived and not canonical: its only reason to exist was its inputs (D2.4), so it is demoted. */
