@@ -333,3 +333,22 @@ describe("surfaces", () => {
     expect(data).toMatchObject({ ok: true, resolved_conflict: "old", supersede: { closed_id: "old", at: (await row("old")).valid_until, direction: "older" } });
   });
 });
+
+describe("moved from the D1-mock unit tests (capture-entry, auto-link)", () => {
+  it("a hand-written (claude) contradiction still supersedes: the transcript rule does not apply", async () => {
+    await setup([{ id: "existing", score: 0.7 }], contradicts("existing"));
+    await seed("existing", "We decided to use Vectorize for semantic search.", { source: "claude" });
+    const r = await capture("We moved off Vectorize to a KV index.", {}, [], "claude");
+    expect(r).toMatchObject({ status: "contradiction", supersede: { closedId: "existing" } });
+  });
+
+  it("projects a supersedes edge and no redundant relates_to when a new entry wins a contradiction", async () => {
+    await setup([{ id: "existing", score: 0.9 }], `{"action":"contradiction","conflicting_id":"existing","reason":"conflict"}`);
+    await seed("existing", "The old fact");
+    const r = await capture("The corrected fact");
+    await Promise.race([Promise.allSettled(pending), new Promise(res => setTimeout(res, 50))]);
+    expect(r.status).toBe("contradiction");
+    const all = (await env.DB.prepare(`SELECT source_id, target_id, type, provenance FROM edges`).all()).results as any[];
+    expect(all).toEqual([{ source_id: (r as any).id, target_id: "existing", type: "supersedes", provenance: "system" }]);
+  });
+});

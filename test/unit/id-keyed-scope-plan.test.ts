@@ -108,7 +108,7 @@ describe("scoped entry id reads", () => {
       ["graph hydration", "SELECT id, content, tags, source, created_at FROM entries WHERE"],
       ["graph view hydration", "FROM entries e"],
       ["admin resolution", "SELECT id, tags, vector_ids, workspace_id FROM entries WHERE"],
-      ["capture duplicate", "SELECT id, content FROM entries WHERE"],
+      ["capture duplicate", "SELECT id, content, valid_until FROM entries WHERE"],
     ] as const;
     for (const [name, fragment] of shapes) {
       const sql = sqlite.issued.find(statement => statement.includes(fragment) && /\b(?:e\.)?id IN \(/.test(statement));
