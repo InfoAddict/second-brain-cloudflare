@@ -1469,7 +1469,13 @@ describe("the checker over the real source tree", () => {
     // four tracked tables) and release/v4's 198/102/18/1 above are independently-tracked deltas from
     // the same 190/103/13/1 base — recomputed against the real scanner output after combining rather
     // than hand-reconciling the two.
-    ).toEqual({ queries: 199, exempt: 102, checked: 18, outerJoin: 1 });
+    // MOVED (T-0089.4.3, merge of release/v4 fa609a16 into v4/t34-s): S1's own +1 query and +1
+    // scope-checked (src/brief/changes.ts's one-statement changes query, scoped by
+    // COALESCE(en.workspace_id, t.workspace_id) IN (SELECT value FROM json_each(?)) -- the lexer
+    // cannot see the leading AND inside that JS-assembled fragment) and release/v4's 199/102/18/1
+    // above are independently-tracked deltas from the same base, recomputed against the real
+    // scanner output on the merged tree rather than hand-added.
+    ).toEqual({ queries: 200, exempt: 102, checked: 19, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
