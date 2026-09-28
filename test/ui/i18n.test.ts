@@ -659,6 +659,14 @@ describe("dashboard i18n", () => {
       prefix: "patterns.shapes.",
       by: "t(`patterns.shapes.${shape}`) in public/js/brief.js and public/js/patterns.js",
     },
+    {
+      // Lane W (T-0089.4.2, copy deck 9.2) added these ahead of the dashboard UI: the
+      // pending-scan hold chip/line and history actor line have no lane-W-owned consumer yet.
+      // Lane S wires the chip/banner/history rendering (spec 16, S4/S5) and should remove this
+      // entry once real call sites exist.
+      keys: ["held.checkingChip", "held.checkingLine", "history.byNightlyCheck"],
+      by: "not yet consumed: reserved for lane S's pending-scan chip, banner and history rendering",
+    },
   ];
 
   it("every key in I18N_EN is read by some call site", () => {

@@ -348,6 +348,17 @@ const I18N_EN = {
     footerPruned: 'Only the last {n} changes are kept.',
     footerNotRecorded: 'Changes before {date} were not recorded.',
     footerSharedCut: 'Earlier changes are visible only to {name}.',
+    // Lane W (T-0089.4.2, copy deck 9.2): a pending-scan hold clearing once the nightly check
+    // finishes, and its actor line. Not yet wired into any dashboard UI -- see the copy deck.
+    reasonCheckCleared: 'Checked and added to search',
+    byNightlyCheck: 'by the nightly check',
+  },
+  // Lane W (T-0089.4.2, copy deck 9.2): the pending-scan hold state (a long note whose middle the
+  // nightly pass has not finished checking). Keys only -- no dashboard chip or banner reads these
+  // yet; see the copy deck section 9 for the UI spots this is meant for (lane S).
+  held: {
+    checkingChip: 'Being checked',
+    checkingLine: "Held while it's checked. It's too long to check all at once, so the nightly check reads it over one or more nights before it joins search.",
   },
   undo: {
     // SH-2's write-site toasts: one per action, action label "Undo" on all.
@@ -1487,6 +1498,12 @@ const I18N_IT = {
     footerPruned: 'Vengono conservate solo le ultime {n} modifiche.',
     footerNotRecorded: 'Le modifiche precedenti al {date} non sono state registrate.',
     footerSharedCut: 'Le modifiche precedenti sono visibili solo a {name}.',
+    reasonCheckCleared: 'Controllato e aggiunto alla ricerca',
+    byNightlyCheck: 'dal controllo notturno',
+  },
+  held: {
+    checkingChip: 'In controllo',
+    checkingLine: 'Trattenuto durante il controllo. È troppo lungo per controllarlo tutto in una volta, quindi il controllo notturno lo legge in una o più notti prima che entri nella ricerca.',
   },
   undo: {
     trashed: 'Spostato nel cestino',
