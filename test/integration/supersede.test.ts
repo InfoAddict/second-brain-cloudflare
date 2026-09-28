@@ -121,6 +121,19 @@ describe("a contradiction supersedes", () => {
     expect(JSON.parse((await row((r as any).id)).tags)).toContain("contradiction-resolved");
   });
 
+  it("a newcomer with no stated start that ties the older start (same millisecond, clock skew) still replaces it", async () => {
+    await setup([{ id: "old", score: 0.72 }], contradicts("old"));
+    const t0 = Date.now() + 5_000; // the older row's start is at or after this capture's own clock
+    await seed("old", "I live in NYC", { createdAt: t0 });
+    const spy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      const r = await capture("I moved to LA");
+      expect(r).toMatchObject({ status: "contradiction", supersede: { closedId: "old", direction: "older", at: t0 + 1 } });
+      expect(await row((r as any).id)).toMatchObject({ valid_from: t0 + 1, valid_until: null });
+      expect((await row("old")).valid_until).toBe(t0 + 1);
+    } finally { spy.mockRestore(); }
+  });
+
   it("audits superseded on the closed row, not status_changed", async () => {
     await setup([{ id: "old", score: 0.72 }], contradicts("old"));
     await seed("old", "I live in NYC");

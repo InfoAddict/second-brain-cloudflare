@@ -368,6 +368,10 @@ export async function captureEntry(
         id: contradiction.conflicting_id, from: (conflictRow.valid_from ?? conflictRow.created_at) as number,
         until: (conflictRow.valid_until ?? null) as number | null, workspaceId: writeCtx.workspaceId, status: conflictStatus,
       };
+      // A newcomer told now, with no stated start, is newer than the fact it contradicts even when the
+      // clocks tie (the same millisecond, or another isolate's clock ahead of this one): it starts just
+      // after the older fact, and that start is stored, so the older row's end still meets it exactly.
+      if (window.valid_from === null && window.valid_until === null && now <= older.from) window.valid_from = older.from + 1;
       newer = { id, from: window.valid_from ?? now, until: window.valid_until, workspaceId: writeCtx.workspaceId, status: getStatus(t) };
       plan = planSupersede(older, newer);
     }

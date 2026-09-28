@@ -83,12 +83,13 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED +11 (T-0089.2.1): buildEntryFilterQuery's superseded_by subquery added lines above these sites; same sites.
   { file: 'src/capture/entry.ts', line: 264, kind: 'snapshot' },
   { file: 'src/capture/entry.ts', line: 303, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 410, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 448, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 455, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 457, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 491, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 508, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 414, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 452, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 459, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 461, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 495, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 512, kind: 'exempt' },
+  // MOVED +4 (entry.ts): an unstated newcomer wins a start tie against the fact it contradicts.
   // MOVED (R16): entry.ts -6 and search.ts -5 (their superseded_by copies became supersededBySql), validity.ts +19 (the helper).
   // MOVED (T-0089.2.1 fix round): validity.ts +17 (currentValidityAt, SQL_NOW_MS), staleness/pass.ts +1 (its import).
   // MOVED (T-0089.2.4): lifecycle.ts, actions.ts, trash.ts and undo.ts shift for the retraction hooks; same sites.
@@ -182,7 +183,7 @@ const HYGIENE_EXEMPT = new Set([
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   // MOVED 443 -> 454, 503 -> 514 (T-0089.2.1): buildEntryFilterQuery's superseded_by
   // subquery added lines above these sites; same sites.
-  "src/capture/entry.ts:448", "src/capture/entry.ts:508",
+  "src/capture/entry.ts:452", "src/capture/entry.ts:512",
 ]);
 
 const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");
