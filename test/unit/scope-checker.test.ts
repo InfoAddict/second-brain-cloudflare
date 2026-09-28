@@ -1474,7 +1474,10 @@ describe("the checker over the real source tree", () => {
     // Deliberate: +1 query and +1 scope-checked (201/103/18 -> 202/103/19) for the cross-vendor
     // review's MINOR 3 fix (src/decisions/queries.ts, decisionsCountQuery): the true total is a
     // second statement, scoped the same way as decisionsListQuery's own bounded scope clause.
-    ).toEqual({ queries: 202, exempt: 103, checked: 19, outerJoin: 1 });
+    // Deliberate: +2 queries (202 -> 204) for the budget auditor's R1-R3 fixes (src/brief/compute.ts,
+    // dueSplit and loopsSplit): each split is now an items read plus a separate totals aggregate,
+    // both scoped the same way the one combined statement they replace was.
+    ).toEqual({ queries: 204, exempt: 103, checked: 19, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

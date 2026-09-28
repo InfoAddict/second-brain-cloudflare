@@ -106,7 +106,10 @@ describe("MCP brief", () => {
     expect(text).not.toContain("Other task");
     // Deliberate +1 (Task 9, C11): the full MCP brief always runs the calibration read now,
     // reading only idx_entries_ledger rows.
-    expect(sqlite.issued).toHaveLength(6);
+    // Deliberate +2 (budget auditor R1-R3 fix, src/brief/compute.ts): due and loops each split
+    // into an items read plus a separate totals aggregate, instead of one partitioned window
+    // read apiece -- the window read forced a full sorted scan of every due/open-loop row.
+    expect(sqlite.issued).toHaveLength(8);
   });
 });
 
