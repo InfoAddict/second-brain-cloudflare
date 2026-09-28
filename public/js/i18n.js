@@ -974,17 +974,12 @@ const I18N_EN = {
     restoredToast: 'Marked as wrong. "{preview}" is current again.',
     restoredToastMany: 'Marked as wrong. {n} older memories are current again.',
     flaggedToast: '{n} memories built on it were flagged for a check.',
-    // The 7.6 deck also gives per-cause history-row strings (historyReplaced,
-    // historyCurrentAgain, historyCurrentAgainDeleted, historyReplacedAgain,
-    // historyEndSet, historyEndMoved), left out of this catalog rather than
-    // shipped unreachable: entry.history.items (what the SH-1 timeline
-    // renders) carries no cause/by/until/preview for a reason:"validity" row,
-    // only entry.timeline does, and the current UI never reads entry.timeline
-    // once entry.history is present. See history.reasonValidity's generic
-    // fallback and the failing test documenting this gap
-    // (test/ui/validity-labels.test.ts, "history.items gap"). Add these keys
-    // back once that backend field lands.
-    //
+    historyReplaced: 'Replaced by {preview} (true until {until})',
+    historyCurrentAgain: 'Current again: {preview} was marked wrong',
+    historyCurrentAgainDeleted: 'Current again: the memory that replaced it was deleted',
+    historyReplacedAgain: 'Replaced again by {preview}',
+    historyEndSet: 'End date set to {until}',
+    historyEndMoved: 'End date moved to {until} to match {preview}',
     // Draft, not in the 7.6 copy deck: generic event-list labels for the
     // three validity event names src/lib/audit.ts writes, for the fallback
     // plain-event timeline (pre-SH-1 Workers, no rich history).
@@ -1000,11 +995,7 @@ const I18N_EN = {
     loadFailed: 'Could not load what may be out of date.',
     lastConfirmed: 'Last confirmed {date}',
     reasonAge: 'Not confirmed in {n} days',
-    // The 7.6 deck also gives reasonDate ("Its date has passed"), left out
-    // here: GET /stale sends no valid_until (src/routes/admin.ts's GET /stale
-    // selects only id, content, tags, source, created_at, last_updated), so
-    // an expired-but-not-yet-superseded row can't be told apart client-side.
-    // See test/ui/validity-labels.test.ts's "GET /stale gap" test.
+    reasonDate: 'Its date has passed',
     reasonRetracted: 'Built on a memory that was later retracted',
     keep: 'Keep',
     keepFailed: 'Could not keep this memory: {message}',
@@ -2300,6 +2291,12 @@ const I18N_IT = {
     restoredToast: 'Segnato come errato. "{preview}" è di nuovo valido.',
     restoredToastMany: 'Segnato come errato. {n} ricordi precedenti sono di nuovo validi.',
     flaggedToast: '{n} ricordi basati su di esso sono da verificare.',
+    historyReplaced: 'Sostituito da {preview} (valido fino al {until})',
+    historyCurrentAgain: 'Di nuovo valido: {preview} è stato segnato come errato',
+    historyCurrentAgainDeleted: 'Di nuovo valido: il ricordo che lo sostituiva è stato eliminato',
+    historyReplacedAgain: 'Sostituito di nuovo da {preview}',
+    historyEndSet: 'Data di fine impostata al {until}',
+    historyEndMoved: 'Data di fine spostata al {until} per corrispondere a {preview}',
     evSuperseded: 'Ha sostituito un ricordo precedente',
     evChanged: 'Validità cambiata',
     evFlagged: 'Segnalato per una verifica',
@@ -2312,6 +2309,7 @@ const I18N_IT = {
     loadFailed: 'Impossibile caricare cosa potrebbe non essere aggiornato.',
     lastConfirmed: 'Confermato il {date}',
     reasonAge: 'Non confermato da {n} giorni',
+    reasonDate: 'La sua data è passata',
     reasonRetracted: 'Basato su un ricordo poi ritrattato',
     keep: 'Tieni',
     keepFailed: 'Impossibile tenere questa memoria: {message}',

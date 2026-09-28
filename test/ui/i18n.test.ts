@@ -566,6 +566,10 @@ describe("dashboard i18n", () => {
       by: "historyReasonLabel() in public/js/history-view.js, keyed by HISTORY_REASON_KEYS[item.reason]",
     },
     {
+      prefix: "validity.history",
+      by: "historyValidityLabel() in public/js/history-view.js, keyed by VALIDITY_CAUSE_KEYS[item.cause]",
+    },
+    {
       prefix: "validity.ev",
       by: "timelineEventLabel() in public/js/memory-crud.js, keyed by the audit event name (superseded/validity_changed/flagged)",
     },
@@ -813,6 +817,11 @@ describe("dashboard i18n", () => {
       // literal, so the scanner sees one identity twice.
       "public/js/history-view.js t(`history.${key}`)",
       "public/js/history-view.js t(`history.${key}`)",
+      // historyValidityLabel()'s two returns: historyEndSet's own (no preview) and every
+      // other cause's (with preview). Same template literal, so the scanner sees one identity
+      // twice, same convention as the two history.${key} entries above.
+      "public/js/history-view.js t(`validity.${key}`)",
+      "public/js/history-view.js t(`validity.${key}`)",
       "public/js/memory-crud.js t(STATUS_HELP_KEYS[status] || '')",
       "public/js/due.js t(wentToLoops ? 'undo.done' : 'undo.dateRemoved')",
     ].sort();

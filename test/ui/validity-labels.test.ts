@@ -9,12 +9,10 @@
  * own harness) and reading GET /entry, GET /list and POST /status's real
  * response JSON. See the six-field contract in src/recall/validity-view.ts.
  *
- * Known backend gaps, reported here rather than fixed (out of file scope -
- * "public/ and test/ui only", no src/ edits): GET /stale has no `reason`
- * field (spec 14 L574 wants age | date_passed | retracted_source), and
- * history.items' validity-cause rows carry no `cause`/`by`/`until` (only
- * entry.timeline does, which the SH-1 history UI does not read). Both are
- * failing tests below, not workarounds.
+ * Two backend gaps were found and reported here as failing tests, then fixed on v4/t2-d1
+ * (T-0089.2.3, merged 48d628f8): GET /stale's `reason` (not_confirmed | date_passed |
+ * retracted_source) and `valid_until`, and history.items' `cause`/`by`/`until` on a
+ * reason:"validity" row. The tests below now assert the real, landed shapes.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -369,18 +367,83 @@ describe("history rows for a validity cause read as a sentence, not a raw reason
     return ctx;
   }
 
-  it("a reason:'validity' change row gets a real label", () => {
+  it("a reason:'validity' row with no recognized cause falls back to the generic label", () => {
     const ctx = load();
-    const label = ctx.historyReasonLabel({ reason: "validity", kind: "change" }, 0, [], { tags: [] });
+    const label = ctx.historyReasonLabel({ reason: "validity", kind: "change" }, 0, [], { tags: [] }, new Map());
     expect(label).toBe("Validity changed");
     expect(label).not.toBe("validity");
   });
 
-  it("entry.history.items gap: a validity-caused row carries no cause, by or until, unlike entry.timeline's payload for the same change (src/memory/validity.ts's auditEvents write cause/by/until only onto the timeline event, not onto the history change row)", () => {
-    const historyChangeRow = { reason: "validity", kind: "change", before_preview: "x", before_status: null, can_undo: false, can_restore: true };
-    expect(historyChangeRow).not.toHaveProperty("cause");
-    expect(historyChangeRow).not.toHaveProperty("by");
-    expect(historyChangeRow).not.toHaveProperty("until");
+  // T-0089.2.3 (merged 48d628f8): history.items now carries cause/by/until on a
+  // reason:"validity" row, matching src/memory/validity.ts's five real cause values.
+  it("cause supersede: Replaced by {preview} (true until {until})", () => {
+    const ctx = load();
+    const item = { reason: "validity", kind: "change", cause: "supersede", by: "austin-id", until: 1790000000000 };
+    const label = ctx.historyReasonLabel(item, 0, [item], { tags: [] }, new Map([["austin-id", "Lives in Austin"]]));
+    expect(label).toContain("Replaced by Lives in Austin");
+    expect(label).toContain("true until");
+  });
+
+  it("cause retraction, by resolves: Current again: {preview} was marked wrong", () => {
+    const ctx = load();
+    const item = { reason: "validity", kind: "change", cause: "retraction", by: "wrong-id", until: null };
+    const label = ctx.historyReasonLabel(item, 0, [item], { tags: [] }, new Map([["wrong-id", "Lives in Austin"]]));
+    expect(label).toBe("Current again: Lives in Austin was marked wrong");
+  });
+
+  it("cause retraction, by no longer resolves: the deleted variant", () => {
+    const ctx = load();
+    const item = { reason: "validity", kind: "change", cause: "retraction", by: "gone-id", until: null };
+    const label = ctx.historyReasonLabel(item, 0, [item], { tags: [] }, new Map([["gone-id", null]]));
+    expect(label).toBe("Current again: the memory that replaced it was deleted");
+  });
+
+  it("cause unretraction: Replaced again by {preview}", () => {
+    const ctx = load();
+    const item = { reason: "validity", kind: "change", cause: "unretraction", by: "priya-id", until: 1790000000000 };
+    const label = ctx.historyReasonLabel(item, 0, [item], { tags: [] }, new Map([["priya-id", "Priya is running it now"]]));
+    expect(label).toBe("Replaced again by Priya is running it now");
+  });
+
+  it("cause explicit: End date set to {until}, no preview needed", () => {
+    const ctx = load();
+    const item = { reason: "validity", kind: "change", cause: "explicit", by: null, until: 1790000000000 };
+    const label = ctx.historyReasonLabel(item, 0, [item], { tags: [] }, new Map());
+    expect(label).toContain("End date set to");
+  });
+
+  it("cause propagate: End date moved to {until} to match {preview}", () => {
+    const ctx = load();
+    const item = { reason: "validity", kind: "change", cause: "propagate", by: "other-id", until: 1790000000000 };
+    const label = ctx.historyReasonLabel(item, 0, [item], { tags: [] }, new Map([["other-id", "Some other memory"]]));
+    expect(label).toContain("End date moved to");
+    expect(label).toContain("Some other memory");
+  });
+
+  it("collectValidityPreviews resolves a by id matching entry.superseded_by without a fetch", () => {
+    const ctx = load();
+    return ctx
+      .collectValidityPreviews(
+        [{ kind: "change", reason: "validity", cause: "supersede", by: "austin-id", until: 1 }],
+        { superseded_by: { id: "austin-id", preview: "Lives in Austin" } },
+      )
+      .then((map: Map<string, string | null>) => {
+        expect(map.get("austin-id")).toBe("Lives in Austin");
+        expect(ctx.__requests).toHaveLength(0);
+      });
+  });
+
+  it("collectValidityPreviews fetches a by id that isn't the entry's own superseded_by", () => {
+    const ctx = load();
+    return ctx
+      .collectValidityPreviews(
+        [{ kind: "change", reason: "validity", cause: "retraction", by: "some-other-id", until: null }],
+        { superseded_by: null },
+      )
+      .then((map: Map<string, string | null>) => {
+        expect(ctx.__requests.some((r: any) => r.url.includes("some-other-id"))).toBe(true);
+        expect(map.has("some-other-id")).toBe(true);
+      });
   });
 });
 
@@ -444,23 +507,25 @@ describe("stale sheet reason lines", () => {
     return ctx;
   }
 
-  it("a retracted-source row explains itself, ahead of the confirmed date", () => {
+  // T-0089.2.3 (merged 48d628f8): GET /stale now sends `reason` (src/memory/stale.ts's
+  // staleReasonFor) directly, so the row reads it rather than re-deriving it.
+  it("reason: retracted_source explains itself, ahead of the confirmed date", () => {
     const ctx = load();
-    const html = ctx.staleRow({ id: "s1", content: "x", tags: ["retracted-source"], source: "web", created_at: Date.now(), last_updated: Date.now() });
+    const html = ctx.staleRow({ id: "s1", content: "x", tags: ["retracted-source"], source: "web", created_at: Date.now(), last_updated: Date.now(), reason: "retracted_source", valid_until: null });
     expect(html).toContain("Built on a memory that was later retracted");
   });
 
-  it("an ordinary aged row explains itself by days since confirmed", () => {
+  it("reason: date_passed explains itself, before the client-computed age fallback", () => {
     const ctx = load();
-    const tenDaysAgo = Date.now() - 10 * 86400000;
-    const html = ctx.staleRow({ id: "s2", content: "x", tags: [], source: "web", created_at: tenDaysAgo, last_updated: tenDaysAgo });
-    expect(html).toContain("Not confirmed in 10 days");
+    const html = ctx.staleRow({ id: "s2", content: "x", tags: [], source: "web", created_at: Date.now(), last_updated: Date.now(), reason: "date_passed", valid_until: Date.now() - 86400000 });
+    expect(html).toContain("Its date has passed");
   });
 
-  it("GET /stale gap: the route sends no reason field and no valid_until, so 'its date has passed' cannot be told apart client-side (src/routes/admin.ts GET /stale selects only id, content, tags, source, created_at, last_updated)", () => {
-    const staleEntryShape = { id: "s3", content: "x", tags: [], source: "web", created_at: 1, last_updated: 1 };
-    expect(staleEntryShape).not.toHaveProperty("reason");
-    expect(staleEntryShape).not.toHaveProperty("valid_until");
+  it("reason: not_confirmed explains itself by days since confirmed", () => {
+    const ctx = load();
+    const tenDaysAgo = Date.now() - 10 * 86400000;
+    const html = ctx.staleRow({ id: "s3", content: "x", tags: [], source: "web", created_at: tenDaysAgo, last_updated: tenDaysAgo, reason: "not_confirmed", valid_until: null });
+    expect(html).toContain("Not confirmed in 10 days");
   });
 });
 

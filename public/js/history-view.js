@@ -14,12 +14,47 @@ const HISTORY_REASON_KEYS = {
   due: 'reasonDue',
   mirror: 'reasonMirror',
   revert: 'reasonRevert',
-  // T-0101.6.1: entry.history.items sends reason:"validity" for a supersede,
-  // retraction, unretraction or explicit end-date change, but (unlike
-  // entry.timeline) carries no cause/by/until to say which one - see
-  // history.reasonValidity's comment and this feature's failing test
-  // documenting the gap.
+  // T-0101.6.1: a reason:"validity" row is handled separately, by cause
+  // (historyValidityLabel below) — reasonValidity is only the fallback for a
+  // cause this dashboard does not (yet) recognize.
   validity: 'reasonValidity',
+}
+
+/**
+ * T-0101.6.1 (spec 14 section 7.6/backend T-0089.2.3): entry.history.items' cause on a
+ * reason:"validity" row, matched to src/memory/validity.ts's five real cause values —
+ * supersede (capture-time contradiction), retraction/unretraction (a Wrong toggle and its
+ * undo) and explicit/propagate (an end date set directly, or moved to match a newer capture
+ * that closed the gap it left).
+ */
+const VALIDITY_CAUSE_KEYS = {
+  supersede: 'historyReplaced',
+  retraction: 'historyCurrentAgain',
+  unretraction: 'historyReplacedAgain',
+  explicit: 'historyEndSet',
+  propagate: 'historyEndMoved',
+}
+
+/** Short date, matching the sheet's own validity labels (memory-crud.js's shortDate). */
+function historyValidityDate(ms) {
+  return typeof ms === 'number' ? formatDateUI(ms, { year: 'numeric', month: 'short', day: 'numeric' }) : ''
+}
+
+/**
+ * A validity-caused history row's own sentence. `previewMap` is built once per render by
+ * collectValidityPreviews below: `item.by` names another entry only by id, so the preview text
+ * it needs is resolved ahead of time rather than inside this (synchronous) formatter.
+ * `previewMap.get(id)` is `null` for a `by` id that no longer resolves (the memory that closed
+ * this one was itself deleted since) — the one case with its own copy, historyCurrentAgainDeleted.
+ */
+function historyValidityLabel(item, previewMap) {
+  const key = VALIDITY_CAUSE_KEYS[item.cause]
+  if (!key) return t('history.reasonValidity')
+  const until = historyValidityDate(item.until)
+  if (key === 'historyEndSet') return t(`validity.${key}`, { until })
+  const preview = item.by ? previewMap.get(item.by) : undefined
+  if (item.cause === 'retraction' && item.by && preview === null) return t('validity.historyCurrentAgainDeleted')
+  return t(`validity.${key}`, { preview: preview || '', until })
 }
 
 /**
@@ -44,10 +79,11 @@ function historyStatusTarget(items, index, entry) {
  * so they keep whatever their own `reason` already renders as - the sheet's
  * held banner and the timeline's own "Held" event row already name them.
  */
-function historyReasonLabel(item, index, items, entry) {
+function historyReasonLabel(item, index, items, entry, previewMap) {
   if (item.hold && item.hold.reason === 'too_long') return t('history.reasonHeldTooLong')
   const key = HISTORY_REASON_KEYS[item.reason]
   if (!key) return item.reason || ''
+  if (item.reason === 'validity') return historyValidityLabel(item, previewMap || new Map())
   if (item.reason === 'status') {
     const target = historyStatusTarget(items, index, entry)
     const label = target && typeof viewStatusLabel === 'function' ? viewStatusLabel(target) : target || ''
@@ -98,8 +134,8 @@ function historyDate(at) {
   return at ? formatDateUI(at, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''
 }
 
-function renderHistoryChangeRow(item, index, items, entry) {
-  const meta = [historyReasonLabel(item, index, items, entry), historyDate(item.at), historyWhoLabel(item, entry)].filter(Boolean).join(' · ')
+function renderHistoryChangeRow(item, index, items, entry, previewMap) {
+  const meta = [historyReasonLabel(item, index, items, entry, previewMap), historyDate(item.at), historyWhoLabel(item, entry)].filter(Boolean).join(' · ')
   const actions = []
   if (item.can_undo) {
     actions.push(`<button type="button" class="history-action" data-action="undo">${escHtml(t('history.undo'))}</button>`)
@@ -249,7 +285,42 @@ function sortedHistoryItems(items) {
   return [...items].sort((a, b) => (b.at || 0) - (a.at || 0))
 }
 
-function renderHistory(entry) {
+/**
+ * The preview text a validity-caused row's `by` id needs (T-0101.6.1). `by` names another entry
+ * only by id — resolved here, once per render, rather than inside historyValidityLabel, which
+ * stays a plain synchronous formatter. `entry.superseded_by` already carries this entry's own
+ * live closer's preview (the six-field validity contract), so only a `by` id that names some
+ * OTHER entry — an older link in the chain, or the entry a retraction/un-retraction points at —
+ * costs its own fetch. A `by` id that no longer resolves (deleted since) maps to `null`, which
+ * historyValidityLabel reads as "the memory that replaced it was deleted".
+ */
+async function collectValidityPreviews(items, entry) {
+  const ids = new Set()
+  for (const item of items) {
+    if (item.kind === 'change' && item.reason === 'validity' && item.cause && item.by) ids.add(item.by)
+  }
+  const map = new Map()
+  if (entry.superseded_by && ids.has(entry.superseded_by.id)) {
+    map.set(entry.superseded_by.id, entry.superseded_by.preview)
+    ids.delete(entry.superseded_by.id)
+  }
+  await Promise.all(
+    [...ids].map(async (id) => {
+      try {
+        const res = await fetch(`${WORKER_URL}/entry?id=${encodeURIComponent(id)}`, {
+          headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+        })
+        const data = await res.json()
+        map.set(id, data.ok && data.entry ? String(data.entry.content || '').slice(0, 60) : null)
+      } catch {
+        map.set(id, null)
+      }
+    }),
+  )
+  return map
+}
+
+async function renderHistory(entry) {
   const el = document.getElementById('view-timeline')
   if (!el) return
   const items = sortedHistoryItems(entry.history?.items || [])
@@ -259,7 +330,13 @@ function renderHistory(entry) {
     el.innerHTML = ''
     return
   }
-  const rowsHtml = items.map((item, index) => (item.kind === 'change' ? renderHistoryChangeRow(item, index, items, entry) : renderHistoryEventRow(item))).join('')
+  const previewMap = await collectValidityPreviews(items, entry)
+  // The sheet may have moved on (closed, or re-hydrated onto a different entry) while the
+  // preview fetches above were in flight; nothing left to update.
+  if (!document.getElementById('view-timeline')) return
+  const rowsHtml = items
+    .map((item, index) => (item.kind === 'change' ? renderHistoryChangeRow(item, index, items, entry, previewMap) : renderHistoryEventRow(item)))
+    .join('')
   el.style.display = ''
   el.innerHTML =
     `<div class="view-timeline-label history-label">${escHtml(t('memories.timelineLabel'))}</div>` +
