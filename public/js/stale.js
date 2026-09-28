@@ -81,7 +81,7 @@ function staleReasonLine(e) {
   const confirmed = e.last_updated || e.created_at
   if (!confirmed) return ''
   const days = Math.floor((Date.now() - confirmed) / 86400000)
-  return t('stale.reasonAge', { n: Math.max(days, 0) })
+  return tPlural('stale.reasonAge', Math.max(days, 0))
 }
 
 function staleRow(e) {

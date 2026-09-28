@@ -479,7 +479,7 @@ function validityRestoredToastMessage(validity) {
     message = t('validity.restoredToastMany', { n: restored.length })
   }
   if (flagged > 0) {
-    const flaggedMsg = t('validity.flaggedToast', { n: flagged })
+    const flaggedMsg = tPlural('validity.flaggedToast', flagged)
     message = message ? `${message} ${flaggedMsg}` : flaggedMsg
   }
   return message

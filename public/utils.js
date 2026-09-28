@@ -570,6 +570,10 @@ const SYSTEM_TAG_NAMES = new Set([
   'conflict-held',
   // Track 7's inbound-commitment marker: a bare word, not a namespace (P7.3).
   'owed-to-me',
+  // T-0101.6.1: the retracted-source cascade's own marker (src/tags/system.ts's
+  // RETRACTED_SOURCE_TAG) - the Check chip (validityChipHtml) already says this row
+  // needs a look, so the raw tag would be the same fact said twice, once unreadably.
+  'retracted-source',
 ])
 
 /**

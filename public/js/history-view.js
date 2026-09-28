@@ -286,13 +286,35 @@ function sortedHistoryItems(items) {
 }
 
 /**
+ * T-0101.6.1 (copywriter flag): a validity write lands two rows — an
+ * `entry_events` row (`validity_changed`/`superseded`/`flagged`) and its own
+ * change row (`reason: "validity"`) — because src/memory/history-view.ts's
+ * EVENTS_SUPERSEDED_BY_VERSIONS (the server's own de-dup list for update/
+ * append/status_changed/reverted) does not name any of the three validity
+ * event names. The change row is strictly more specific (it names the cause,
+ * and with a preview); this drops the event row for any validity change
+ * within one second of it, the same window a real single write's own
+ * multi-statement batch lands in.
+ */
+const VALIDITY_EVENT_NAMES = new Set(['validity_changed', 'superseded', 'flagged'])
+const VALIDITY_EVENT_DEDUPE_WINDOW_MS = 1000
+
+function dedupeValidityEventRows(items) {
+  const changeTimes = items.filter((it) => it.kind === 'change' && it.reason === 'validity').map((it) => it.at)
+  return items.filter((item) => {
+    if (item.kind !== 'event' || !VALIDITY_EVENT_NAMES.has(item.event)) return true
+    return !changeTimes.some((at) => Math.abs(at - item.at) < VALIDITY_EVENT_DEDUPE_WINDOW_MS)
+  })
+}
+
+/**
  * The preview text a validity-caused row's `by` id needs (T-0101.6.1). `by` names another entry
  * only by id — resolved here, once per render, rather than inside historyValidityLabel, which
  * stays a plain synchronous formatter. `entry.superseded_by` already carries this entry's own
  * live closer's preview (the six-field validity contract), so only a `by` id that names some
  * OTHER entry — an older link in the chain, or the entry a retraction/un-retraction points at —
- * costs its own fetch. A `by` id that no longer resolves (deleted since) maps to `null`, which
- * historyValidityLabel reads as "the memory that replaced it was deleted".
+ * costs its own fetch. A `by` id that no longer resolves (forgotten since) maps to `null`, which
+ * historyValidityLabel reads as "the memory that replaced it was forgotten".
  */
 async function collectValidityPreviews(items, entry) {
   const ids = new Set()
@@ -323,7 +345,7 @@ async function collectValidityPreviews(items, entry) {
 async function renderHistory(entry) {
   const el = document.getElementById('view-timeline')
   if (!el) return
-  const items = sortedHistoryItems(entry.history?.items || [])
+  const items = dedupeValidityEventRows(sortedHistoryItems(entry.history?.items || []))
   const footer = entry.history?.footer
   if (!items.length) {
     el.style.display = 'none'

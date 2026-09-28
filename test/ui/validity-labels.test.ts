@@ -292,7 +292,7 @@ describe("a retracted-source memory shows its label", () => {
     run(ctx, MEMORY_CRUD_FILES);
     ctx.renderViewStatus({ ...RETRACTED_SOURCE_ENTRY, tags: [] });
     const html = el(ctx, "view-status-caption").innerHTML as string;
-    expect(html).toContain("Built on a memory that was later retracted");
+    expect(html).toContain("Based on a memory later marked Wrong");
   });
 });
 
@@ -315,20 +315,29 @@ describe("cards show Replaced, Ended and Check chips", () => {
     const ctx = load();
     const card = ctx.makeRecentCard(asCard(ENDED_ENTRY));
     expect(card.innerHTML).toContain("validity-chip--ended");
-    expect(card.innerHTML).toContain("Ended");
+    expect(card.innerHTML).toContain("No longer true");
   });
 
   it("a retracted-source row shows the Check chip, taking priority over its own state", () => {
     const ctx = load();
     const card = ctx.makeRecentCard(asCard(RETRACTED_SOURCE_ENTRY));
     expect(card.innerHTML).toContain("validity-chip--check");
-    expect(card.innerHTML).toContain("Check");
+    expect(card.innerHTML).toContain("Needs a check");
   });
 
   it("a plain current row shows no validity chip", () => {
     const ctx = load();
     const card = ctx.makeRecentCard(asCard(CURRENT_STATED_ENTRY));
     expect(card.innerHTML).not.toContain("validity-chip");
+  });
+
+  // Copywriter flag: card-chips_after.mobile.en showed a raw retracted-source tag chip
+  // next to Check - the same fact said twice, once unreadably.
+  it("hides the raw retracted-source tag as a system tag, since the Check chip already says it", () => {
+    const ctx = load();
+    const card = ctx.makeRecentCard(asCard(RETRACTED_SOURCE_ENTRY));
+    expect(card.innerHTML).toContain("validity-chip--check");
+    expect(card.innerHTML).not.toContain(">retracted-source<");
   });
 });
 
@@ -349,7 +358,7 @@ describe("Wrong's toast names the restored memory, or counts several, and says h
     const ctx = load();
     const msg = ctx.validityRestoredToastMessage(STATUS_RESTORED_MANY.validity);
     expect(msg).toContain("2 older memories are current again");
-    expect(msg).toContain("2 memories built on it were flagged for a check");
+    expect(msg).toContain("2 memories based on it now need a check");
   });
 
   it("returns null when nothing was restored or flagged (an ordinary status change)", () => {
@@ -369,7 +378,7 @@ describe("both locales, no em dash", () => {
     expect(html).toContain("Valido dal");
     expect(html).toContain("Sostituito da");
     expect(ctx.validityRestoredToastMessage(STATUS_RESTORED_ONE.validity)).toBe(
-      'Segnato come errato. "Lives in Denver" è di nuovo valido.',
+      'Segnato come errato. «Lives in Denver» è di nuovo valido.',
     );
     expect(html).not.toContain("—");
   });
@@ -406,11 +415,11 @@ describe("history rows for a validity cause read as a sentence, not a raw reason
     expect(label).toBe("Current again: Lives in Austin was marked wrong");
   });
 
-  it("cause retraction, by no longer resolves: the deleted variant", () => {
+  it("cause retraction, by no longer resolves: the forgotten variant", () => {
     const ctx = load();
     const item = { reason: "validity", kind: "change", cause: "retraction", by: "gone-id", until: null };
     const label = ctx.historyReasonLabel(item, 0, [item], { tags: [] }, new Map([["gone-id", null]]));
-    expect(label).toBe("Current again: the memory that replaced it was deleted");
+    expect(label).toBe("Current again: the memory that replaced it was forgotten");
   });
 
   it("cause unretraction: Replaced again by {preview}", () => {
@@ -459,6 +468,34 @@ describe("history rows for a validity cause read as a sentence, not a raw reason
         expect(ctx.__requests.some((r: any) => r.url.includes("some-other-id"))).toBe(true);
         expect(map.has("some-other-id")).toBe(true);
       });
+  });
+
+  // Copywriter flag: one validity write lands both an entry_events row (validity_changed,
+  // "Dates updated") and its own change row ("End date set to ..."), since the server's own
+  // EVENTS_SUPERSEDED_BY_VERSIONS list does not name the three validity event names.
+  describe("dedupeValidityEventRows: one row per validity write", () => {
+    it("drops a validity_changed/superseded/flagged event within a second of its own change row", () => {
+      const ctx = load();
+      const items = [
+        { kind: "event", event: "validity_changed", at: 1000 },
+        { kind: "change", reason: "validity", cause: "explicit", at: 1000, until: 2000 },
+        { kind: "event", event: "superseded", at: 5000 },
+        { kind: "change", reason: "validity", cause: "supersede", at: 5040, until: 2000, by: "x" },
+        { kind: "event", event: "updated", at: 9000 },
+      ];
+      const deduped = ctx.dedupeValidityEventRows(items);
+      expect(deduped.filter((i: any) => i.kind === "event" && i.event === "validity_changed")).toHaveLength(0);
+      expect(deduped.filter((i: any) => i.kind === "event" && i.event === "superseded")).toHaveLength(0);
+      // An ordinary event with no nearby validity change row is untouched.
+      expect(deduped.some((i: any) => i.event === "updated")).toBe(true);
+      expect(deduped.filter((i: any) => i.kind === "change")).toHaveLength(2);
+    });
+
+    it("keeps a validity event when no change row sits near it (a Worker sending only entry.timeline)", () => {
+      const ctx = load();
+      const items = [{ kind: "event", event: "flagged", at: 1000 }];
+      expect(ctx.dedupeValidityEventRows(items)).toHaveLength(1);
+    });
   });
 });
 
@@ -527,7 +564,7 @@ describe("stale sheet reason lines", () => {
   it("reason: retracted_source explains itself, ahead of the confirmed date", () => {
     const ctx = load();
     const html = ctx.staleRow({ id: "s1", content: "x", tags: ["retracted-source"], source: "web", created_at: Date.now(), last_updated: Date.now(), reason: "retracted_source", valid_until: null });
-    expect(html).toContain("Built on a memory that was later retracted");
+    expect(html).toContain("Based on a memory later marked Wrong");
   });
 
   it("reason: date_passed explains itself, before the client-computed age fallback", () => {
