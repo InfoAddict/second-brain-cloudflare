@@ -607,8 +607,14 @@ function makeRecentCard(entry, { selectable = true } = {}) {
   // a badge on every row is not a badge. The two that mean something — this
   // memory will not come back in recall, and this one is still being indexed —
   // now stand out because they are the only ones there.
+  //
+  // A hold empties vector_ids (src/quarantine/hold.ts), so "off" is every
+  // held row's permanent state, not a signal of its own — the Held chip
+  // already says "not in search" (UI review, S5), and showing both said it
+  // twice.
+  const held = typeof heldReason === 'function' ? heldReason(tags) : null
   const vecChip =
-    vec === 'on'
+    held || vec === 'on'
       ? ''
       : vec === 'pending'
         ? `<span class="tag-chip vec-chip vec-chip--pending" title="${escAttr(t('memories.vecPendingTitle'))}"><i class="ti ti-clock"></i></span>`

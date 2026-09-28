@@ -145,6 +145,17 @@ describe("card shows the Held chip", () => {
     expect(ordinary.innerHTML).not.toContain("tag-chip--held");
   });
 
+  it("hides the redundant Not indexed chip on a held card: the Held chip already says so", () => {
+    const ctx = baseCtx();
+    run(ctx, ["public/utils.js", "public/js/state.js", "public/js/recent.js"]);
+    const old = Date.now() - 7 * 86400000 // outside the vectorize grace window, where an ordinary unindexed card would show "Not indexed"
+    const held = ctx.makeRecentCard({ id: "m1", content: "A very long note", tags: '["quarantine:too_long"]', created_at: old, source: "claude-desktop" });
+    const ordinary = ctx.makeRecentCard({ id: "m2", content: "The pricing floor is $6k", tags: '["work"]', created_at: old, source: "claude-desktop" });
+    expect(held.innerHTML).toContain("tag-chip--held");
+    expect(held.innerHTML).not.toContain("vec-chip--off");
+    expect(ordinary.innerHTML).toContain("vec-chip--off");
+  });
+
   it("a pre-existing user tag that merely looks reserved is never hidden as a hold", () => {
     const ctx = load();
     // quarantine:sample is not one of the five recognized reasons.
