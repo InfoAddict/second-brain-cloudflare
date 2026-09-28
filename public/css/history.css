@@ -22,6 +22,22 @@
   margin-bottom: 18px;
 }
 
+/* T7-E Task 14: shares this row with the status control above (SH-3) rather
+   than a second full-width block, so Stop reads as one more fact about this
+   memory, not a second control competing for the same space. */
+.view-standing {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.view-standing-line {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
 .view-status-title {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;

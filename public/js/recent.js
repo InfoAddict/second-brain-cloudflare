@@ -378,7 +378,62 @@ async function maybeRevealActorFilter() {
   renderAuthorOptions()
 }
 
+/**
+ * "Standing instructions" in the Memories filter row (T7-E Task 14,
+ * 15-t7-wow-spec.md 7.3): a distinct source, GET /standing's firing state,
+ * not a narrowing of the ordinary list — so it gets its own load/render pair
+ * rather than joining apiList/applyRecentFilters' tag matching.
+ */
+const STANDING_FILTER_VALUE = 'standing:active'
+
+function standingStateLabel(item) {
+  if (item.firing) return t('standing.stateActive')
+  if (item.reason === 'over_limit') return t('standing.stateOverLimit')
+  if (item.reason === 'not_indexed_yet') return t('standing.stateNotIndexed')
+  if (item.reason === 'held') return t('standing.stateHeld')
+  return t('standing.statePendingRefresh') // pending_refresh, or a future reason an older dashboard has no label for
+}
+
+function standingFilterRow(item) {
+  const row = document.createElement('div')
+  row.className = 'standing-filter-row'
+  row.dataset.id = item.id
+  row.innerHTML = `
+    <div class="standing-filter-content">${escHtml(titleLine(item.content, 120))}</div>
+    <div class="standing-filter-state${item.firing ? ' standing-filter-state--active' : ''}">${escHtml(standingStateLabel(item))}</div>`
+  row.onclick = () => {
+    if (typeof openView === 'function') {
+      openView({ id: item.id, content: item.content, tags: ['standing:active'], created_at: item.created_at, workspace: item.workspace }, row)
+    }
+  }
+  return row
+}
+
+async function loadStandingFilter() {
+  const list = document.getElementById('recent-list')
+  list.innerHTML = `<div class="empty-state"><i class="ti ti-clock"></i><span>${escHtml(t('memories.loadingShort'))}</span></div>`
+  try {
+    const res = await fetch(`${WORKER_URL}/standing`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || 'failed')
+    const items = data.standing || []
+    if (!items.length) {
+      list.innerHTML = `<div class="empty-state"><i class="ti ti-pin"></i><span>${escHtml(t('standing.filterEmpty'))}</span></div>`
+      return
+    }
+    list.innerHTML = ''
+    items.forEach((item) => list.appendChild(standingFilterRow(item)))
+  } catch {
+    list.innerHTML =
+      `<div class="empty-state"><i class="ti ti-wifi-off"></i><span>${escHtml(t('standing.filterLoadFailed'))}</span></div>` +
+      `<button type="button" class="digest-more" onclick="loadStandingFilter()">${escHtml(t('standing.tryAgain'))}</button>`
+  }
+}
+
 async function loadRecent() {
+  // A different source entirely (GET /standing, not GET /list) with its own
+  // rendering (firing state, not date groups) — never apiList/applyRecentFilters.
+  if (selectedTag === STANDING_FILTER_VALUE) return loadStandingFilter()
   const list = document.getElementById('recent-list')
   // Only show the loading state on a cold list. A refresh after a capture
   // would otherwise blank out rows the user is reading and snap them back.
@@ -586,7 +641,7 @@ function makeRecentCard(entry, { selectable = true } = {}) {
     <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
     ${created ? `<span class="card-time" title="${escAttr(new Date(created).toLocaleString(localeTag()))}">${escHtml(relativeTime(created))}</span>` : ''}
   </div>
-  <div class="card-tags">${projectChipsHtml(tags)}${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}</div>
+  <div class="card-tags">${standingBadgeHtml(tags)}${projectChipsHtml(tags)}${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}</div>
   <div class="card-actions">
     <button class="card-action-btn append-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
     <button class="card-action-btn edit-btn"><i class="ti ti-pencil"></i> ${escHtml(t('memories.edit'))}</button>

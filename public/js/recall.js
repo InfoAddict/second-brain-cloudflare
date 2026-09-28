@@ -120,6 +120,9 @@ async function sendRecall(retryQuery) {
       throw new Error(data.error || 'recall failed')
     }
     loadingEl.remove()
+    // Standing instructions render above the results regardless of whether
+    // recall found any (spec 15 2.8 step 5: a fire can happen on zero matches).
+    renderStandingFires(msgs, data.standing)
     if (!data.results || !data.results.length) {
       appendBrainBubble(msgs, t('recall.empty'), 'recall-sys')
     } else {
@@ -245,6 +248,55 @@ async function sendRecall(retryQuery) {
   msgs.scrollTop = msgs.scrollHeight
 }
 
+/**
+ * T7-E Task 14 (15-t7-wow-spec.md 7.3, 2.9): a standing instruction that
+ * fired above the results, as its own card — "Standing instruction" (never
+ * "you set": the server cannot verify authorship, director decision 1),
+ * "(set by {name})" for a company-layer fire by someone else, the text, and
+ * Open (the memory sheet) / Stop.
+ */
+function makeStandingCard(fire) {
+  const card = document.createElement('div')
+  card.className = 'standing-card'
+  const title = fire.actor_name ? t('standing.recallCardTitleBy', { name: fire.actor_name }) : t('standing.recallCardTitle')
+  card.innerHTML = `
+    <div class="standing-card-title"><i class="ti ti-pin"></i> ${escHtml(title)}</div>
+    <div class="standing-card-text">${escHtml(fire.content)}</div>
+    <div class="standing-card-actions">
+      <button type="button" class="card-action-btn standing-card-open">${escHtml(t('standing.recallOpen'))}</button>
+      <button type="button" class="card-action-btn standing-card-stop">${escHtml(t('standing.recallStop'))}</button>
+    </div>`
+  const pseudoEntry = { id: fire.id, content: fire.content, tags: ['standing:active'], created_at: fire.created_at, workspace: fire.workspace }
+  card.querySelector('.standing-card-open').onclick = () => {
+    if (typeof openView === 'function') openView(pseudoEntry, card)
+  }
+  const stopBtn = card.querySelector('.standing-card-stop')
+  stopBtn.onclick = async () => {
+    stopBtn.disabled = true
+    try {
+      const res = await fetch(`${WORKER_URL}/standing/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+        body: JSON.stringify({ id: fire.id }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.ok) throw new Error(data.error || '')
+      card.remove()
+      if (typeof showToast === 'function') showToast(t('standing.stopped'))
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(t('standing.stopFailed', { message: e.message || '' }))
+      stopBtn.disabled = false
+    }
+  }
+  return card
+}
+
+/** At most `maxFires` cards (the server already caps it), each independently Open/Stop-able. */
+function renderStandingFires(container, fires) {
+  if (!container || !fires || !fires.length) return
+  fires.forEach((fire) => container.appendChild(makeStandingCard(fire)))
+}
+
 function makeRecallCard(entry, citeIndex) {
   const card = document.createElement('div')
   const isSynthesized = entry.tags.includes('synthesized')
@@ -269,7 +321,7 @@ ${entry.hop > 0 ? `<span class="tag-chip tag-chip--hop">${escHtml(tPlural('recal
       </div>`
     })()}
     <div class="card-footer">
-<div class="card-tags">${projectChipsHtml(entry.tags)}${humanTags(entry.tags).map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>
+<div class="card-tags">${standingBadgeHtml(entry.tags)}${projectChipsHtml(entry.tags)}${humanTags(entry.tags).map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>
 <div class="card-actions">
   ${
     entry.id

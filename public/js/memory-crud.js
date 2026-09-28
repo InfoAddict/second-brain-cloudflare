@@ -600,6 +600,51 @@ function renderViewStatusLockNote(entry) {
   el.textContent = t('memories.authorLocked', { name: entry.actor_name })
 }
 
+/**
+ * T7-E Task 14 (15-t7-wow-spec.md 7.3): the standing line and its Stop
+ * button, hidden entirely on a memory that is not currently standing. Shares
+ * this row with the status control below it (T-0101.8, `renderViewStatus`).
+ */
+function renderViewStanding(entry) {
+  const block = document.getElementById('view-standing')
+  const line = document.getElementById('view-standing-line')
+  const btn = document.getElementById('view-standing-stop')
+  if (!block || !line || !btn) return
+  const tags = entry.tags || []
+  const isStanding = tags.some((tag) => String(tag).toLowerCase() === 'standing:active')
+  if (!isStanding) {
+    block.style.display = 'none'
+    return
+  }
+  block.style.display = ''
+  line.textContent = t('standing.sheetLine')
+  btn.onclick = () => stopStanding(entry, btn)
+}
+
+/** Stop is a resolve action (POST /standing/stop): removes standing:active only, versioned and undoable. */
+async function stopStanding(entry, btn) {
+  if (btn) btn.disabled = true
+  try {
+    const res = await fetch(`${WORKER_URL}/standing/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: entry.id }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || '')
+    undoToast(t('standing.stopped'), entry.id, {
+      onUndone: () => {
+        if (typeof hydrateView === 'function') hydrateView(entry.id)
+      },
+    })
+    if (typeof hydrateView === 'function') hydrateView(entry.id)
+  } catch (e) {
+    showToast(t('standing.stopFailed', { message: e.message || '' }))
+  } finally {
+    if (btn) btn.disabled = false
+  }
+}
+
 function renderViewStatus(entry) {
   const group = document.getElementById('view-status')
   const caption = document.getElementById('view-status-caption')
@@ -634,6 +679,7 @@ async function hydrateView(id) {
     renderViewMeta(data.entry)
     renderViewAutoSaveNote(data.entry)
     renderViewBrain(data.entry)
+    renderViewStanding(data.entry)
     renderViewStatus(data.entry)
     renderViewTimeline(data.entry)
     // openView rendered from whatever the caller happened to hold; /entry is
@@ -729,6 +775,7 @@ function renderViewTimeline(entry) {
 function applyAuthorLock(entry) {
   lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
   lockAuthoredControls(entry, Array.from(document.querySelectorAll('#view-status .status-option')), 'status-option--locked')
+  lockAuthoredControls(entry, [document.getElementById('view-standing-stop')], 'card-action-btn--locked')
 }
 
 /**
@@ -783,6 +830,7 @@ function openView(entry, cardElement) {
   renderViewMeta(entry)
   renderViewAutoSaveNote(entry)
   renderViewBrain(entry)
+  renderViewStanding(entry)
   renderViewStatus(entry)
   if (entry.id) hydrateView(entry.id)
   const tagsContainer = document.getElementById('view-tags-container')

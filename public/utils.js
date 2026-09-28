@@ -1075,9 +1075,20 @@ function layerChipHtml(entry, teamMode) {
   return `<span class="tag-chip tag-chip--shared" title="${escAttr(t('memories.sharedTitle'))}"><i class="ti ti-users-group"></i> ${escHtml(who)}</span>`
 }
 
+/**
+ * T7-E Task 14 (15-t7-wow-spec.md 7.3): a "Standing" chip, icon plus label,
+ * never color alone, on cards in the Memories list, board cards and recall
+ * results whose tags carry the worker-owned `standing:active` marker.
+ */
+function standingBadgeHtml(tags) {
+  const list = Array.isArray(tags) ? tags : []
+  if (!list.some((tag) => String(tag).toLowerCase() === 'standing:active')) return ''
+  return `<span class="tag-chip tag-chip--standing" title="${escAttr(t('standing.badgeTitle'))}"><i class="ti ti-pin"></i> ${escHtml(t('standing.badge'))}</span>`
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   // downloadTextFile is deliberately absent: it needs a live URL and Blob, and
   // it is exercised through its two callers (exportMemories in js/settings.js
   // and exportActivityCsv in js/activity.js) rather than in isolation.
-  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, projectChipsHtml, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml, providerName };
+  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, projectChipsHtml, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml, standingBadgeHtml, providerName };
 }
