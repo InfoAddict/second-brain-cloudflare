@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (196 queries, 102 exceptions, 17 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (198 queries, 102 exceptions, 18 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1449,7 +1449,21 @@ describe("the checker over the real source tree", () => {
     // Deliberate: -4 queries and -4 scope-exempt (200/106 -> 196/102) for T-0089.1.1 round 6: per-upload
     // vector ids retire restoreRowVectors (its two by-id reads), settleLostVectorCommit's read, and the
     // losing restore's liveness probe; a losing writer now only deletes its own upload.
-    ).toEqual({ queries: 196, exempt: 102, checked: 17, outerJoin: 1 });
+    // Deliberate: +1 query (148 -> 149) for Track 7: the decision ledger's
+    // calibration read (src/decisions/queries.ts calibrationQuery). It carries
+    // both the read scope and the actionable clause (personal workspace or
+    // authored by the caller, P7.7), so it needs no exemption.
+    // Deliberate: +1 scope-checked (12 -> 13), same query, after the QA review
+    // (18-t7-wow, finding 6): the scope clause is now assembled in JS
+    // (boundedScope collapses a many-team IN-list into one json_each binding
+    // to stay under D1's 100-bound-parameter limit), so the literal
+    // `${scope.clause}` interpolation the checker recognized is gone.
+    // Deliberate: +1 query (149 -> 150) for Track 7 Task 3 (src/standing/cache.ts, buildStandingCache): the standing
+    // cache build's one D1 read of a workspace's standing:active rows, scoped by `workspace_id = ?1`.
+    // MOVED (T-0089.1.1, merge of release/v4 ebc8010d): recomputed from a real check:scope run on the merged
+    // tree, not by adding two independently-tracked totals: Track 1's 196/102/17 plus release/v4's own queries
+    // (Track 7's calibration and standing-cache reads, lanes Q/R/D, BE-2) land at 198/102/18/1.
+    ).toEqual({ queries: 198, exempt: 102, checked: 18, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

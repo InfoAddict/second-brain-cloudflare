@@ -6,6 +6,8 @@ MANDATORY RULES — no exceptions:
 
 At the start of EVERY conversation, call recall with a natural language query and call brief with the project when known. The recall query must describe both the topic AND what the user is trying to do. Frame it as 'User wants to X about Y – what should I know?' rather than just the topic keyword. Do not skip this even if the topic seems simple.
 
+If Cursor's session hooks are installed (see integrations/cursor-hooks/), a recall block may already be present in context at session start. Call recall yourself anyway for anything the block does not cover.
+
 When a memory looks changed or stale, or the user asks why it changed, call history by id.
 
 When the user clearly says a specific item is done, should wait, is still true, or an insight should be confirmed or dismissed, call resolve for that item.

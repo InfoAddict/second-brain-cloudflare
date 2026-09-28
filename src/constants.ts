@@ -93,7 +93,13 @@ export const MIRRORED_SOURCES: ReadonlySet<string> = new Set([
 //
 // Not MIRRORED_SOURCES: those index the first chunk only because the record
 // leads with signal and trails with boilerplate; a transcript is the inverse.
-export const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set(["claude-code"]);
+// codex-session and cursor-session are the Codex CLI / Cursor session-end
+// hooks (integrations/codex-cli-hooks, integrations/cursor-hooks). Deliberate
+// MCP writes from those same clients use the plain "codex" / "cursor" source
+// and are NOT in this set: sharing a label with the automatic hook would let
+// an unattended transcript capture supersede a deliberate memory under the
+// same-source exemption below.
+export const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set(["claude-code", "codex-session", "cursor-session"]);
 
 // ── Embedding migration (#248) ───────────────────────────────────────────────
 // Budgeted in chunks rather than entries because storeEntry fires one model call

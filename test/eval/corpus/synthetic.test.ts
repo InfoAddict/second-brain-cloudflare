@@ -122,31 +122,54 @@ describe("temporal", () => {
 
 describe("noise", () => {
   const c = built.noise, email = new Set(c.entries.filter(e => e.source === "email-gmail").map(e => e.id));
+  const transcript = new Set(c.entries.filter(e => e.source === "codex-session" || e.source === "cursor-session").map(e => e.id));
   it("shares one identical footer across at least five sender templates", () => {
     const mails = c.entries.filter(e => email.has(e.id));
     expect(mails.every(e => e.content.endsWith(NOISE_FOOTER))).toBe(true);
     const templates = new Set(mails.map(e => e.content.split("\n")[0].replace(/[\w.-]+@/, "@")));
     expect(templates.size).toBeGreaterThanOrEqual(5);
   });
-  it("has probes, recurring finance notices, and email-correct controls, about half of queries answered by email", () => {
-    for (const s of ["probe-footer-words", "probe-footer-synonym", "recurring", "email-control", "note-same-topic"]) expect(byTag(c.queries, `subset:${s}`).length).toBeGreaterThanOrEqual(10);
-    const emailGold = c.queries.filter(q => q.gold.every(g => email.has(g.id)));
-    expect(emailGold.length / c.queries.length).toBeGreaterThanOrEqual(0.33);
+  it("has probes, recurring finance notices and email-correct controls for mail, and the same shape for transcripts", () => {
+    for (const s of ["probe-footer-words", "probe-footer-synonym", "recurring", "email-control", "note-same-topic", "transcript-recurring", "transcript-control", "note-same-topic-transcript", "transcript-probe", "mail-crowding", "transcript-crowding"]) {
+      expect(byTag(c.queries, `subset:${s}`).length, s).toBeGreaterThanOrEqual(10);
+    }
+    const nonDirectGold = c.queries.filter(q => q.gold.every(g => email.has(g.id) || transcript.has(g.id)));
+    expect(nonDirectGold.length / c.queries.length).toBeGreaterThanOrEqual(0.2);
     expect(byTag(c.queries, "subset:email-control").some(q => /in my email|according to my email/i.test(q.text))).toBe(true);
+    expect(byTag(c.queries, "subset:transcript-control").some(q => /cursor|codex|coding session/i.test(q.text))).toBe(true);
     expect(byTag(c.queries, "subset:recurring").every(q => /direct deposit/.test(q.text))).toBe(true);
+    expect(byTag(c.queries, "subset:transcript-recurring").every(q => /CI run/.test(q.text))).toBe(true);
   });
-  it("cannot be solved by source alone: notes and emails are both gold, on the same topics", () => {
-    const sourceOf = (id: string) => (email.has(id) ? "email" : "note");
-    expect(new Set(c.queries.map(q => sourceOf(q.gold[0].id)))).toEqual(new Set(["email", "note"]));
+  it("cannot be solved by source alone: notes, emails and transcripts are all gold, on the same topics", () => {
+    const sourceOf = (id: string) => (email.has(id) ? "email" : transcript.has(id) ? "transcript" : "note");
+    expect(new Set(c.queries.map(q => sourceOf(q.gold[0].id)))).toEqual(new Set(["email", "note", "transcript"]));
     expect(c.entries.some(e => e.id.startsWith("nz-flightnote-"))).toBe(true);
     expect(c.entries.some(e => e.id.startsWith("nz-flight-"))).toBe(true);
+    expect(c.entries.some(e => e.id.startsWith("nz-devnote-"))).toBe(true);
+    expect(c.entries.some(e => e.id.startsWith("nz-dev-"))).toBe(true);
   });
-  it("meets the gate's power floors", () => {
+  it("meets the gate's power floors overall, and on the held-out test split alone", () => {
     expect(c.queries.length).toBeGreaterThanOrEqual(200);
     expect(clusters(c.queries)).toBeGreaterThanOrEqual(30);
+    const test = byTag(c.queries, "split:test");
+    expect(test.length).toBeGreaterThanOrEqual(200);
+    expect(clusters(test)).toBeGreaterThanOrEqual(30);
+    // Every query lands in exactly one split, dev and test partition the corpus, and every subset has some test coverage.
+    const dev = byTag(c.queries, "split:dev");
+    expect(test.length + dev.length).toBe(c.queries.length);
+    for (const q of c.queries) expect(q.tags?.includes("split:test") !== q.tags?.includes("split:dev")).toBe(true);
   });
-  it("gives probe queries only footer words, with no email vocabulary of their own", () => {
+  it("gives probe queries only footer or wrapper words, with no mail/transcript vocabulary of their own", () => {
     for (const q of c.queries.filter(q => q.tags?.some(t => t.startsWith("subset:probe-footer")))) expect(q.text).not.toMatch(/email|deposit|flight|prescription|bill/i);
+    for (const q of c.queries.filter(q => q.tags?.includes("subset:transcript-probe"))) expect(q.text).not.toMatch(/cursor|codex|CI run|test suite/i);
+  });
+  it("uses codex-session and cursor-session, the T-0089.3.5 director-added transcript sources, alongside email-gmail and api", () => {
+    expect(c.entries.some(e => e.source === "codex-session")).toBe(true);
+    expect(c.entries.some(e => e.source === "cursor-session")).toBe(true);
+    expect(c.entries.every(e => ["email-gmail", "codex-session", "cursor-session", "api"].includes(e.source))).toBe(true);
+    // Every genuine decision note (the corpus's "direct" source) falls to Track 3's direct class: not in
+    // MIRRORED_SOURCES or TRANSCRIPT_SOURCES, and carries no system tag (auto-insight / synthesized).
+    for (const e of c.entries.filter(x => x.source === "api")) expect(e.tags.some(t => t === "auto-insight" || t === "synthesized")).toBe(false);
   });
 });
 

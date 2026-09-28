@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import type { Config } from "../config";
 import { CHUNK_MAX_CHARS, CHUNK_OVERLAP_CHARS, MIRRORED_SOURCES } from "../constants";
 import { graceMs } from "../lib/ai";
+import { MAX_CONTENT_BYTES } from "../lib/content-size";
 import { storeEntry, upsertEntryVectors, discardUpload } from "../capture/store";
 import { changedRows } from "../memory/trash";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
@@ -25,7 +26,7 @@ export const VECTORIZE_PENDING_NIGHTLY_ROWS = 10;
  * D1's 2 MB, about 1,500 chunks and 1,000+ neurons in one night). The nightly pass never touches one:
  * it takes no slot and blocks nothing, and one log line a night points to the admin routes a person runs
  * on purpose (POST /vectorize-pending, POST /migration/reembed), which still index it (budget auditor R11). */
-export const VECTORIZE_PENDING_NIGHTLY_MAX_BYTES = 128 * 1024;
+export const VECTORIZE_PENDING_NIGHTLY_MAX_BYTES = MAX_CONTENT_BYTES; // the note cap itself (src/lib/content-size.ts)
 export const VECTORIZE_PENDING_NIGHTLY_EMBEDS = 250;
 
 export interface PendingRow {

@@ -7,6 +7,7 @@ import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 // MAX_ENTRY_ID_BYTES: the one bound on a caller-chosen entry id, applied through boundedEntryId.
 import { boundedEntryId } from "../vectorize/ids";
 import { parseImportedProject, type ImportedProject } from "../projects/registry";
+import { isOverContentLimit } from "../lib/content-size";
 
 /**
  * Default page size: array positions examined per call, inserts and skips alike.
@@ -136,6 +137,10 @@ export interface ImportSummary {
   skipped: number;
   /** Of `skipped`, ids in the importer's own trash: restore them instead of importing over them. */
   skipped_in_trash: number;
+  /** Rahil's decision (18-copy-deck.md 6.8): entries skipped for being over the 128 KB cap, a
+   * subset of `skipped` broken out so the dashboard's "{n} memory was too long to import"
+   * summary line has its own clear count. */
+  skipped_too_large: number;
   failed: number;
   edges_imported: number;
   edges_skipped: number;
@@ -632,6 +637,7 @@ export async function importExportPayload(
   const results: ImportResultItem[] = [];
   let imported = 0;
   let skipped = 0;
+  let skipped_too_large = 0;
   let failed = 0;
   let edges_imported = 0;
   let edges_skipped = 0;
@@ -663,7 +669,15 @@ export async function importExportPayload(
   const batchCounters = { imported: 0, failed: 0 };
   for (const p of parsedPage) {
     if ("failure" in p) {
-      failed++;
+      // "skipped" (currently only the too_large case) is not a validation failure: the record
+      // is well-formed, it is simply over Rahil's 128 KB cap, and the whole import must not
+      // fail because of it — see the copy deck's own distinct import summary line for it.
+      if (p.failure.status === "skipped") {
+        skipped++;
+        skipped_too_large++;
+      } else {
+        failed++;
+      }
       results.push(p.failure);
       continue;
     }
@@ -775,6 +789,7 @@ export async function importExportPayload(
     imported,
     skipped,
     skipped_in_trash,
+    skipped_too_large,
     failed,
     edges_imported,
     edges_skipped,
@@ -807,6 +822,10 @@ function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: 
 
   const contentParsed = parseRequiredString(entry.content, "missing_content", "invalid_content");
   if (!contentParsed.ok) return { failure: { id, status: "failed", reason: contentParsed.reason } };
+  // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note. A skip, not a failure — the whole
+  // import must not fail over one oversize record, and the copy deck's own import summary line
+  // needs a distinct, clear count separate from ordinary validation failures.
+  if (isOverContentLimit(contentParsed.value)) return { failure: { id, status: "skipped", reason: "too_large" } };
 
   const tagsParsed = parseTags(entry.tags);
   if (!tagsParsed.ok) return { failure: { id, status: "failed", reason: tagsParsed.reason } };

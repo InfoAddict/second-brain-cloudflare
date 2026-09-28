@@ -4,6 +4,7 @@ import { makeExplainFixture, restRecall, mcpRecall, NOW, type ExplainFixture } f
 import { rerankWithTimeDecayTraced, type VectorizeMatch } from "../../src/recall/math";
 import { renderRecallText } from "../../src/recall/render";
 import type { RecallMatch, WhyTrace } from "../../src/recall/types";
+import { DEFAULTS } from "../../src/config";
 
 const DAY = 86_400_000;
 let f: ExplainFixture;
@@ -44,9 +45,9 @@ describe("multipliers reconstruct the applied score", () => {
     it(`product of reported factors equals the score: ${fx.name}`, () => {
       const [t] = rerankWithTimeDecayTraced([fx.m], new Map([["d", 6], ["a", 2]]), new Map([["a", 4]]), ["work"], new Map(), new Map(), new Map([[(fx.m.metadata as any).parentId, fx.tags]]));
       const x = t.multipliers;
-      expect(Object.keys(x).sort()).toEqual(["append_penalty", "combined", "frequency", "importance", "recency", "rolled_up_penalty", "tag_boost"]);
+      expect(Object.keys(x).sort()).toEqual(["append_penalty", "combined", "frequency", "importance", "recency", "rolled_up_penalty", "source_weight", "tag_boost"]);
       expect(x.combined).toBeCloseTo(Math.min(1, x.recency * x.frequency), 12);
-      const product = fx.m.score * x.combined * x.importance * x.tag_boost * x.append_penalty * x.rolled_up_penalty;
+      const product = fx.m.score * x.combined * x.importance * x.tag_boost * x.append_penalty * x.rolled_up_penalty * x.source_weight;
       expect(t.match.score).toBeCloseTo(product, 12);
     });
   }
@@ -55,15 +56,26 @@ describe("multipliers reconstruct the applied score", () => {
     expect(r.multipliers.rolled_up_penalty).toBe(0.4);
     expect(r.multipliers.append_penalty).toBe(1);
   });
+  it("source_weight is reported and included in the reconstructed product (T-0089.3.1)", () => {
+    const cfg = { ...DEFAULTS, SOURCE_WEIGHT_MIRROR: 0.85 };
+    const d1Sources = new Map([["e", "email-gmail"]]);
+    const [r] = rerankWithTimeDecayTraced(
+      [vec("e", 0.8, 5, [])], new Map(), new Map(), [], new Map(), new Map(), new Map([["e", []]]), cfg, { d1Sources },
+    );
+    expect(r.multipliers.source_weight).toBe(0.85);
+    const x = r.multipliers;
+    const product = 0.8 * x.combined * x.importance * x.tag_boost * x.append_penalty * x.rolled_up_penalty * x.source_weight;
+    expect(r.match.score).toBeCloseTo(product, 12);
+  });
 });
 
 describe("why line honesty", () => {
   const why = (over: Partial<WhyTrace>): WhyTrace => ({
     dense_rank: 1, keyword_terms: [], multipliers: null, rerank_percentile: null, rerank_move: null, age_known: null, graph: null, slot: "direct", ...over,
   });
-  const mult = { recency: 1, frequency: 1, combined: 1, importance: 1, tag_boost: 1, append_penalty: 1, rolled_up_penalty: 1 };
-  const line = (w: WhyTrace) => {
-    const m = { id: "x", content: "hello", score: 1, tags: [], createdAt: NOW, hop: 0, why: w } as unknown as RecallMatch;
+  const mult = { recency: 1, frequency: 1, combined: 1, importance: 1, tag_boost: 1, append_penalty: 1, rolled_up_penalty: 1, source_weight: 1 };
+  const line = (w: WhyTrace, source?: string) => {
+    const m = { id: "x", content: "hello", score: 1, tags: [], source, createdAt: NOW, hop: 0, why: w } as unknown as RecallMatch;
     return renderRecallText([m], {} as any).split("\n").find(l => l.startsWith("why: "))!;
   };
   it("says nothing about reranking when the position did not move", () => {
@@ -78,6 +90,12 @@ describe("why line honesty", () => {
     expect(l).toContain("age unknown");
     expect(l).not.toContain("recent");
     expect(line(why({ multipliers: mult, age_known: true }))).toContain("recent");
+  });
+  it("names the source and its demotion only when source_weight is below 1 (T-0089.3.1)", () => {
+    const demoted = { ...mult, source_weight: 0.85 };
+    const l = line(why({ multipliers: demoted, age_known: true }), "email-gmail");
+    expect(l).toContain("mirror source ×0.85");
+    expect(line(why({ multipliers: mult, age_known: true }), "email-gmail")).not.toMatch(/source ×/);
   });
 });
 

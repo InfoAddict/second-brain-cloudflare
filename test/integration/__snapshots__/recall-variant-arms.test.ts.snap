@@ -21,7 +21,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
       "WITH s AS MATERIALIZED (SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, 0 AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?
+       WHERE entries_fts MATCH ? AND tags NOT LIKE '%"quarantine:%'
        ORDER BY sh DESC, rk, ord LIMIT ?)
     SELECT id, created_at, tags, source, l0, l1, fl FROM (
       SELECT id, created_at, tags, source, sh, rk, ord, CASE WHEN p0 = 0 THEN 0 WHEN (substr(lc, p0 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p0 + 6, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q0 = 0 THEN 1 WHEN (substr(lc, (p0 + q0) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p0 + q0) + 6, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l0, CASE WHEN p1 = 0 THEN 0 WHEN (substr(lc, p1 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p1 + 6, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q1 = 0 THEN 1 WHEN (substr(lc, (p1 + q1) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p1 + q1) + 6, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l1, fl FROM (
@@ -75,8 +75,8 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
     "BATCH",
     "SELECT DISTINCT value FROM entries, json_each(entries.tags)",
     "BATCH",
-    "SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?)",
-    "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'",
+    "SELECT id, source, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?)",
+    "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%' AND tags NOT LIKE '%"quarantine:%'",
     "UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (?)",
   ],
 }
@@ -103,7 +103,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
       "WITH s AS MATERIALIZED (SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, 0 AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?
+       WHERE entries_fts MATCH ? AND tags NOT LIKE '%"quarantine:%'
        ORDER BY sh DESC, rk, ord LIMIT ?)
     SELECT id, created_at, tags, source, l0, l1, fl FROM (
       SELECT id, created_at, tags, source, sh, rk, ord, CASE WHEN p0 = 0 THEN 0 WHEN (substr(lc, p0 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p0 + 8, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q0 = 0 THEN 1 WHEN (substr(lc, (p0 + q0) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p0 + q0) + 8, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l0, CASE WHEN p1 = 0 THEN 0 WHEN (substr(lc, p1 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p1 + 8, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q1 = 0 THEN 1 WHEN (substr(lc, (p1 + q1) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p1 + q1) + 8, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l1, fl FROM (
@@ -159,8 +159,8 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
     "BATCH",
     "SELECT DISTINCT value FROM entries, json_each(entries.tags)",
     "BATCH",
-    "SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?)",
-    "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'",
+    "SELECT id, source, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?)",
+    "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%' AND tags NOT LIKE '%"quarantine:%'",
     "UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (?)",
   ],
 }
@@ -187,7 +187,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
       "WITH s AS MATERIALIZED (SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, 0 AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?
+       WHERE entries_fts MATCH ? AND tags NOT LIKE '%"quarantine:%'
        ORDER BY sh DESC, rk, ord LIMIT ?)
     SELECT id, created_at, tags, source, l0, l1, fl FROM (
       SELECT id, created_at, tags, source, sh, rk, ord, CASE WHEN p0 = 0 THEN 0 WHEN (substr(lc, p0 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p0 + 12, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q0 = 0 THEN 1 WHEN (substr(lc, (p0 + q0) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p0 + q0) + 12, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l0, CASE WHEN p1 = 0 THEN 0 WHEN (substr(lc, p1 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p1 + 7, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q1 = 0 THEN 1 WHEN (substr(lc, (p1 + q1) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p1 + q1) + 7, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l1, fl FROM (
@@ -247,8 +247,8 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
     "BATCH",
     "SELECT DISTINCT value FROM entries, json_each(entries.tags)",
     "BATCH",
-    "SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?, ?)",
-    "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?, ?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'",
+    "SELECT id, source, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?, ?)",
+    "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?, ?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%' AND tags NOT LIKE '%"quarantine:%'",
     "UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (?, ?)",
   ],
 }

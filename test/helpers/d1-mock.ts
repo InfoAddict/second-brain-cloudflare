@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { COMPRESSION_IMPORTANCE_THRESHOLD, COMPRESSION_MIN_RECALL, isTopicTag } from "../../src/compression/eligibility";
+import { NOT_HELD_SQL } from "../../src/quarantine/tags";
 
 /**
  * Decode a `%"tag"%` bind parameter back to the tag, undoing tagLikePattern's escaping.
@@ -122,6 +123,14 @@ export class D1Mock {
   prepare(sql: string) {
     if (/^\s*(UPDATE entries|DELETE FROM entries|INSERT INTO entries_trash)/i.test(sql)) this.rememberListed();
     let s = sql.replace(/\s+/g, " ").trim();
+
+    // T-0089.4.2 (quarantine): every read this double models predates held
+    // rows, and none of its fixtures seed one, so the clause changes nothing a
+    // test here could see. Stripped like the ESCAPE clause below, rather than
+    // grown onto every exact-string branch, because it never changes which
+    // query a statement IS. Held exclusion itself is covered against real
+    // SQLite in test/integration/recall-held.test.ts.
+    s = s.replace(new RegExp(` AND ${NOT_HELD_SQL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g"), "");
 
     // Team-edition workspace scoping. Production appends `AND workspace_id IN (?, ?)`
     // (or a bare `WHERE` form) whenever an Identity is in play. Every integration test

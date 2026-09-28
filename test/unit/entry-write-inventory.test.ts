@@ -100,7 +100,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/store.ts', line: 632, kind: 'snapshot' },
   { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot' },
   // MOVED 26 -> 30 (T-0089.1.1 round 2): the id-uniqueness comment above import's insert, which now mints a fresh id in-statement.
-  { file: 'src/entries/import.ts', line: 32, kind: 'exempt' },
+  { file: 'src/entries/import.ts', line: 33, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 96, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 148, kind: 'snapshot' },
   { file: 'src/lib/team-admin.ts', line: 591, kind: 'hard-delete' },
@@ -120,7 +120,10 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED 312 -> 316, 348 -> 352 (T-0089.1.1 round 2): revertEntry takes an optional trash nonce; same sites.
   { file: 'src/memory/undo.ts', line: 320, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 356, kind: 'exempt' },
-  { file: 'src/recall/search.ts', line: 1195, kind: 'exempt' },
+  // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
+  // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
+  { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
+  { file: 'src/recall/search.ts', line: 1235, kind: 'exempt' },
   // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
   // retryAfterMs rework added lines above this site; same site, shifted only.
   // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.
@@ -132,7 +135,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED 89 -> 93 (T-0089.1.1 round 5): indexPendingRow reports whether its commit landed.
   // MOVED 93 -> 131 (T-0089.1.1 round 5): failure counting and demotion above the batch; same site.
   // MOVED 131 -> 151 (T-0089.1.1, budget auditor R11): the 128 KB nightly cap and its skip count.
-  { file: 'src/vectorize/pending.ts', line: 164, kind: 'exempt' },
+  { file: 'src/vectorize/pending.ts', line: 165, kind: 'exempt' },
   { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
 ];
 

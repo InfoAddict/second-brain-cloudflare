@@ -57,7 +57,17 @@ describe("synthetic corpora stay out of the core eval", () => {
 describe("standing measurement report", () => {
   it("prints both query embeddings' firing curves, the dev-chosen threshold and the held-out intervals", () => {
     const point = (threshold: number) => ({ threshold, precision: 0.25, recall: 0.5, truePositive: 1, falsePositive: 3, falseNegative: 1, intentFired: 2, intentQueries: 9 });
-    const input = { curve: Array.from({ length: 13 }, (_, i) => point(Number((0.3 + i * 0.05).toFixed(2)))), chosen: { threshold: 0.7, meetsPrecisionTarget: false, dev: point(0.7), test: { ...point(0.7), precisionCi: [0.1, 0.5] as [number, number], recallCi: [0.2, 0.8] as [number, number] } } };
+    const input = {
+      curve: Array.from({ length: 13 }, (_, i) => point(Number((0.3 + i * 0.05).toFixed(2)))),
+      chosen: {
+        threshold: 0.7, meetsPrecisionTarget: false, dev: point(0.7),
+        test: {
+          ...point(0.7), precisionCi: [0.1, 0.5] as [number, number], recallCi: [0.2, 0.8] as [number, number],
+          precisionCiClustered: [0.05, 0.6] as [number, number], recallCiClustered: [0.1, 0.9] as [number, number],
+        },
+        intentCountedAsFalsePositive: { dev: point(0.7), test: point(0.7) },
+      },
+    };
     const standing = { groups: { yes: 5, overlap: 4, intent: 3, unrelated: 20 }, memories: 30, inputs: { distilled: input, raw: input } };
     const report: VariantReport = { schema: 1, variant: "no-rerank", corpus: "standing", embeddingModel: "hash-smoke", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: RUNNER_VERSION, results: [result("st-yes-0-0", "standing")], standing };
     const text = formatReport(report);
