@@ -22,7 +22,9 @@ async function loadBrief() {
   const el = document.getElementById('brief')
   if (!el) return
   try {
-    const res = await fetch(`${WORKER_URL}/brief`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+    // reveal_held=1 (16-t3-t4-trust-spec.md S4): the dashboard is the one caller that opts into a
+    // held row's own preview text (src/routes/brief.ts) - every other caller stays out by default.
+    const res = await fetch(`${WORKER_URL}/brief?reveal_held=1`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
     if (!res.ok) return // an older Worker has no /brief; the hero stays
     briefData = await res.json()
     if (!briefData.ok) return

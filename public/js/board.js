@@ -186,7 +186,9 @@ function buildInsightStop(p) {
 function renderDecisionPanel(board, brief) {
   const pending = (brief && brief.patterns) || []
   const attention = (brief && brief.attention) || {}
-  if (!pending.length && !(attention.stale > 0) && !(attention.unindexed > 0) && !(attention.due > 0)) return
+  const changes = (brief && brief.changes) || null
+  const hasChanges = !!(changes && changes.count > 0)
+  if (!pending.length && !(attention.stale > 0) && !(attention.unindexed > 0) && !(attention.due > 0) && !hasChanges) return
 
   const stops = pending.slice(0, 2).map(buildInsightStop)
   if (pending.length > 2) {
@@ -212,6 +214,11 @@ function renderDecisionPanel(board, brief) {
       <div class="stop-label">${escHtml(t('due.title'))}</div>
       <div class="stop-actions"><button class="attn" type="button" onclick="openDueSheet()"><i class="ti ti-bell"></i>${escHtml(t('brief.attentionDue', { n: attention.due }))}</button></div>
     </article>`)
+  }
+  // T3/T4 S4: "AI tools changed N memories" - absent when brief.changes.count is 0.
+  if (typeof aiChangesStopHtml === 'function') {
+    const aiChangesHtml = aiChangesStopHtml(changes)
+    if (aiChangesHtml) stops.push(aiChangesHtml)
   }
 
   const panel = boardPanel('decide', { title: t('board.decideTitle'), sub: t('board.decideSub'), span: 4 })
