@@ -3,10 +3,11 @@ import { buildSyntheticCorpus, SYNTHETIC_CORPORA } from "./synthetic";
 import { INJECTION_DOCS, INJECTION_SUBJECTS, PLANT_STYLES, plantText } from "./synthetic-injection";
 import { NOISE_FOOTER } from "./synthetic-noise";
 import { STANDING, UNRELATED_QUERIES } from "./synthetic-standing";
-import { MONTH_DAY_CONTROL_ACCEPTANCE_MRR, MONTH_DAY_CONTROL_GAP_TAG, TEMPORAL_TYPES } from "./synthetic-temporal";
+import { MONTH_DAY_CONTROL_ACCEPTANCE_MRR, MONTH_DAY_CONTROL_FLOOR_SCOPE, MONTH_DAY_CONTROL_GAP_TAG, TEMPORAL_TYPES } from "./synthetic-temporal";
 import { validAt } from "../temporal-oracle";
+import type { GoldenQuery } from "../types";
 
-const DURING_SUBSETS = ["phrase-vague", "backdated-past", "retracted-past"];
+const DURING_SUBSETS = ["during-before-change", "during-after-change", "backdated-past", "backdated-newest", "retracted-past", "corrected-backdated", "recap-gold"];
 
 const byTag = <T extends { tags?: string[] }>(qs: T[], tag: string): T[] => qs.filter(q => q.tags?.includes(tag));
 const clusters = (qs: { clusterKey?: string }[]) => new Set(qs.map(q => q.clusterKey)).size;
@@ -34,19 +35,52 @@ describe("temporal", () => {
   it("dates documents at noon UTC, so the local-time date parser answers the same in every timezone", () => {
     for (const e of c.entries) expect(e.createdAt % 86_400_000).toBe(12 * 3_600_000);
   });
+  it("temporal-during has the seven subsets of 6.2 with the stated sizes", () => {
+    const sizeOf = (subset: string) => byTag(c.queries.filter(q => q.category === "temporal-during"), `subset:${subset}`).length;
+    expect(sizeOf("during-before-change")).toBe(TEMPORAL_TYPES.update);
+    expect(sizeOf("during-after-change")).toBe(TEMPORAL_TYPES.update);
+    expect(sizeOf("backdated-past")).toBe(TEMPORAL_TYPES.retro);
+    expect(sizeOf("backdated-newest")).toBe(TEMPORAL_TYPES["retro-norecap"]);
+    expect(sizeOf("retracted-past")).toBe(TEMPORAL_TYPES.retracted);
+    expect(sizeOf("corrected-backdated")).toBe(TEMPORAL_TYPES.corrected);
+    expect(sizeOf("recap-gold")).toBe(TEMPORAL_TYPES["recap-only"]);
+  });
+  it("every forbidden id was an active, un-retracted belief at the question's date", () => {
+    const beliefAt = (e: (typeof c.entries)[number], t: number) => e.createdAt <= t && (e.retractedAt === undefined || e.retractedAt > t);
+    for (const q of c.queries.filter(x => x.category === "temporal-during" && x.forbidden?.length)) {
+      for (const id of q.forbidden!) expect(beliefAt(c.entries.find(e => e.id === id)!, q.expectedAsOf!), `${q.id} forbidden ${id}`).toBe(true);
+    }
+  });
+  it("retracted timelines: bad supersedes old, retraction restores old (D-RET), fix is a neutral later note with no edge from itself", () => {
+    for (const i of c.entries.filter(e => /^tm-retracted-\d+-old$/.test(e.id)).map(e => e.id.split("-")[2])) {
+      expect(c.edges.some(e => e.sourceId === `tm-retracted-${i}-fix` && e.targetId === `tm-retracted-${i}-bad`)).toBe(true);
+      const bad = c.entries.find(e => e.id === `tm-retracted-${i}-bad`)!;
+      expect(bad.retractedAt).toBeDefined();
+      expect(bad.validUntil).toBe(bad.validFrom); // empty window: never actually valid
+      const now = c.queries.find(q => q.id === `tm-q-${i}-now`)!;
+      expect(now.gold.map(g => g.id).sort()).toEqual([`tm-retracted-${i}-fix`, `tm-retracted-${i}-old`].sort());
+      expect(now.forbidden).toEqual([`tm-retracted-${i}-bad`]);
+    }
+  });
+  it("the controls floor is declared", () => {
+    expect(c.floors).toContainEqual({ scope: MONTH_DAY_CONTROL_FLOOR_SCOPE, metric: "mrr10", min: MONTH_DAY_CONTROL_ACCEPTANCE_MRR });
+  });
   it("names every timeline's subject distinctly, with no numbered siblings", () => {
-    const subjects = c.queries.filter(q => q.tags?.includes("subset:current")).map(q => q.text.replace(/^Where is the /, "").replace(/ now\?$/, ""));
+    // Every timeline's "now" question, regardless of which knowledge-update subset it carries
+    // (current, ku-corrected or ku-silent, T-0089.2.6): one distinct subject per timeline.
+    const subjects = c.queries.filter(q => q.category === "knowledge-update").map(q => q.text.replace(/^Where is the /, "").replace(/ now\?$/, ""));
     expect(subjects).toHaveLength(Object.values(TEMPORAL_TYPES).reduce((a, b) => a + b, 0));
     expect(new Set(subjects).size).toBe(subjects.length);
     expect(subjects.some(s => /\d/.test(s))).toBe(false);
   });
   it("keeps the newer fact from answering the past question (no former-location wording)", () => {
-    for (const e of c.entries.filter(x => /^tm-(update|retro)-\d+-new$/.test(x.id))) expect(e.content).not.toMatch(/former|previous|used to|was at/i);
+    for (const e of c.entries.filter(x => /^tm-(update|retro|retro-norecap)-\d+-new$/.test(x.id))) expect(e.content).not.toMatch(/former|previous|used to|was at/i);
   });
   it("declares supersession edges and validity, including retractions and post-as-of edits", () => {
     expect(c.edges.length).toBeGreaterThan(80);
     expect(c.edges.every(e => e.type === "supersedes")).toBe(true);
-    expect(c.entries.filter(e => e.retractedAt !== undefined).length).toBe(TEMPORAL_TYPES.retracted);
+    // retracted's "bad" and corrected's "wrong": both wrong-from-a-date-on, both retracted (T-0089.2.6).
+    expect(c.entries.filter(e => e.retractedAt !== undefined).length).toBe(TEMPORAL_TYPES.retracted + TEMPORAL_TYPES.corrected);
     const edited = c.entries.filter(e => e.priorVersions);
     expect(edited).toHaveLength(TEMPORAL_TYPES.edited);
     for (const e of edited) expect(e.updatedAt!).toBeGreaterThan(Date.UTC(2026, 3, 15));
@@ -91,9 +125,11 @@ describe("temporal", () => {
     expect(c.queries.length).toBeGreaterThanOrEqual(200);
   });
   it("puts every during-subset query in the temporal-during category, and only those there", () => {
+    // T-0089.2.6: 7 subsets, 225 queries, 190 clusters (during-before-change and during-after-change
+    // share the update timeline's cluster, so they add queries but not distinct clusters; 14-t2-time-spec.md 6.2).
     const during = c.queries.filter(q => DURING_SUBSETS.some(s => q.tags?.includes(`subset:${s}`)));
-    expect(during).toHaveLength(100);
-    expect(clusters(during)).toBe(100);
+    expect(during).toHaveLength(225);
+    expect(clusters(during)).toBe(190);
     for (const q of during) expect(q.category).toBe("temporal-during");
     for (const q of c.queries.filter(q => q.category === "temporal-during")) expect(DURING_SUBSETS.some(s => q.tags?.includes(`subset:${s}`))).toBe(true);
   });
@@ -111,6 +147,42 @@ describe("temporal", () => {
     for (const q of c.queries.filter(x => x.category === "temporal-during")) {
       expect(q.expectedAsOf).toBeDefined();
       for (const g of q.gold) expect(validAt(c.entries.find(e => e.id === g.id)!, q.expectedAsOf!)).toBe(true);
+    }
+  });
+  it("every during query carries asOfParam equal to expectedAsOf", () => {
+    for (const q of c.queries.filter(x => x.category === "temporal-during")) expect(q.asOfParam).toBe(q.expectedAsOf);
+  });
+  it("cue balance: each cue marks the gold in one subset and the distractors in another (T-0089.2.6)", () => {
+    const during = c.queries.filter(q => q.category === "temporal-during");
+    const entryById = new Map(c.entries.map(e => [e.id, e] as const));
+    const bySubset = new Map<string, typeof during>();
+    for (const q of during) {
+      const subset = q.tags!.find(t => t.startsWith("subset:"))!.slice("subset:".length);
+      bySubset.set(subset, [...(bySubset.get(subset) ?? []), q]);
+    }
+    // Siblings share the gold id's kind-and-index prefix ("tm-update-3-" from "tm-update-3-new").
+    const siblingsOf = (goldId: string) => c.entries.filter(e => e.id.startsWith(goldId.replace(/-[a-z]+$/, "-")));
+    const CUES: Record<string, (doc: (typeof c.entries)[number], siblings: (typeof c.entries), q: GoldenQuery) => boolean> = {
+      "newest document": (doc, siblings) => siblings.some(s => s.id !== doc.id) && siblings.every(s => s.id === doc.id || s.createdAt <= doc.createdAt),
+      "oldest document": (doc, siblings) => siblings.some(s => s.id !== doc.id) && siblings.every(s => s.id === doc.id || s.createdAt >= doc.createdAt),
+      "Correction": doc => /Correction/.test(doc.content),
+      "Looking back": doc => /Looking back/.test(doc.content),
+      "' was '": doc => / was /.test(doc.content),
+      "'is now'": doc => /is now/.test(doc.content),
+      "explicit date": doc => /\d{4}-\d{2}-\d{2}|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(doc.content),
+      "created after T": (doc, _s, q) => doc.createdAt > q.expectedAsOf!,
+    };
+    for (const [cue, test] of Object.entries(CUES)) {
+      const onGold: string[] = [], onDistractor: string[] = [];
+      for (const [subset, qs] of bySubset) {
+        if (qs.every(q => q.gold.every(g => test(entryById.get(g.id)!, siblingsOf(g.id), q)))) onGold.push(subset);
+        // A rival for every query in the subset, not necessarily the same sibling each time: proves the cue has
+        // something non-gold to grab onto throughout the subset, without requiring every sibling to carry it.
+        const distractorIds = (q: GoldenQuery) => [...(q.forbidden ?? []), ...siblingsOf(q.gold[0].id).map(e => e.id).filter(id => !q.gold.some(g => g.id === id))];
+        if (qs.every(q => { const ids = distractorIds(q); return ids.length > 0 && ids.some(id => test(entryById.get(id)!, siblingsOf(q.gold[0].id), q)); })) onDistractor.push(subset);
+      }
+      expect(onGold.length, `cue ${cue} must mark 100% of gold in at least one subset (found in: ${onGold.join(", ") || "none"})`).toBeGreaterThan(0);
+      expect(onDistractor.length, `cue ${cue} must mark 100% of forbidden-or-distractor docs in at least one subset (found in: ${onDistractor.join(", ") || "none"})`).toBeGreaterThan(0);
     }
   });
   it("makes the current answer valid now and its predecessors not, per the declared validity", () => {

@@ -107,7 +107,7 @@ describe("scoped entry id reads", () => {
       ["graph readability", "SELECT id, tags FROM entries WHERE"],
       ["graph hydration", "SELECT id, content, tags, source, created_at FROM entries WHERE"],
       ["graph view hydration", "FROM entries e"],
-      ["admin resolution", "SELECT id, tags, vector_ids FROM entries WHERE"],
+      ["admin resolution", "SELECT id, tags, vector_ids, workspace_id FROM entries WHERE"],
       ["capture duplicate", "SELECT id, content FROM entries WHERE"],
     ] as const;
     for (const [name, fragment] of shapes) {

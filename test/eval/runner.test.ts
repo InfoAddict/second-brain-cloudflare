@@ -80,6 +80,20 @@ it("uses a query's as-of clock and excludes later documents without changing the
   expect(seen.some(call => call.params.query === "xylo alpha" && call.now === EVAL_NOW && call.params.before === undefined)).toBe(true);
 });
 
+it("passes asOf only for a query carrying asOfParam (T-0089.2.6), ahead of B3 adding the param to recallEntries", async () => {
+  const c = await corpus();
+  const at = EVAL_NOW - 5 * 86_400_000;
+  const withAsOfParam: GoldenQuery[] = [
+    { ...queries[0], id: "with-asof-param", asOfParam: at },
+    { ...queries[0], id: "without-asof-param" },
+  ];
+  await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: withAsOfParam, isolate: "cold", embeddingModel: MODEL });
+  const withCall = seen.find(call => call.params.query === "xylo alpha" && (call.params as { asOf?: number }).asOf === at);
+  expect(withCall).toBeDefined();
+  const withoutCall = seen.find(call => call.params.query === "xylo alpha" && !("asOf" in call.params));
+  expect(withoutCall).toBeDefined();
+});
+
 it("measures standing cosine from the embedding used by recall", async () => {
   const q: GoldenQuery = { id: "standing-probe", category: "standing", text: "arranging a flight", gold: [{ id: "st-one", grade: 2 }], viewer: "avery", tags: ["standing:yes", "split:dev"] };
   const c = await loadCorpus({

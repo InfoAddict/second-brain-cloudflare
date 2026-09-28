@@ -75,9 +75,18 @@ export async function maybeLogRecall(env: Env, cfg: Config, input: RecallLogInpu
       // as a subquery: at most RECALL_LOG_PURGE_BATCH of the oldest rows past retention.
       // Runs whether or not the insert above landed a row — harmless either way, and
       // simpler than conditioning it on the insert's own row count.
+      //
+      // R17 (budget auditor, MAJOR): scoped to THIS workspace, not the whole table. Without
+      // workspace_id in the WHERE, created_at alone has no index (idx_recall_log_ws leads
+      // with workspace_id), so SQLite scanned every row in recall_log on every logged
+      // recall — about 6,000 rows/workspace/day at the 200/day cap and 30-day retention,
+      // deployment-wide. Scoping it lets the subquery SEARCH idx_recall_log_ws instead of
+      // SCAN the table, and each workspace now purges only its own expired rows — every
+      // workspace's retention is still enforced, just on its own logging, not on a global
+      // sweep one workspace's traffic happened to trigger.
       env.DB.prepare(
-        `DELETE FROM recall_log WHERE id IN (SELECT id FROM recall_log WHERE created_at < ? ORDER BY created_at ASC LIMIT ?)`,
-      ).bind(cutoff, RECALL_LOG_PURGE_BATCH),
+        `DELETE FROM recall_log WHERE id IN (SELECT id FROM recall_log WHERE workspace_id = ? AND created_at < ? ORDER BY created_at ASC LIMIT ?)`,
+      ).bind(input.workspaceId, cutoff, RECALL_LOG_PURGE_BATCH),
     ]);
   } catch (e) {
     console.error("recall_log write failed (non-fatal):", e);

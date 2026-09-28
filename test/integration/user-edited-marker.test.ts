@@ -27,7 +27,7 @@ describe("user-edited marker", () => {
 
   it.each([["synthesized"], ["auto-insight"]])("an edit with a replacement tag list keeps %s and adds user-edited", async (tag) => {
     sqlite.seed({ id: "row", content: "system text", createdAt: 1000, tags: [tag, "work"], source: "system" });
-    await updateEntryContent(env, "row", "my correction", undefined, undefined, ["mine"], { workspaceId: "", actorId: "u1" });
+    await updateEntryContent(env, "row", "my correction", undefined, undefined, ["mine"], { workspaceId: "", actorId: "u1" }, { actorId: "u1", channel: "rest" }, "");
     expect(tagsOf("row")).toEqual(expect.arrayContaining([tag, "user-edited", "mine"]));
     expect(tagsOf("row")).not.toContain("work");
   });
@@ -35,9 +35,9 @@ describe("user-edited marker", () => {
   it("a second edit does not duplicate the marker, and a plain row never gets one", async () => {
     sqlite.seed({ id: "row", content: "system text", createdAt: 1000, tags: ["synthesized"], source: "system" });
     sqlite.seed({ id: "plain", content: "plain text", createdAt: 1000, tags: ["work"], source: "api" });
-    await updateEntryContent(env, "row", "edit one", undefined, undefined, undefined, { workspaceId: "", actorId: "u1" });
-    await updateEntryContent(env, "row", "edit two", undefined, undefined, undefined, { workspaceId: "", actorId: "u1" });
-    await updateEntryContent(env, "plain", "plain edited", undefined, undefined, undefined, { workspaceId: "", actorId: "u1" });
+    await updateEntryContent(env, "row", "edit one", undefined, undefined, undefined, { workspaceId: "", actorId: "u1" }, { actorId: "u1", channel: "rest" }, "");
+    await updateEntryContent(env, "row", "edit two", undefined, undefined, undefined, { workspaceId: "", actorId: "u1" }, { actorId: "u1", channel: "rest" }, "");
+    await updateEntryContent(env, "plain", "plain edited", undefined, undefined, undefined, { workspaceId: "", actorId: "u1" }, { actorId: "u1", channel: "rest" }, "");
     expect(tagsOf("row").filter(t => t === "user-edited")).toHaveLength(1);
     expect(tagsOf("plain")).not.toContain("user-edited");
   });

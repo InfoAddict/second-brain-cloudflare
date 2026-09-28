@@ -3,14 +3,21 @@ import { importExportPayload, parseImportBody, parseImportLimit, parseImportOffs
 import { initializeDatabase } from "../db/init";
 import { json } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
-import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
+import { assertCanMutateEntry, getReadableEntry, FORBIDDEN_MSG } from "../lib/entry-access";
 import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
-import { readEntryTimeline, seesPrivateHistory } from "../memory/history";
+import { readEntryTimeline } from "../memory/history";
+import { loadHistory } from "../memory/versions";
+import { buildEntryHistoryFromReads, readEntryVersion } from "../memory/history-view";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
+import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
+import { decodeTrashCursor, listTrash } from "../memory/trash-list";
+import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
+import { mirrorUndoError } from "../integrations/mirror";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
 import { auditEvent } from "../lib/audit";
+import { resolveConfig } from "../config";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { getTagVocabulary } from "../tags/vocabulary";
 import { projectRowsOf } from "../projects/registry";
@@ -170,29 +177,190 @@ export async function handleEntriesRoutes(
     return json(summary);
   }
 
-  // POST /forget — delete-by-id, mirrors the MCP `forget` tool
+  // POST /forget — delete-by-id, mirrors the MCP `forget` tool. With { permanent: true, confirm: id,
+  // nonce } it is Delete forever (T-0089.4.7) instead: it acts only on the trash row with that nonce
+  // (the trash view's row), never on a live memory, and is never offered as an MCP tool or parameter.
   if (url.pathname === "/forget" && request.method === "POST") {
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
 
-    let body: { id?: string };
+    let body: { id?: string; permanent?: unknown; confirm?: unknown; nonce?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
-
     const id = body.id.trim();
+
+    if ("permanent" in body) {
+      if (body.permanent !== true) return json({ ok: false, error: "permanent must be true" }, 400);
+      if (body.confirm !== id) return json({ ok: false, error: "confirm must equal id" }, 400);
+      const nonce = body.nonce;
+      if (typeof nonce !== "string" || nonce === "") {
+        return json({ ok: false, error: "nonce is required: Delete forever works on a trash row only. Forget the memory first, then delete it from the trash." }, 400);
+      }
+
+      const trashed = await getTrashedEntry(env, auth, id);
+      if (!trashed || trashed.nonce !== nonce) return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
+      const denied = assertCanMutateEntry(auth, trashed);
+      if (denied) return json({ ok: false, error: denied.message }, 403);
+
+      const result = await deleteForever(env, id, { actorId: auth.userId, channel: "rest" }, trashed.workspace_id, nonce);
+      if (result.status === "not_found") return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
+      return json({ ok: true, id, permanent: true, deletedVectors: result.deletedVectors });
+    }
+
     const row = await getReadableEntry(env, auth, id);
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
-    const result = await forgetEntry(id, env);
+    const cfg = await resolveConfig(env);
+    const result = await forgetEntry(id, env, { actorId: auth.userId, channel: "rest" }, { reason: "forget", config: cfg }, row.workspace_id as string);
 
     if (result.status === "not_found") {
-      return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     }
 
-    auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "deleted", payload: { deletedVectors: result.vectorCount, channel: "rest" } });
-    return json({ ok: true, id, deletedVectors: result.vectorCount });
+    auditEvent(env, ctx, {
+      entryId: id, actorId: auth.userId, event: "deleted",
+      payload: { deletedVectors: result.vectorCount, channel: "rest", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
+    });
+    return json({ ok: true, id, deletedVectors: result.vectorCount, trash: result.trashed, retention_days: cfg.TRASH_RETENTION_DAYS });
+  }
+
+  // POST /restore — bring a memory back from the trash, with its links and index.
+  if (url.pathname === "/restore" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string; nonce?: unknown };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+    const id = body.id.trim();
+    const nonce = optionalNonce(body);
+    if (nonce === null) return json({ ok: false, error: "nonce must be a non-empty string" }, 400);
+
+    const trashed = await getTrashedEntry(env, auth, id);
+    // With a nonce, only that exact trash row: a stale view never restores a row that replaced it.
+    if (!trashed || (nonce !== undefined && trashed.nonce !== nonce)) return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
+    const denied = assertCanMutateEntry(auth, trashed);
+    if (denied) return json({ ok: false, error: denied.message }, 403);
+
+    const cfg = await resolveConfig(env);
+    const result = await restoreEntry(env, trashed, { actorId: auth.userId, channel: "rest" }, cfg);
+    if (result.status === "not_found") return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
+    if (result.status === "conflict") return json({ ok: false, error: `An entry with ID ${id} already exists` }, 409);
+    if (result.status === "reembed_failed") return json({ ok: false, error: "Could not restore: re-indexing failed. Try again." }, 502);
+
+    auditEvent(env, ctx, {
+      entryId: id, actorId: auth.userId, event: "restored",
+      payload: { channel: "rest", edgesRestored: result.edgesRestored, trashedReason: result.trashedReason },
+    });
+    return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount });
+  }
+
+  // GET /trash (BE-2, T-0101.2.1, contract 4.3) — the dashboard trash view's page reader.
+  // Q10: listTrash already narrows to what the reader can restore.
+  if (url.pathname === "/trash" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limitParam = url.searchParams.get("limit");
+    let limit = 20;
+    if (limitParam !== null) {
+      const parsed = Number(limitParam);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) {
+        return json({ ok: false, error: "limit must be an integer between 1 and 50" }, 400);
+      }
+      limit = parsed;
+    }
+
+    const cursorParam = url.searchParams.get("cursor") ?? undefined;
+    if (cursorParam !== undefined && decodeTrashCursor(cursorParam) === null) {
+      return json({ ok: false, error: "cursor is invalid" }, 400);
+    }
+
+    const layerParam = url.searchParams.get("layer") ?? undefined;
+    if (layerParam !== undefined && layerParam !== "personal" && layerParam !== "company") {
+      return json({ ok: false, error: 'layer must be "personal" or "company"' }, 400);
+    }
+
+    const cfg = await resolveConfig(env);
+    const { items, nextCursor } = await listTrash(env, auth, {
+      limit, cursor: cursorParam, layer: layerParam as "personal" | "company" | undefined, config: cfg,
+    });
+    return json({ ok: true, retention_days: cfg.TRASH_RETENTION_DAYS, items, next_cursor: nextCursor });
+  }
+
+  // POST /undo — reverse the most recent change to a memory (or a specific earlier version, with
+  // to_version), or restore it from the trash when nothing live remains. Mirrors the MCP `undo`
+  // tool; both call revertEntry, so REST and MCP undo leave identical rows and versions.
+  if (url.pathname === "/undo" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string; to_version?: unknown; nonce?: unknown };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+    const id = body.id.trim();
+    const nonce = optionalNonce(body);
+    if (nonce === null) return json({ ok: false, error: "nonce must be a non-empty string" }, 400);
+
+    let toVersion: number | undefined;
+    if (body.to_version !== undefined) {
+      if (typeof body.to_version !== "number" || !Number.isInteger(body.to_version) || body.to_version < 1) {
+        return json({ ok: false, error: "to_version must be a positive integer" }, 400);
+      }
+      toVersion = body.to_version;
+    }
+
+    // The workspace THIS call's own scoped read authorizes (Class 1): a live row's, or — undo of a
+    // forget — a trashed row's. revertEntry reads the row again moments later on its own; pinning
+    // its CAS guard to what this read found is what keeps an unshare in that gap from landing (the
+    // same reason forgetEntry, updateEntryContent and appendToEntry all take this same parameter).
+    // No permission check here: revertEntry's own canRevert applies rule (b) (a member's own newest
+    // change on a company row), which assertCanMutateEntry alone would wrongly refuse.
+    const liveRow = await getReadableEntry(env, auth, id, "id, workspace_id");
+    const trashedRow = liveRow ? null : await getTrashedEntry(env, auth, id);
+    const authorizedWorkspaceId = (liveRow?.workspace_id ?? trashedRow?.workspace_id) as string | undefined;
+
+    const cfg = await resolveConfig(env);
+    const result = await revertEntry(env, auth, id, { actorId: auth.userId, channel: "rest" }, cfg, toVersion, authorizedWorkspaceId ?? "", nonce);
+
+    switch (result.status) {
+      case "reverted":
+        return json({
+          ok: true, id, status: "reverted", targetSeq: result.targetSeq, message: revertedMessage(id, result),
+          ...(result.recreatedIncomingId ? { recreatedIncomingId: result.recreatedIncomingId } : {}),
+          ...(result.incomingTruncated ? { incomingTruncated: true } : {}),
+          ...(result.keptIncoming ? { keptIncoming: result.keptIncoming } : {}),
+          ...(result.deferredIncoming ? { deferredIncoming: result.deferredIncoming } : {}),
+        });
+      case "restored":
+        return json({
+          ok: true, id, status: "restored", message: restoredMessage(id, result),
+          ...(result.mirrorSource ? { mirrorWarning: true } : {}),
+        });
+      case "no_change":
+        return json({ ok: true, id, status: "no_change", changed: false, message: `Entry ${id} already matches that version; nothing changed.` });
+      // A hidden version reads exactly like one that never existed (D-SH): never reveals whether
+      // history predating a share exists.
+      case "unreadable":
+        return json({ ok: false, error: unreadableMessage(id) }, 404);
+      case "pruned":
+        return json({ ok: false, error: prunedMessage(id, toVersion!, result.oldestKept, cfg.VERSION_KEEP), oldestKept: result.oldestKept }, 404);
+      case "not_found":
+        if (result.gone) return json({ ok: false, error: goneMessage(id, result.gone, cfg.TRASH_RETENTION_DAYS), gone: result.gone }, 404);
+        return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
+      case "forbidden":
+        return json({ ok: false, error: FORBIDDEN_MSG }, 403);
+      case "mirrored":
+        return json({ ok: false, error: mirrorUndoError(result.source) }, 409);
+      case "stale":
+        return json({ ok: false, error: "Entry changed after you looked at it; check history and try again." }, 409);
+      case "nothing_to_undo":
+        return json({ ok: false, error: `Entry ${id} has no recorded changes to undo.` }, 409);
+      case "reembed_failed":
+        return json({ ok: false, error: "Couldn't update: search did not update. The memory is unchanged. Try again." }, 500);
+    }
   }
 
   // GET /entry — one full row by id, for the dashboard graph view's tap-to-open
@@ -218,18 +386,31 @@ export async function handleEntriesRoutes(
               workspace_id, actor_id, when_at, when_kind, when_source
        FROM entries WHERE id = ? AND ${scope.clause}`
     ).bind(id, ...scope.bindings).first() as Record<string, any> | null;
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
 
     let vectorIds: unknown[] = [];
     try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
 
-    const { timeline, labelMap } = await readEntryTimeline(env, id, auth.userId, String(row.actor_id ?? ""), undefined, false, !seesPrivateHistory(auth, row));
+    // BE-7 (T-0101.1.1): history's versions read is the ONE new statement /entry gains. The events
+    // read below is the SAME one `timeline` always made — chain.rows' own actor ids just ride along
+    // as extraLabelActorIds, so the one `users` lookup that call already does covers version actors
+    // too, and buildEntryHistoryFromReads never reads entry_events or users a second time.
+    const config = await resolveConfig(env);
+    const chain = await loadHistory(env, auth, { id: row.id as string, content: row.content as string }, config.VERSION_KEEP);
+    const timelineResult = await readEntryTimeline(
+      env, id, auth, String(row.actor_id ?? ""), undefined, false, String(row.workspace_id ?? ""), chain.rows.map(r => r.actor_id),
+      String(row.source ?? ""),
+    );
+    const { timeline, labelMap } = timelineResult;
+    const history = await buildEntryHistoryFromReads(env, auth, {
+      id: row.id as string, workspace_id: String(row.workspace_id ?? ""), actor_id: String(row.actor_id ?? ""),
+      content: row.content as string, created_at: row.created_at as number,
+    }, config, chain, timelineResult);
     const layer = layerOf(auth, row.workspace_id);
     const actorName = resolveActorLabel(String(row.actor_id ?? ""), labelMap, {
       viewerId: auth.userId,
       source: row.source as string,
     });
-
 
     return json({
       ok: true,
@@ -264,7 +445,40 @@ export async function handleEntriesRoutes(
           actor_id: String(row.actor_id ?? ""),
         }) === null,
         timeline,
+        history,
       },
+    });
+  }
+
+  // GET /entry/version — the full text, tags and status of one visible version, for the
+  // dashboard's "Show all" on a history row (contract 4.2, BE-8, T-0101.1.1).
+  if (url.pathname === "/entry/version" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const id = url.searchParams.get("id")?.trim();
+    if (!id) return json({ ok: false, error: "id is required" }, 400);
+    const seqParam = url.searchParams.get("seq");
+    const seq = seqParam === null ? NaN : Number(seqParam);
+    if (!Number.isInteger(seq) || seq < 1) return json({ ok: false, error: "seq must be a positive integer" }, 400);
+
+    const config = await resolveConfig(env);
+    const result = await readEntryVersion(env, auth, id, seq, config);
+    if (!result.ok) {
+      const messages: Record<typeof result.reason, string> = {
+        pruned: `Version ${seq} of entry ${id} is no longer kept (only the last ${config.VERSION_KEEP} changes are). The oldest kept is version ${result.oldestKept}.`,
+        not_visible: `No version ${seq} of entry ${id} is visible to you.`,
+        no_version: `Entry ${id} has no version ${seq}.`,
+      };
+      return json({
+        ok: false, error: messages[result.reason], reason: result.reason,
+        ...(result.reason === "pruned" ? { oldest_kept: result.oldestKept } : {}),
+      }, 404);
+    }
+    return json({
+      ok: true, id: result.id, seq: result.seq, content: result.content, tags: result.tags,
+      status: result.status, at: result.at, reason: result.reason, channel: result.channel,
+      client: result.client, actor_name: result.actor_name,
     });
   }
 
@@ -286,26 +500,23 @@ export async function handleEntriesRoutes(
     if (teamRead.error) return json({ ok: false, error: teamRead.error }, 400);
 
     const id = body.id.trim();
-    const result = await moveEntry(id, target, env, auth, teamRead.teamId);
+    const result = await moveEntry(id, target, env, auth, { actorId: auth.userId, channel: "rest" }, teamRead.teamId);
 
     if (result.status === "not_found") {
-      return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     }
     if (result.status === "forbidden") {
       return json({ ok: false, error: "Only the entry's author or an admin can un-share it" }, 403);
+    }
+    if (result.status === "conflict") {
+      return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
     }
     if (result.status === "no_change") {
       return json({ ok: true, id, status: "no_change" });
     }
 
-    auditEvent(env, ctx, {
-      entryId: id,
-      actorId: auth.userId,
-      event: result.status,
-      payload: { workspaceId: result.workspaceId, channel: "rest" },
-    });
-    // After the audit event, before the response: the D1 move and the audit
-    // row are both already committed, so a Vectorize outage here can only
+    // The shared/unshared event is written inside moveEntry's own batch (M5): no separate audit here.
+    // Before the response: the D1 move is already committed, so a Vectorize outage here can only
     // cost this cosmetic ranking follow-up, never the state change itself.
     ctx.waitUntil(restampVectorWorkspace(env, result.vectorIds, result.workspaceId));
     return json({ ok: true, id, status: result.status, workspaceId: result.workspaceId });
@@ -326,19 +537,28 @@ export async function handleEntriesRoutes(
     const id = body.id.trim();
     const status = body.status as MemoryStatus;
     const row = await getReadableEntry(env, auth, id);
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
-    const ok = await applyStatus(id, status, env);
+    const result = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env), row.workspace_id as string);
 
-    if (!ok) {
-      return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (result.status === "not_found") {
+      return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
+    }
+    if (result.status === "reembed_failed") {
+      return json({ ok: false, error: "Could not change the status: re-indexing failed. Nothing changed. Try again." }, 502);
     }
 
     auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { status, channel: "rest" } });
-    return json({ ok: true, id, status });
+    return json({ ok: true, id, status, indexed: result.indexed });
   }
 
   return null;
+}
+
+/** An optional trash-row nonce: undefined when absent, null when present but not a non-empty string. */
+function optionalNonce(body: { nonce?: unknown }): string | undefined | null {
+  if (!("nonce" in body) || body.nonce === undefined) return undefined;
+  return typeof body.nonce === "string" && body.nonce !== "" ? body.nonce : null;
 }

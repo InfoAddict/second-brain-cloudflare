@@ -13,6 +13,8 @@ import { pushDueItemsAllWorkspaces } from "./push/send";
 import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
 import { runFtsMaintenance } from "./db/fts-backfill";
+import { runNightlyCleanup } from "./memory/cleanup";
+import { runNightlyVectorizePending } from "./vectorize/pending";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -27,6 +29,27 @@ import { classifyD1DailyLimitError, dailyLimitMcpResponse, dailyLimitRestRespons
 
 export type { Env } from "./env";
 
+/**
+ * Accept the static AUTH_TOKEN or a member token for Claude Desktop + mcp-remote
+ * (no browser flow, no OAuth grant). `via: "token"` tells resolveClientLabel
+ * (src/mcp/client-label.ts) this caller never held a grant, so it skips the
+ * legacy grant lookup outright rather than spend two KV reads on an
+ * unwrapToken call that can never succeed for this kind of token.
+ *
+ * Exported for direct unit testing: the real @cloudflare/workers-oauth-provider
+ * only ever calls this through its own `fetch`, which needs a live KV-backed
+ * provider this codebase's tests do not stand up.
+ */
+export async function resolveExternalToken({ token, env }: { token: string; request: Request; env: unknown }) {
+  const e = env as Env;
+  if (token === e.AUTH_TOKEN) {
+    return { props: { userId: "owner", via: "token" as const } };
+  }
+  const identity = await resolveIdentityFromToken(token, e);
+  if (identity) return { props: { userId: identity.userId, via: "token" as const } };
+  return null;
+}
+
 const oauthProvider = new OAuthProvider({
   apiRoute: "/mcp",
   apiHandler,
@@ -34,16 +57,7 @@ const oauthProvider = new OAuthProvider({
   authorizeEndpoint: "/oauth/authorize",
   tokenEndpoint: "/oauth/token",
   clientRegistrationEndpoint: "/oauth/register",
-  // Accept the static AUTH_TOKEN for Claude Desktop + mcp-remote (no browser flow).
-  resolveExternalToken: async ({ token, env }) => {
-    const e = env as Env;
-    if (token === e.AUTH_TOKEN) {
-      return { props: { userId: "owner" } };
-    }
-    const identity = await resolveIdentityFromToken(token, e);
-    if (identity) return { props: { userId: identity.userId } };
-    return null;
-  },
+  resolveExternalToken,
 });
 
 export default {
@@ -229,6 +243,21 @@ export default {
         await runFtsMaintenance(env);
       } catch (e) {
         console.error("FTS maintenance failed (non-fatal):", e);
+      }
+
+      // Trash purge and the resume of a pending member removal, on one rows-written budget.
+      try {
+        await runNightlyCleanup(env);
+      } catch (e) {
+        console.error("Nightly cleanup failed (non-fatal):", e);
+      }
+
+      // Deferred indexing (rows left at vector_ids '[]', e.g. an undo past its inline re-embed
+      // budget): a small bounded slice each night, so none waits on a caller. No cron of its own.
+      try {
+        await runNightlyVectorizePending(env, () => resolveConfig(env));
+      } catch (e) {
+        console.error("Nightly vectorize-pending failed (non-fatal):", e);
       }
 
       // No single workspace to attribute the summary to: an empty corpus (nothing

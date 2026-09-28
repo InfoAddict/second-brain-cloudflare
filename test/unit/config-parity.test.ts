@@ -67,6 +67,14 @@ describe("DEFAULTS parity with shipped constants", () => {
 
   // Brief v2's when-extraction pass defaults to the same model the weekly
   // insight pass reasons with, independently overridable from then on.
+  // 4.0 history and trash: the shipped defaults, so a brain that never sets them keeps Rahil's decisions (D1.2).
+  it("VERSION_KEEP and TRASH_RETENTION_DAYS ship at 20 and 14, within their rules", () => {
+    expect(DEFAULTS.VERSION_KEEP).toBe(20);
+    expect(DEFAULTS.TRASH_RETENTION_DAYS).toBe(14);
+    expect(RULES.VERSION_KEEP).toEqual({ kind: "number", min: 5, max: 500, integer: true });
+    expect(RULES.TRASH_RETENTION_DAYS).toEqual({ kind: "number", min: 1, max: 365, integer: true });
+  });
+
   it("WHEN_LLM_MODEL starts equal to INSIGHT_LLM_MODEL", () => {
     expect(DEFAULTS.WHEN_LLM_MODEL).toBe(DEFAULTS.INSIGHT_LLM_MODEL);
   });

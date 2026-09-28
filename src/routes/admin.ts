@@ -1,18 +1,18 @@
 import { hasCapsuleTag } from "../tags/system";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from "../compression/eligibility";
 import { intParam, json } from "../lib/http";
-import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
+import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
 import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere, scopeWhereForIdRead } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { graceMs } from "../lib/ai";
 import { classifyEntry } from "../capture/classify";
-import { storeEntry } from "../capture/store";
+import { PENDING_WHERE, indexPendingRow, type PendingRow } from "../vectorize/pending";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
@@ -253,6 +253,9 @@ export async function handleAdminRoutes(
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     try {
       const result = await removeMember(env, auth.userId, body.id.trim());
+      // History remains: nothing is audited or deleted from the index yet. The dashboard calls
+      // again, and the nightly run resumes it if nobody does.
+      if (!result.done) return json({ ok: true, done: false, id: body.id.trim(), remaining: result.remaining }, 202);
       // Audited before the Vectorize delete, not after: the D1 rows are already
       // gone by here, so a Vectorize failure must not also cost the record of the
       // destruction. The counts, never the content, this is the one
@@ -266,7 +269,7 @@ export async function handleAdminRoutes(
       });
       if (result.vectorIds.length) {
         try {
-          await deleteVectorIds(env, result.vectorIds);
+          await deleteEntryVectors(env, result.ownedVectors);
         } catch (e) {
           // The D1 rows and the audit row are already committed: the removal
           // succeeded. A failed index delete only leaves dead vectors behind,
@@ -275,7 +278,7 @@ export async function handleAdminRoutes(
           console.error("Vectorize deleteByIds failed during member removal (non-fatal):", e);
         }
       }
-      return json({ ok: true, id: body.id.trim(), removedEntries: result.removedEntries, removedVectors: result.vectorIds.length });
+      return json({ ok: true, done: true, id: body.id.trim(), removedEntries: result.removedEntries, removedVectors: result.vectorIds.length });
     } catch (e) {
       if (e instanceof TeamAdminError) return json({ ok: false, error: e.message }, e.status);
       throw e;
@@ -940,11 +943,15 @@ export async function handleAdminRoutes(
     // written.
     const latchedAtRaw = await env.OAUTH_KV.get(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY).catch(() => null);
     const latchedAt = latchedAtRaw ? Number(latchedAtRaw) : null;
+    // T-0101.8.5: the KV marker set once history starts being recorded (T-0089.1.1),
+    // read here only — no D1 fallback. Omitted, not null, when it has never been set.
+    const historySinceRaw = await env.OAUTH_KV.get(VERSIONS_SINCE_KV_KEY).catch(() => null);
     return json({
       ok: vectorize.ok,
       version: SB_VERSION,
       vectorize: { ...vectorize, workspaceFilter: { supported, degradedQueries, latchedAt } },
       team,
+      ...(historySinceRaw ? { history_since: Number(historySinceRaw) } : {}),
     });
   }
 
@@ -1153,7 +1160,7 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "still_true", undefined, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "still_true", undefined, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id });
   }
@@ -1220,7 +1227,7 @@ export async function handleAdminRoutes(
       return json({ ok: false, error: `action must be "done" or "not-task"` }, 400);
     }
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), body.action === "done" ? "done" : "not_a_task", undefined, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), body.action === "done" ? "done" : "not_a_task", undefined, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id, action: body.action });
   }
@@ -1299,7 +1306,7 @@ export async function handleAdminRoutes(
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     if (!body.until?.trim()) return json({ ok: false, error: "until is required" }, 400);
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "snooze", body.until, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "snooze", body.until, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id, when_at: result.when_at });
   }
@@ -1319,7 +1326,7 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "clear_date", undefined, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "clear_date", undefined, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id });
   }
@@ -1417,20 +1424,20 @@ export async function handleAdminRoutes(
 
     const placeholders = ids.map(() => "?").join(", ");
     const { results } = await env.DB.prepare(
-      `SELECT id, tags, vector_ids FROM entries WHERE id IN (${placeholders}) AND ${scopeWhereForIdRead(scope).clause}`,
+      `SELECT id, tags, vector_ids, workspace_id FROM entries WHERE id IN (${placeholders}) AND ${scopeWhereForIdRead(scope).clause}`,
     ).bind(...ids, ...scope.bindings).all();
     const found = results as Record<string, any>[];
 
     // The single-id form keeps its precise errors, because a client asking about
     // one pattern can act on "not found" and the bulk form cannot.
     if (body.ids === undefined) {
-      if (!found.length) return json({ ok: false, error: `No entry found with ID: ${ids[0]}` }, 404);
+      if (!found.length) return json({ ok: false, error: `No memory found with ID: ${ids[0]}` }, 404);
       if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-insight")) {
         return json({ ok: false, error: "Entry is not a derived insight" }, 400);
       }
     }
 
-    const result = await applyInsightResolution(env, ctx, auth.userId, found, ids.length, action, "rest");
+    const result = await applyInsightResolution(env, ctx, { actorId: auth.userId, channel: "rest" }, found, ids.length, action);
     return json({
       ok: true,
       action,
@@ -1457,47 +1464,40 @@ export async function handleAdminRoutes(
     const { results: toProcess } = await env.DB.prepare(
       // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
       `SELECT id, content, tags, source, created_at, workspace_id, actor_id FROM entries
-       WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}
+       WHERE ${PENDING_WHERE}
        ORDER BY created_at DESC LIMIT 25`
-    ).bind(graceCutoff).all();
+    ).bind(graceCutoff).all<PendingRow>();
 
     let processed = 0;
     let failed = 0;
 
-    for (const row of toProcess as Record<string, any>[]) {
+    for (const row of toProcess) {
       try {
-        await storeEntry(
-          env,
-          row.id as string,
-          row.content as string,
-          JSON.parse(row.tags as string),
-          row.source as string,
-          row.created_at as number,
-          // Without this the backfill embeds with DEFAULTS.EMBEDDING_MODEL while
-          // capture and recall use the configured one, writing vectors from the
-          // wrong model into the index, scores go quietly wrong, nothing throws.
-          cfg,
-          // This route repairs OTHER members' rows by design, the context comes
-          // from the row, never from `auth`. Stamping the admin's workspace here
-          // would move every repaired vector into the admin's own space.
-          { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
-        );
-        processed++;
+        // cfg carries the configured embedding model; indexPendingRow stamps the ROW's own
+        // workspace and author, never the admin's.
+        // False: the row changed content or workspace mid-embed; it stays pending for the next call.
+        if (await indexPendingRow(env, row, cfg)) processed++; else failed++;
       } catch (e) {
         console.error("Re-embed failed for entry", row.id, e);
         failed++;
       }
     }
 
-    // Same filter as the select above, or the loop never reaches zero: the
-    // dashboard presses this until `remaining` is 0, so counting rows the select
-    // refuses to process would spin until the batch-made-no-progress guard.
+    // Every still-unindexed row, not just the past-grace ones the select above can touch (adv-final
+    // MAJOR 2): a row inside its grace window is genuinely pending, not done, so reporting
+    // `remaining: 0` while it sits there would tell a caller — including the undo reply this
+    // backs — that indexing finished when it has not even started. oldest, of that same set,
+    // drives retryAfterMs: 0 once nothing is left, otherwise how long until the longest-waiting
+    // row leaves its grace window and this endpoint can actually make progress on it.
     const remaining = await env.DB.prepare(
-      // scope-exempt: admin repair backlog: must match the SELECT above or the loop never reaches zero
-      `SELECT COUNT(*) as count FROM entries WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}`
-    ).bind(graceCutoff).first() as Record<string, any> | null;
+      // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
+      `SELECT COUNT(*) as count, MIN(created_at) as oldest FROM entries WHERE vector_ids = '[]' AND ${INDEXABLE_SQL}`
+    ).first() as Record<string, any> | null;
+    const remainingCount = (remaining?.count as number) ?? 0;
+    const oldestCreatedAt = remaining?.oldest as number | null;
+    const retryAfterMs = remainingCount === 0 ? 0 : Math.max(0, (oldestCreatedAt as number) + graceMs(env) - Date.now());
 
-    return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+    return json({ processed, failed, remaining: remainingCount, retryAfterMs });
   }
 
   // POST /classify-pending
@@ -1520,17 +1520,21 @@ export async function handleAdminRoutes(
 
     let processed = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const row of toProcess as Record<string, any>[]) {
       try {
         // cfg carries the user's LLM_MODEL choice; without it this backfill
         // classifies with the shipped default and ignores their setting.
         const { canonical, kind } = await classifyEntry(row.content as string, env, cfg);
-        let tags: string[] = JSON.parse(row.tags as string);
+        const readTags: string = row.tags as string;
+        let tags: string[] = JSON.parse(readTags);
         if (kind) tags = withKind(tags, kind);
         if (canonical && getStatus(tags) === null && !hasCapsuleTag(tags)) tags = withStatus(tags, "canonical");
-        await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(tags), row.id).run();
-        processed++;
+        // versioning: exempt: hygiene, compare-and-set on the tags read (T-0089.10); a miss is skipped, not overwritten
+        const res = await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ? AND tags = ?`).bind(JSON.stringify(tags), row.id, readTags).run();
+        if ((res.meta.changes ?? res.meta.rows_written ?? 0) === 0) skipped++;
+        else processed++;
       } catch (e) {
         console.error("Classification backfill failed for entry", row.id, e);
         failed++;
@@ -1542,7 +1546,7 @@ export async function handleAdminRoutes(
       `SELECT COUNT(*) as count FROM entries WHERE ${UNCLASSIFIED_WHERE}`
     ).first() as Record<string, any> | null;
 
-    return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+    return json({ processed, failed, skipped, remaining: (remaining?.count as number) ?? 0 });
   }
 
   // POST /insights/accrue, run one accrual pass on demand, right now.

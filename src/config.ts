@@ -167,6 +167,12 @@ export const DEFAULTS = {
   // opt-in rather than opt-out. Consequences of leaving it off: Part B's implicit feedback
   // never accrues, and T-0043's golden set can only harvest from a brain that turned it on.
   RECALL_LOG: "off",
+
+  // ── Content versions and trash (src/memory/versions.ts, src/memory/trash.ts) ──
+  // Prior states kept per memory, newest first. The oldest fall off as new ones arrive.
+  VERSION_KEEP: 20,
+  // Days a forgotten memory waits in the trash before it is purged for good.
+  TRASH_RETENTION_DAYS: 14,
 } as const;
 
 // DEFAULTS is `as const` so the shipped values are pinned and a typo shows up
@@ -246,6 +252,8 @@ export const RULES: Record<ConfigKey, Rule> = {
   TIMEZONE: { kind: "string" },
   PUSH_CONTACT: { kind: "string" },
   RECALL_LOG: { kind: "string" },
+  VERSION_KEEP: { kind: "number", min: 5, max: 500, integer: true },
+  TRASH_RETENTION_DAYS: { kind: "number", min: 1, max: 365, integer: true },
 };
 
 /**

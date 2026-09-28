@@ -41,6 +41,7 @@ import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescu
 import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
 import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./keyword-rows";
+import { vectorSortKey } from "../vectorize/ids";
 import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
 import { applyOccupancyCap, CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates, liftFor } from "./source-trust";
 import { maybeLogRecall, type RecallLogChannel } from "./log";
@@ -637,7 +638,7 @@ export async function recallEntries(
 
   const semanticRankByParent = new Map<string, number>();
   [...results.matches]
-    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+    .sort((a, b) => b.score - a.score || vectorSortKey(a.id).localeCompare(vectorSortKey(b.id)))
     .forEach(match => {
       const parentId = ((match.metadata as any)?.parentId ?? match.id) as string;
       if (!semanticRankByParent.has(parentId)) semanticRankByParent.set(parentId, semanticRankByParent.size + 1);
@@ -725,7 +726,7 @@ export async function recallEntries(
   };
   const displayedDenseRank = new Map<string, number>();
   if (explain) {
-    [...results.matches].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).forEach(match => {
+    [...results.matches].sort((a, b) => b.score - a.score || vectorSortKey(a.id).localeCompare(vectorSortKey(b.id))).forEach(match => {
       const id = parentOfMatch(match as VectorizeMatch);
       if (scopedParents.has(id) && !displayedDenseRank.has(id)) displayedDenseRank.set(id, displayedDenseRank.size + 1);
     });
@@ -1039,7 +1040,7 @@ export async function recallEntries(
   });
 
   const sortedExpanded = expandedMatches
-    .sort((a, b) => b.match.score - a.match.score || a.match.id.localeCompare(b.match.id));
+    .sort((a, b) => b.match.score - a.match.score || vectorSortKey(a.match.id).localeCompare(vectorSortKey(b.match.id)));
   if (internal.diagnostics) {
     internal.diagnostics.eligibleRelatedIds = sortedExpanded
       .filter(entry => entry.eligible && !headParentIds.includes(entry.match.id))
@@ -1230,6 +1231,7 @@ export async function recallEntries(
   if (presentedDirectIds.size) {
     const bumpIds = [...presentedDirectIds];
     ctx.waitUntil(
+      // versioning: exempt: counter, not undoable content
       env.DB.prepare(
         `UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (${bumpIds.map(() => "?").join(", ")})`
       ).bind(...bumpIds).run()

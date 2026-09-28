@@ -89,6 +89,7 @@ export function holdStatements<C>(env: Env, deps: HoldDeps<C>, input: HoldInput<
   const idParam = p.add(input.entryId);
   const guard = input.guard ? ` AND (${input.guard(p)})` : "";
   const update = env.DB.prepare(
+    // versioning: snapshot — the snapshot above rides in the same batch, under the same guard
     // scope-exempt: by-id: appended to the batch of a write that already resolved and authorized this row; the write's own guard is repeated here
     `UPDATE entries SET tags = ${tagsParam}, vector_ids = '[]' WHERE id = ${idParam}${guard}`,
   ).bind(...p.values());

@@ -103,6 +103,11 @@ const SWEEP_NIGHT_D1_STATEMENT_BUDGET = NIGHTLY_D1_STATEMENT_BUDGET + 1;
 // night below. The term is kept as the honest worst case if the read ever has to stand alone (+1 per run,
 // never per tag; the per-tag check it replaced cost up to +COMPRESSION_MAX_TAGS_PER_RUN).
 const HELD_DIGEST_D1_WORST_CASE = 1;
+// T-0089.1.1 close-out: the nightly vectorize-pending pass (src/vectorize/pending.ts) costs its candidate
+// read on every night, plus ONE write batch on a night with deferred rows (config resolves only then).
+// A row that loses its content CAS to a concurrent edit pays restoreRowVectors' repair on top, rarely.
+// Round 3: plus the content read of the rows it chose (it plans from lengths first): 3.
+const VECTORIZE_PENDING_D1_WORST_CASE = 3;
 // The platform ceiling this suite's one external caller — the integration
 // sync's feed fetch — actually has to respect (see "the integration schedule"
 // tests below).
@@ -293,7 +298,7 @@ describe("nightly cron D1 subrequest cost", () => {
 
     expect(db.entries.filter(e => JSON.parse(e.tags).includes("synthesized")).length).toBeGreaterThan(0);
     expect(db.entries.filter(e => e.staleness_checked_at != null)).toHaveLength(25);
-    expect(statements.length).toBeLessThanOrEqual(SWEEP_NIGHT_D1_STATEMENT_BUDGET + HELD_DIGEST_D1_WORST_CASE);
+    expect(statements.length).toBeLessThanOrEqual(SWEEP_NIGHT_D1_STATEMENT_BUDGET + HELD_DIGEST_D1_WORST_CASE + VECTORIZE_PENDING_D1_WORST_CASE);
   });
 
   // The exact-pin tests below fix the clock rather than trusting the real
@@ -335,7 +340,10 @@ describe("nightly cron D1 subrequest cost", () => {
     // runFtsBackfill's liveness check, ready GET, cursor GET, rowid SELECT,
     // and ready PUT" (8); it now reads liveness, integrity-check, ready
     // GET, cursor GET, rowid SELECT, latch-guard batch, ready PUT (7).
-    expect(statements.length).toBe(22);
+    // MOVED 22 -> 24 (T-0089.1.2): +1 trash purge candidate read, +1 pending-member-removal probe.
+    // The purge resolves the config only when something is old enough to purge, so it adds no KV read.
+    // MOVED 24 -> 25 (T-0089.1.1 close-out): the vectorize-pending candidate read; nothing deferred, no batch.
+    expect(statements.length).toBe(25);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -356,7 +364,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // Exact pin: the same 22 as an ordinary night, plus the ONE dangling-edge
     // DELETE the sweep adds once a week. If this number moves, say why in the
     // same commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(23);
+    // MOVED 23 -> 25 (T-0089.1.2): the same two statements.
+    // MOVED 25 -> 26 (T-0089.1.1 close-out): the vectorize-pending candidate read.
+    expect(statements.length).toBe(26);
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -396,7 +406,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // drifted rows, and the T-0065 parity batch above finds no per-workspace
     // drift either, so its own repair batch never fires. If this number
     // moves, say why in the same commit.
-    expect(statements.length).toBe(24);
+    // MOVED 24 -> 26 (T-0089.1.2): the trash purge read and the pending-removal probe.
+    // MOVED 26 -> 27 (T-0089.1.1 close-out): the vectorize-pending candidate read.
+    expect(statements.length).toBe(27);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

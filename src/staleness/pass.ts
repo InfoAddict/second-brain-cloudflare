@@ -81,6 +81,7 @@ function casWrite(env: Env, snap: Snapshot, now: number): { stmt: D1PreparedStat
   const wasFlagged = hasStaleAsOf(originalTags);
   const nextTagsArr = classify(originalTags, snap.content);
   const flags = !wasFlagged && hasStaleAsOf(nextTagsArr);
+  // versioning: exempt: hygiene, compare-and-set on the tags read; a miss is skipped, not overwritten
   const stmt = env.DB.prepare(
     `UPDATE entries SET tags = ?, staleness_checked_at = ? WHERE id = ? AND tags = ? AND content = ?`,
   ).bind(JSON.stringify(nextTagsArr), now, snap.id, snap.tags, snap.content);
@@ -91,6 +92,7 @@ function casWrite(env: Env, snap: Snapshot, now: number): { stmt: D1PreparedStat
 // sorts first on every future pass and camps one of the 25 slots indefinitely. Any row the
 // pass inspects must have its cursor moved, verdict or no verdict.
 function cursorWrite(env: Env, id: string, now: number): D1PreparedStatement {
+  // versioning: exempt: hygiene bookkeeping (moves the nightly pass's own cursor, not content)
   return env.DB.prepare(`UPDATE entries SET staleness_checked_at = ? WHERE id = ?`).bind(now, id);
 }
 

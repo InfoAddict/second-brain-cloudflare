@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { intParam, json, readWorkspaceParam, readTeamQueryParam } from "../lib/http";
 import { getReadableEntry } from "../lib/entry-access";
 import { requireIdentity } from "../lib/identity";
+import { readableWorkspaces } from "../lib/scope";
 import { createEdge, deleteEdge, isValidEdgeType, kindMismatchMessage, kindOfRow, kindsAllowEdge, CROSS_WORKSPACE_LINK_MESSAGE } from "../graph/edges";
 import { EDGE_TYPES } from "../graph/types";
 import { buildGraph, getConnections } from "../graph/traverse";
@@ -34,9 +35,9 @@ export async function handleGraphRoutes(
     // tags ride along on the reads this route already makes, so the kind gate
     // below costs no extra query.
     const source = await getReadableEntry(env, auth, sourceId, "id, workspace_id, actor_id, tags");
-    if (!source) return json({ ok: false, error: `No entry found with ID: ${sourceId}` }, 404);
+    if (!source) return json({ ok: false, error: `No memory found with ID: ${sourceId}` }, 404);
     const target = await getReadableEntry(env, auth, targetId, "id, workspace_id, actor_id, tags");
-    if (!target) return json({ ok: false, error: `No entry found with ID: ${targetId}` }, 404);
+    if (!target) return json({ ok: false, error: `No memory found with ID: ${targetId}` }, 404);
     // Same-workspace only. edges.workspace_id is one denormalized column copied
     // from the source entry, and a share re-stamps it to follow the entry that
     // moved — so an edge whose endpoints started in different workspaces has no
@@ -56,7 +57,7 @@ export async function handleGraphRoutes(
       return json({ ok: false, error: kindMismatchMessage(type), code: "kind_not_allowed" }, 400);
     }
 
-    const edge = await createEdge(sourceId, targetId, type, { provenance: "explicit", weight: 1.0, workspaceId: source.workspace_id }, env);
+    const edge = await createEdge(sourceId, targetId, type, { provenance: "explicit", weight: 1.0, workspaceId: source.workspace_id, readableWorkspaceIds: readableWorkspaces(auth) }, env);
     if (!edge) return json({ ok: false, error: "Cannot link an entry to itself" }, 400);
     // T-0089.5.2 Part B: a link on a recently-recalled id is implicit feedback that
     // the recall was used. Checked for both ends together (one shared read-then-write,
@@ -84,9 +85,9 @@ export async function handleGraphRoutes(
     }
 
     const source = await getReadableEntry(env, auth, sourceId);
-    if (!source) return json({ ok: false, error: `No entry found with ID: ${sourceId}` }, 404);
+    if (!source) return json({ ok: false, error: `No memory found with ID: ${sourceId}` }, 404);
     const target = await getReadableEntry(env, auth, targetId);
-    if (!target) return json({ ok: false, error: `No entry found with ID: ${targetId}` }, 404);
+    if (!target) return json({ ok: false, error: `No memory found with ID: ${targetId}` }, 404);
 
     const deleted = await deleteEdge(sourceId, targetId, type, env);
     return json({ ok: true, deleted });

@@ -115,7 +115,7 @@ describe("resolve: one item per call, statement pins", () => {
   it("rejects list-shaped ids and never touches a second row", async () => {
     sqlite.seed({ id: "a", content: "A", createdAt: 1, tags: ["task"] });
     sqlite.seed({ id: "b", content: "B", createdAt: 1, tags: ["task"] });
-    expect(await mcp("resolve", { id: "a,b", action: "done" })).toMatch(/No entry found/);
+    expect(await mcp("resolve", { id: "a,b", action: "done" })).toMatch(/No memory found/);
     expect(await mcp("resolve", { id: ["a", "b"], action: "done" })).toMatch(/invalid|expected string/i);
     expect(state("a").tags).not.toContain("task:done");
     expect(state("b").tags).not.toContain("task:done");

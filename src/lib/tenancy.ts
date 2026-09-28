@@ -124,6 +124,7 @@ async function bootstrap(env: Env): Promise<TenantRoots> {
 
   // One-time legacy backfill for pre-team rows.
   statements.push(
+    // versioning: exempt: one-time '' backfill, not a user or agent change
     env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE workspace_id = ''`).bind(owner.personalWorkspaceId),
     env.DB.prepare(`UPDATE edges SET workspace_id = ? WHERE workspace_id = ''`).bind(owner.personalWorkspaceId),
   );

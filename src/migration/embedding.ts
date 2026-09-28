@@ -16,11 +16,10 @@
  *
  * The obvious progress marker is `entries.vector_ids`, the way
  * `POST /vectorize-pending` uses it — select the rows that still read `'[]'`.
- * That does not work here, and the reason is worth stating because it is not
- * obvious: vector ids are **deterministic**. `storeEntry` derives them from the
- * entry id and chunk count, so re-embedding unchanged content into a brand new
- * index produces byte-identical id strings. `vector_ids` was already non-empty
- * before the migration and stays non-empty throughout.
+ * That does not work here: `vector_ids` was already non-empty before the
+ * migration (it names the old index's vectors) and stays non-empty throughout.
+ * (3.7's ids were deterministic, so they did not even change; since T-0089.1.1
+ * every upload mints fresh ids, but the column is non-empty either way.)
  *
  * An entry the migration never reached therefore reads as "vectorized" in D1
  * while the live index holds nothing for it. `/vectorize-pending` cannot see it,
@@ -170,7 +169,7 @@ function pageSql(hasCursor: boolean): string {
     ? `AND (created_at > ? OR (created_at = ? AND id > ?))`
     : "";
   // scope-exempt: one-time re-embed migration: admin-triggered and deployment-wide; the rows it selects go to the embedder, and only counts reach the response
-  return `SELECT id, content, tags, source, created_at, workspace_id, actor_id
+  return `SELECT id, content, tags, source, created_at, workspace_id, actor_id, vector_ids
             FROM entries
            WHERE ${NOT_DEPRECATED} ${after}
            ORDER BY created_at ASC, id ASC
@@ -295,7 +294,7 @@ export async function runBatch(
       // Cron path, no request identity: the context comes from the row being
       // repaired, not the caller, so a re-embed can never relocate an entry
       // between workspaces.
-      await storeEntry(
+      const stored = await storeEntry(
         env,
         row.id as string,
         content,
@@ -304,7 +303,11 @@ export async function runBatch(
         row.created_at as number,
         config,
         { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
+        { expectedVectorIds: (row.vector_ids as string) ?? "[]" },
       );
+      // Lost the compare-and-set (content edited, or the row shared or moved during the embed): the
+      // upload is settled, and the cursor stays in front of this row so the next batch retries it.
+      if (stored.committed === false) { failed++; break; }
       processed++;
       // Only advance past entries that actually succeeded. A failed entry stays
       // in front of the cursor so a later run retries it.

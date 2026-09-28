@@ -78,28 +78,6 @@ export async function readStreamText(stream: ReadableStream): Promise<string> {
   return text;
 }
 
-/**
- * One env.AI.run call embedding every text in `texts`, in order. Standing memory (Track 7) uses this to embed the
- * raw query alongside recall's distilled one in the same call, so firing costs no extra aiCalls.
- */
-export async function embedMany(
-  texts: readonly string[],
-  env: Env,
-  config: Readonly<Config> = DEFAULTS,
-): Promise<number[][]> {
-  // bge-m3 rejects input past its token limit unless told to truncate; the
-  // bge-en models have no such switch and reject unknown fields. Applied as a
-  // defensive default (controller ruling) — live measurement against
-  // Workers AI wasn't possible in the environment that authored this; see
-  // the #326 spec, §10.6.
-  const input = config.EMBEDDING_MODEL === "@cf/baai/bge-m3"
-    ? { text: texts, truncate_inputs: true }
-    : { text: texts };
-  // Workers AI requires `as any` here — the SDK types don't cover all models
-  const result = (await env.AI.run(config.EMBEDDING_MODEL as any, input as any)) as any;
-  return result.data as number[][];
-}
-
 export async function embed(
   text: string,
   env: Env,
@@ -107,4 +85,32 @@ export async function embed(
 ): Promise<number[]> {
   const [vector] = await embedMany([text], env, config);
   return vector;
+}
+
+/** Texts per embedding call. The bge-*-en-v1.5 schemas allow 100 (maxItems, Workers AI docs,
+ * checked 2026-09-27); bge-m3 documents no limit, so it gets a conservative 25. */
+export function embedBatchSize(model: string): number {
+  return /^@cf\/baai\/bge-(small|base|large)-en-v1\.5$/.test(model) ? 100 : 25;
+}
+
+/**
+ * Embeds every text in `texts`, in order, embedBatchSize(model) per AI call: one call for the few texts
+ * standing memory (Track 7) and the single-text wrapper pass, a handful for a long note's chunks (T-0089.1.1). bge-m3
+ * gets truncate_inputs (it rejects over-length input otherwise; the bge-en models reject the field; #326
+ * spec, 10.6). Throws if a call returns a count that does not match its batch, so a caller never pairs a
+ * vector with the wrong text.
+ */
+export async function embedMany(texts: readonly string[], env: Env, config: Readonly<Config> = DEFAULTS): Promise<number[][]> {
+  const size = embedBatchSize(config.EMBEDDING_MODEL);
+  const out: number[][] = [];
+  for (let i = 0; i < texts.length; i += size) {
+    const batch = texts.slice(i, i + size);
+    const input = config.EMBEDDING_MODEL === "@cf/baai/bge-m3" ? { text: batch, truncate_inputs: true } : { text: batch };
+    // Workers AI requires `as any` here — the SDK types don't cover all models
+    const result = (await env.AI.run(config.EMBEDDING_MODEL as any, input as any)) as any;
+    const data = result?.data as number[][] | undefined;
+    if (!Array.isArray(data) || data.length !== batch.length) throw new Error(`embedMany: expected ${batch.length} vectors, got ${data?.length ?? 0}`);
+    out.push(...data);
+  }
+  return out;
 }

@@ -8,7 +8,7 @@ import { requireIdentity, type Identity } from "../lib/identity";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { scopeWrite, effectiveWriteTarget, readTeamParam, type WriteContext } from "../lib/scope";
 import { captureEntry } from "../capture/entry";
-import { appendToEntry, updateEntryContent } from "../capture/store";
+import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
 import { maybeMarkFollowed } from "../recall/log";
@@ -141,7 +141,7 @@ export async function handleCaptureRoutes(
         duplicate: true,
         matchId: result.matchId,
         score: parseFloat((result.score * 100).toFixed(1)),
-        message: "Near-exact duplicate detected — not stored",
+        message: "Near-exact duplicate detected. Not stored.",
       });
     }
     if (result.status === "contradiction") {
@@ -157,10 +157,10 @@ export async function handleCaptureRoutes(
       }, ignoredReservedTags));
     }
     if (result.status === "replaced") {
-      return json(withReservedNote({ ok: true, id: result.id, action: "replaced", message: "New memory replaced an outdated existing entry" }, ignoredReservedTags));
+      return json(withReservedNote({ ok: true, id: result.id, action: "replaced", message: "The new memory replaced an older one." }, ignoredReservedTags));
     }
     if (result.status === "merged") {
-      return json(withReservedNote({ ok: true, id: result.id, action: "merged", message: "Memories merged into a single combined entry" }, ignoredReservedTags));
+      return json(withReservedNote({ ok: true, id: result.id, action: "merged", message: "Merged into an existing memory." }, ignoredReservedTags));
     }
     if (result.status === "flagged") {
       return json(withReservedNote({
@@ -169,7 +169,7 @@ export async function handleCaptureRoutes(
         warning: "similar",
         matchId: result.matchId,
         score: parseFloat((result.score * 100).toFixed(1)),
-        message: "Stored but similar entry exists — tagged as duplicate-candidate",
+        message: "Stored but similar entry exists: tagged as duplicate-candidate",
       }, ignoredReservedTags));
     }
     // Additive: older clients ignore the extra field, and the dashboard uses it
@@ -196,7 +196,7 @@ export async function handleCaptureRoutes(
     const addition = body.addition.trim();
 
     const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, content, tags, source");
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     const denied = assertCanEditContent(identity, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
@@ -220,8 +220,10 @@ export async function handleCaptureRoutes(
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx);
+      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
     } catch (e) {
+      if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
+      if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
 
@@ -279,7 +281,7 @@ export async function handleCaptureRoutes(
     // the rest for itself, and keeping the mirror guard out here is what stops
     // capture/store.ts having to depend on the integrations registry (see #289).
     const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, source");
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     const denied = assertCanEditContent(identity, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
@@ -296,15 +298,25 @@ export async function handleCaptureRoutes(
     const { ignored: ignoredReservedTags } = stripNewReservedTags(replaceTags ?? []);
 
     const cfg = await resolveConfig(env);
-    const result = await updateEntryContent(env, id, newContent, cfg, updateVol.value, replaceTags, writeCtx);
+    const result = await updateEntryContent(env, id, newContent, cfg, updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string);
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {
-      return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
+    }
+
+    // R2-5: the row is still there, just moved out of this caller's reach mid-edit — a conflict to
+    // retry, not a memory that vanished.
+    if (result.status === "moved") {
+      return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
     }
 
     if (result.status === "reembed_failed") {
-      return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged — please try again." }, 500);
+      return json({ ok: false, error: "Couldn't update: search did not update. The memory is unchanged. Try again." }, 500);
+    }
+
+    if (result.status === "conflict") {
+      return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
     }
 
     // Only a write that happened is audited.
@@ -320,7 +332,7 @@ export async function handleCaptureRoutes(
         id,
         vectors: 0,
         semantic_unavailable: true,
-        message: `Updated, but not re-indexed for semantic search (Vectorize unavailable) — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
+        message: `Updated. Search by meaning is unavailable because Vectorize is unavailable, so it is findable by its words only. Fix: ${VECTORIZE_FIX_HINT}.`,
       }, ignoredReservedTags));
     }
 

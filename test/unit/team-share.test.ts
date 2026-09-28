@@ -55,7 +55,7 @@ describe("share semantics", () => {
       .bind(id!, owner.personalWorkspaceId).run();
 
     // Share: row AND edge re-namespace together.
-    const shared = await moveEntry(id!, "company", env, owner);
+    const shared = await moveEntry(id!, "company", env, owner, { actorId: owner.userId, channel: "rest" });
     expect(shared.status).toBe("shared");
     const row = await env.DB.prepare(`SELECT workspace_id FROM entries WHERE id = ?`).bind(id!).first<{ workspace_id: string }>();
     expect(row?.workspace_id).toBe(roots.companyWorkspaceId);
@@ -63,10 +63,10 @@ describe("share semantics", () => {
     expect(edge?.workspace_id).toBe(roots.companyWorkspaceId);
 
     // Already there: no change, no second move.
-    expect((await moveEntry(id!, "company", env, owner)).status).toBe("no_change");
+    expect((await moveEntry(id!, "company", env, owner, { actorId: owner.userId, channel: "rest" })).status).toBe("no_change");
 
     // Un-share: back to the mover's personal workspace.
-    const unshared = await moveEntry(id!, "personal", env, owner);
+    const unshared = await moveEntry(id!, "personal", env, owner, { actorId: owner.userId, channel: "rest" });
     expect(unshared.status).toBe("unshared");
     const back = await env.DB.prepare(`SELECT workspace_id FROM entries WHERE id = ?`).bind(id!).first<{ workspace_id: string }>();
     expect(back?.workspace_id).toBe(owner.personalWorkspaceId);
@@ -93,10 +93,10 @@ describe("share semantics", () => {
     const { id } = await env.DB.prepare(`SELECT id FROM entries LIMIT 1`).first<{ id: string }>() ?? {};
 
     // ...shares it to company...
-    expect((await moveEntry(id!, "company", env, memberB)).status).toBe("shared");
+    expect((await moveEntry(id!, "company", env, memberB, { actorId: memberB.userId, channel: "rest" })).status).toBe("shared");
 
     // ...and because B is the author, B can take it private again.
-    expect((await moveEntry(id!, "personal", env, memberB)).status).toBe("unshared");
+    expect((await moveEntry(id!, "personal", env, memberB, { actorId: memberB.userId, channel: "rest" })).status).toBe("unshared");
 
     // Now simulate authorship by someone else: actor field rewritten to u-a.
     await env.DB.prepare(`UPDATE entries SET actor_id = 'u-a', workspace_id = ? WHERE id = ?`)
@@ -109,7 +109,7 @@ describe("share semantics", () => {
       defaultShare: "" as const,
     };
     await seedMember(env, "u-c", "c-token", roots.companyWorkspaceId);
-    expect((await moveEntry(id!, "personal", env, memberC)).status).toBe("forbidden");
+    expect((await moveEntry(id!, "personal", env, memberC, { actorId: memberC.userId, channel: "rest" })).status).toBe("forbidden");
 
     const owner = {
       userId: roots.ownerUserId,
@@ -118,7 +118,7 @@ describe("share semantics", () => {
       companyWorkspaceIds: [roots.companyWorkspaceId],
       defaultShare: "" as const,
     };
-    const byAdmin = await moveEntry(id!, "personal", env, owner);
+    const byAdmin = await moveEntry(id!, "personal", env, owner, { actorId: owner.userId, channel: "rest" });
     expect(byAdmin.status).toBe("unshared");
     // The admin moved it into THEIR personal workspace, per scopeWrite.
     const row = await env.DB.prepare(`SELECT workspace_id FROM entries WHERE id = ?`).bind(id!).first<{ workspace_id: string }>();
@@ -143,7 +143,7 @@ describe("share semantics", () => {
       defaultShare: "" as const,
     };
     // Invisible ids read as absent — existence is not leaked through the error.
-    expect((await moveEntry(id!, "company", env, memberB)).status).toBe("not_found");
+    expect((await moveEntry(id!, "company", env, memberB, { actorId: memberB.userId, channel: "rest" })).status).toBe("not_found");
   });
 
   it("audits shares as immutable events", async () => {
@@ -163,7 +163,7 @@ describe("share semantics", () => {
     const { id } = await env.DB.prepare(`SELECT id FROM entries LIMIT 1`).first<{ id: string }>() ?? {};
     // Route-level audit: exercise the same helper the REST/MCP surfaces call.
     const { auditEvent } = await import("../../src/lib/audit");
-    const moved = await moveEntry(id!, "company", env, owner);
+    const moved = await moveEntry(id!, "company", env, owner, { actorId: owner.userId, channel: "rest" });
     auditEvent(env, ctx, { entryId: id!, actorId: owner.userId, event: moved.status === "shared" ? "shared" : "unshared", payload: { workspaceId: roots.companyWorkspaceId } });
     // waitUntil is synchronous here, so the insert has already been issued.
     const event = await env.DB.prepare(`SELECT entry_id, actor_id, event FROM entry_events ORDER BY created_at DESC LIMIT 1`).first<{ entry_id: string; actor_id: string; event: string }>();
@@ -189,7 +189,7 @@ describe("share semantics", () => {
       `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, '[]', 'api', ?, 'not-json', ?, ?)`
     ).bind("bad-vec-entry", "entry with a corrupted vector_ids column", Date.now(), owner.personalWorkspaceId, owner.userId).run();
 
-    const result = await moveEntry("bad-vec-entry", "company", env, owner);
+    const result = await moveEntry("bad-vec-entry", "company", env, owner, { actorId: owner.userId, channel: "rest" });
     expect(result.status).toBe("shared");
     if (result.status === "shared") expect(result.vectorIds).toEqual([]);
 
@@ -249,7 +249,7 @@ describe("a share carries every edge the entry is an endpoint of", () => {
        VALUES ('sym-first', 'aaa-shared', 'zzz-other', 'relates_to', 0.5, 'explicit', '{}', 1, 1, ?)`,
     ).bind(owner.personalWorkspaceId).run();
 
-    expect((await moveEntry("aaa-shared", "company", env, owner)).status).toBe("shared");
+    expect((await moveEntry("aaa-shared", "company", env, owner, { actorId: owner.userId, channel: "rest" })).status).toBe("shared");
 
     expect(await edgeRow("sym-first")).toEqual({
       source_id: "aaa-shared",
@@ -269,7 +269,7 @@ describe("a share carries every edge the entry is an endpoint of", () => {
        VALUES ('sym-second', 'aaa-other', 'zzz-shared', 'relates_to', 0.5, 'explicit', '{}', 1, 1, ?)`,
     ).bind(owner.personalWorkspaceId).run();
 
-    expect((await moveEntry("zzz-shared", "company", env, owner)).status).toBe("shared");
+    expect((await moveEntry("zzz-shared", "company", env, owner, { actorId: owner.userId, channel: "rest" })).status).toBe("shared");
 
     // Endpoints untouched: only the layer changed.
     expect(await edgeRow("sym-second")).toEqual({
@@ -292,7 +292,7 @@ describe("a share carries every edge the entry is an endpoint of", () => {
        VALUES ('asym', 'zzz-superseder', 'aaa-shared', 'supersedes', 1.0, 'system', '{}', 1, 1, ?)`,
     ).bind(owner.personalWorkspaceId).run();
 
-    expect((await moveEntry("aaa-shared", "company", env, owner)).status).toBe("shared");
+    expect((await moveEntry("aaa-shared", "company", env, owner, { actorId: owner.userId, channel: "rest" })).status).toBe("shared");
 
     expect(await edgeRow("asym")).toEqual({
       source_id: "zzz-superseder",
@@ -312,7 +312,7 @@ describe("a share carries every edge the entry is an endpoint of", () => {
        VALUES ('bystander', 'aaa-one', 'bbb-two', 'relates_to', 0.5, 'explicit', '{}', 1, 1, ?)`,
     ).bind(owner.personalWorkspaceId).run();
 
-    await moveEntry("zzz-shared", "company", env, owner);
+    await moveEntry("zzz-shared", "company", env, owner, { actorId: owner.userId, channel: "rest" });
 
     expect((await edgeRow("bystander"))?.workspace_id).toBe(owner.personalWorkspaceId);
   });
@@ -330,10 +330,10 @@ describe("a share carries every edge the entry is an endpoint of", () => {
        VALUES ('solo', 'aaa-solo', 'zzz-solo', 'relates_to', 0.5, 'explicit', '{}', 1, 1, ?)`,
     ).bind(owner.personalWorkspaceId).run();
 
-    await moveEntry("zzz-solo", "company", env, owner);
+    await moveEntry("zzz-solo", "company", env, owner, { actorId: owner.userId, channel: "rest" });
     expect((await edgeRow("solo"))?.workspace_id).toBe(roots.companyWorkspaceId);
 
-    await moveEntry("zzz-solo", "personal", env, owner);
+    await moveEntry("zzz-solo", "personal", env, owner, { actorId: owner.userId, channel: "rest" });
     expect(await edgeRow("solo")).toEqual({
       source_id: "aaa-solo",
       target_id: "zzz-solo",

@@ -295,6 +295,66 @@ CREATE TABLE IF NOT EXISTS recall_log (
 -- (Part B) and the retention purge (oldest-first). One index serves both.
 CREATE INDEX IF NOT EXISTS idx_recall_log_ws ON recall_log(workspace_id, created_at DESC);
 
+-- Content history (4.0, T-0089.1.1). One row per retired state of an entry,
+-- written in the same batch as the change. Must stay in step with src/db/init.ts.
+CREATE TABLE IF NOT EXISTS entry_versions (
+  id           INTEGER PRIMARY KEY,           -- rowid alias: no extra index row per insert
+  entry_id     TEXT NOT NULL,
+  workspace_id TEXT NOT NULL DEFAULT '',      -- the entry's workspace at change time; decides who may read it
+  seq          INTEGER NOT NULL,              -- 1, 2, 3 per entry, newest highest, no gaps above the oldest kept
+  content      TEXT,                          -- full prior text, or NULL when prior_length is set
+  prior_length INTEGER,                       -- prior text = first N (Unicode) characters of the next newer state
+  prior_length_utf16 INTEGER,                 -- same boundary in UTF-16 units, when the writer had it to give (T-0089.1.1, ADV-10);
+                                               -- NULL on a full copy, or on a delta an older writer left the JS-side boundary out of
+  tags         TEXT NOT NULL,                 -- prior tags (JSON), always full
+  state        TEXT NOT NULL DEFAULT '{}',    -- prior non-text state (JSON): when_at, when_kind, when_source, when_label
+  actor_id     TEXT NOT NULL DEFAULT '',      -- who made the change that retired this state
+  channel      TEXT NOT NULL DEFAULT '',      -- rest | mcp | system:<job>
+  reason       TEXT NOT NULL,                 -- update | append | merge | replace | rollup | status | due | mirror | revert
+  meta         TEXT NOT NULL DEFAULT '{}',
+  valid_from   INTEGER,                       -- when the prior state became current
+  created_at   INTEGER NOT NULL,              -- when the prior state was retired
+  CHECK ((content IS NULL) <> (prior_length IS NULL)),
+  CHECK (prior_length_utf16 IS NULL OR prior_length IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entry_versions_entry ON entry_versions(entry_id, seq);
+
+-- Soft delete (4.0, T-0089.1.2). A forgotten entry waits here for
+-- TRASH_RETENTION_DAYS. Must stay in step with src/db/init.ts.
+CREATE TABLE IF NOT EXISTS entries_trash (
+  id           TEXT PRIMARY KEY,              -- the original entry id
+  workspace_id TEXT NOT NULL DEFAULT '',      -- scopes restore and permanent delete
+  actor_id     TEXT NOT NULL DEFAULT '',      -- the entry's author, for the permission check
+  content      TEXT NOT NULL,                 -- kept out of row_json so escaping cannot pass the 2 MB row limit
+  row_json     TEXT NOT NULL,                 -- every entries column except content and vector_ids
+  edges_json   TEXT NOT NULL DEFAULT '[]',    -- edges at either endpoint at deletion time
+  vector_ids   TEXT NOT NULL DEFAULT '[]',    -- the live row's own vector ids at deletion time; not
+                                               -- rederivable, since a short append's chunk is
+                                               -- id-update-<ts>, not a function of content — kept
+                                               -- out of row_json on purpose, like content
+  deleted_at   INTEGER NOT NULL,
+  deleted_by   TEXT NOT NULL DEFAULT '',
+  channel      TEXT NOT NULL DEFAULT '',
+  reason       TEXT NOT NULL DEFAULT 'forget', -- forget | mirror | disconnect
+  nonce        TEXT NOT NULL DEFAULT ''        -- per-row identity (adv-final MAJOR 1): a
+                                                -- purge can free `id` and a fresh forget can
+                                                -- reuse it, with SQLite reusing its own rowid
+                                                -- on top; every trash mutation pins to this,
+                                                -- not to id (or rowid) alone. '' means this row
+                                                -- predates the column: no mutation may treat an
+                                                -- empty nonce as a match, only as "conflict".
+);
+
+CREATE INDEX IF NOT EXISTS idx_entries_trash_deleted ON entries_trash(deleted_at);
+
+-- R5 (budget audit, MINOR, 20-free-tier-ledger.md): listTrash's WHERE clause (src/memory/
+-- trash-list.ts) scopes by workspace_id and orders by deleted_at DESC. Without this, the only
+-- index available (deleted_at above) makes SQLite walk the whole table in deleted_at order,
+-- filtering every row for a workspace match — 1,193 rows read for one 50-row page at 2,000 trash
+-- rows, 5% visible. This lets it seek directly to the reader's own readable workspaces instead.
+CREATE INDEX IF NOT EXISTS idx_entries_trash_workspace_deleted ON entries_trash(workspace_id, deleted_at DESC);
+
 -- Lexical recall index (FTS5, trigram). Plain table, not external-content: entries
 -- has a TEXT PK, so triggers mirror entries.rowid into entries_fts.rowid and sync
 -- by rowid — an O(1) delete instead of a content-table scan. Must stay in step

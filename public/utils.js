@@ -180,6 +180,8 @@ function relativeTime(ts) {
  */
 const SOURCE_BADGE_I18N = {
   'claude code': 'common.sourceClaudeCode',
+  'codex session': 'common.sourceCodexSession',
+  'cursor session': 'common.sourceCursorSession',
   cli: 'common.sourceCli',
   email: 'common.sourceEmail',
   chat: 'common.sourceChat',
@@ -249,6 +251,36 @@ function sourceBadge(source) {
   // the width of the meta line.
   const label = raw.length > 18 ? raw.slice(0, 17) + '…' : raw
   return { icon: 'ti-writing', label }
+}
+
+/**
+ * Human names for a provider id, for use in a sentence ({provider} in
+ * trash.removedBySync, trash.mirrorBody, history.bySync, the undo.mirror
+ * toast): "by the Notion sync", not "by the notion sync". Badges
+ * (sourceBadge above) stay lowercase on purpose; this is prose only.
+ *
+ * The synced-integration entries mirror src/integrations/index.ts's
+ * registry (test/unit/provider-name-parity.test.ts pins that one-way: every
+ * registry id must be here, though not every id here has to be a synced
+ * integration - github, git-hook and obsidian are source values this table
+ * also names in a sentence without being something a person "connects").
+ * An id with no entry passes through unchanged rather than showing nothing.
+ */
+const PROVIDER_NAMES = {
+  notion: 'Notion',
+  'calendar-google': 'Google Calendar',
+  'calendar-outlook': 'Outlook Calendar',
+  'calendar-icloud': 'iCloud Calendar',
+  'email-gmail': 'Gmail',
+  'email-icloud': 'iCloud Mail',
+  obsidian: 'Obsidian',
+  github: 'GitHub',
+  'git-hook': 'Git',
+}
+
+function providerName(source) {
+  if (!source) return source
+  return PROVIDER_NAMES[source] || source
 }
 
 function toDateStr(d) {
@@ -1047,5 +1079,5 @@ if (typeof module !== 'undefined' && module.exports) {
   // downloadTextFile is deliberately absent: it needs a live URL and Blob, and
   // it is exercised through its two callers (exportMemories in js/settings.js
   // and exportActivityCsv in js/activity.js) rather than in isolation.
-  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, projectChipsHtml, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml };
+  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, projectChipsHtml, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml, providerName };
 }

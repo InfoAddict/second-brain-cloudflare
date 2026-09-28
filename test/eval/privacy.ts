@@ -49,6 +49,9 @@ export const DATA_ALLOWLIST: readonly RegExp[] = [
   /^test\/eval\/data\/core\/manifest\.json$/,
   /^test\/eval\/data\/core\/replay\.[\w.-]+\.jsonl\.gz$/,
   /^test\/eval\/data\/baselines\/[\w.-]+\.json$/,
+  // T-0089.2.6: the recorded (not locked) pre-Track-2 temporal baseline the as-of gate proofs transform and compare
+  // against. Fictional data (the temporal corpus is synthetic, seed 40891), same as every other committed fixture.
+  /^test\/eval\/data\/recorded\/[\w.-]+\.json$/,
 ];
 const DATA_PREFIX = "test/eval/data/";
 

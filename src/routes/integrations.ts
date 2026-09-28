@@ -11,16 +11,15 @@ import {
 import type { IntegrationRecord } from "../integrations";
 import type { Env } from "../env";
 import { json } from "../lib/http";
-import { AUDIT_BATCH_MAX, writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { adminAuditEvent, writeAdminEvent } from "../lib/admin-audit";
 import { requireAdmin, requireIdentity } from "../lib/identity";
 import { listRoster } from "../lib/team-admin";
-import { forgetEntry } from "../capture/lifecycle";
-import { getReadableEntry, assertCanMutateEntry } from "../lib/entry-access";
 import { makeMirrorStore, mirrorWriteContext } from "../integrations/mirror";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
 import { ensureTenantBootstrap } from "../lib/tenancy";
-import { VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
+import { DISCONNECT_PURGE_PAGE, VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
+import { trashMirroredEntries } from "../memory/trash";
+import { scopeWhere } from "../lib/scope";
 
 // Batch size for POST /integrations/:provider/move. No external fetch on this
 // path (unlike a sync batch), so the item-count ceiling is sized for D1 cost
@@ -174,6 +173,9 @@ export async function handleIntegrationsRoutes(
       if (!record) {
         return json({ ok: false, error: `${provider.name} is not connected` }, 404);
       }
+      if (record.disconnecting) {
+        return json({ ok: false, error: `${provider.name} is being disconnected` }, 409);
+      }
       // The same context the nightly cron uses. Built from the caller before,
       // which meant one connection mirrored into different workspaces depending
       // on who pressed "Sync now" — so a page synced by hand and the same page
@@ -246,7 +248,7 @@ export async function handleIntegrationsRoutes(
       const roots = await ensureTenantBootstrap(env);
       if (auth.userId !== roots.ownerUserId) {
         return json(
-          { ok: false, error: "Only the brain's owner can move memories this connection already synced — they live in the owner's own workspace." },
+          { ok: false, error: "Only the brain's owner can move memories this connection already synced: they live in the owner's own workspace." },
           403,
         );
       }
@@ -263,7 +265,7 @@ export async function handleIntegrationsRoutes(
       // Nothing moves for this page; the caller must re-confirm.
       if (body.expectedTarget && body.expectedTarget !== target) {
         return json(
-          { ok: false, error: "The layer changed since this move was confirmed — reconfirm to continue." },
+          { ok: false, error: "The layer changed since this move was confirmed. Reconfirm to continue." },
           409,
         );
       }
@@ -297,7 +299,7 @@ export async function handleIntegrationsRoutes(
       for (const key of batchKeys) {
         const mapped = record.itemMap[key];
         try {
-          const result = await moveEntry(mapped.entryId, target, env, auth);
+          const result = await moveEntry(mapped.entryId, target, env, auth, { actorId: auth.userId, channel: "rest" });
           d1Spent += 1;
           switch (result.status) {
             case "shared":
@@ -310,17 +312,34 @@ export async function handleIntegrationsRoutes(
               // Carries vectorIds/workspaceId too (share.ts) so a re-run over
               // an already-moved entry can still repair a stale Vectorize
               // stamp left by a previous failed/skipped re-stamp.
+              // moveEntry can reach no_change straight off its read (cost 1,
+              // already counted above) or after a missed batch whose liveness
+              // re-read found the row already at the target (cost 3: read +
+              // batch + re-read). The status alone doesn't say which; charge
+              // the worst case so the vectorize loop below never overspends.
               alreadyThere++;
+              d1Spent += 2;
               toRestamp.push({ vectorIds: result.vectorIds, workspaceId: result.workspaceId });
               break;
             case "not_found":
-              // A stale itemMap pointer (deleted elsewhere) or an entry outside
-              // the owner's own readable set — either way, not a move, and not
-              // a reason to abort the rest of the batch.
+              // A stale itemMap pointer (deleted elsewhere), an entry outside the
+              // owner's own readable set (cost 1, already counted above), or a
+              // row gone by the time a missed batch's liveness re-read ran (cost
+              // 3). Same can't-tell-which-path reasoning as no_change above.
               missing++;
+              d1Spent += 2;
               break;
             case "forbidden":
               refused++;
+              break;
+            case "conflict":
+              // The row moved (or was forgotten and re-captured) between this call's read and its
+              // batch — the same class of transient race the disconnect-purge tests already cover
+              // elsewhere in this route. Counted as missing for this pass; the next sync's own
+              // fresh read retries it. Always reached after a missed batch, so it always costs 3:
+              // the read, the batch, and the widened liveness re-read.
+              missing++;
+              d1Spent += 2;
               break;
           }
         } catch (e) {
@@ -396,52 +415,66 @@ export async function handleIntegrationsRoutes(
 
     // disconnect — remove the connection. Mirrored memories are kept
     // (they're the user's data) unless purge=true.
-    let body: { purge?: boolean } = {};
+    let body: { purge?: boolean; cursor?: unknown } = {};
     try { body = await request.json(); } catch { /* empty body — keep memories */ }
     const record = await loadIntegration(env, provider.id);
     if (!record) return json({ ok: false, error: `${provider.name} is not connected` }, 404);
 
+    // A purge goes through the trash in bounded, resumable pages: at most DISCONNECT_PURGE_PAGE ids a call,
+    // each answered 202 { done: false, next_cursor } until the last page, which removes the connection.
     let purged = 0;
     let skipped = 0;
-    let purgeAudit: AuditEventInput[] = [];
-    // Written per chunk of deletions, awaited, and before the connection is removed, so a
-    // throw or a dead invocation loses at most the chunk in flight, never the whole trail.
-    const flushPurgeAudit = async () => {
-      const events = purgeAudit;
-      purgeAudit = [];
-      await writeAuditEvents(env, events);
-    };
     if (body.purge) {
-      for (const mapped of Object.values(record.itemMap)) {
-        try {
-          // Same guard /forget applies, for the same reason. `forgetEntry` deletes
-          // by id with no workspace clause, and the integration record is one
-          // deployment-wide blob every member can reach, so an unguarded purge let
-          // any member delete mirrored rows out of a colleague's private workspace —
-          // rows they could not read through /entry, edit through /update, or delete
-          // through /forget. A purge now removes only what this caller could have
-          // deleted one at a time; anything else is left standing and counted.
-          const row = await getReadableEntry(env, auth, mapped.entryId);
-          if (!row || assertCanMutateEntry(auth, row)) { skipped++; continue; }
-          const r = await forgetEntry(mapped.entryId, env);
-          if (r.status === "deleted") {
-            purged++;
-            purgeAudit.push({
-              entryId: mapped.entryId,
-              actorId: auth.userId,
-              event: "deleted",
-              payload: { reason: "disconnect", provider: provider.id, deletedVectors: r.vectorCount, channel: "rest" },
-            });
-          } else {
-            // Gone already (a racing sync or delete): not ours to count or audit, but the totals must add up.
-            skipped++;
-          }
-        } catch (e) {
-          console.error("Mirror purge failed (non-fatal):", e);
-        }
-        if (purgeAudit.length >= AUDIT_BATCH_MAX) await flushPurgeAudit();
+      if (body.cursor !== undefined && typeof body.cursor !== "string") {
+        return json({ ok: false, error: "cursor must be a string" }, 400);
       }
-      await flushPurgeAudit();
+      const cursor = body.cursor;
+      // A repeat with the SAME cursor (the response to this exact page was lost, and the client
+      // retried with the cursor it already had) must not reprocess: the ids on this page are
+      // already trashed from the first, successful attempt, and re-adding them to the persisted
+      // tally double-counts them (round 2 adversary — a 600-item purge reporting 800). Return the
+      // same answer this page already produced, unchanged.
+      const repeat = cursor !== undefined && record.disconnecting?.fromCursor === cursor;
+      if (repeat && record.disconnecting!.nextCursor !== undefined) {
+        const { purged: p, skipped: s, nextCursor } = record.disconnecting!;
+        return json({ ok: true, done: false, purged: p, skipped: s, next_cursor: nextCursor }, 202);
+      }
+      if (repeat) {
+        ({ purged, skipped } = record.disconnecting!);
+      } else {
+        // A restart without a cursor (the dashboard reloaded mid-purge and called back in from
+        // scratch) resets the running total to zero, not to `record`'s own disconnecting field —
+        // that field is this same record, loaded before the reset below runs, so it still carries
+        // the PREVIOUS run's totals. Using it here double-counted already-purged pages as skipped
+        // on every restart (ADV-trash-9).
+        const tally = cursor === undefined ? { purged: 0, skipped: 0 } : (record.disconnecting ?? { purged: 0, skipped: 0 });
+        if (cursor === undefined) {
+          // Syncs skip a record marked disconnecting, so none re-creates memories mid-purge.
+          await updateIntegration(env, provider.id, (r) => { r.disconnecting = { purged: 0, skipped: 0 }; });
+        }
+        const keys = Object.keys(record.itemMap).sort();
+        const remainingKeys = cursor === undefined ? keys : keys.filter((k) => k > cursor);
+        const page = remainingKeys.slice(0, DISCONNECT_PURGE_PAGE);
+        const pageIds = page.map((k) => record.itemMap[k].entryId);
+        // A restart without a cursor re-walks pages this same purge already finished (its own trash
+        // rows, not a foreign delete): trashMirroredEntries only sees "not live" and would count them
+        // as skipped, understating purged and overstating kept on every restart (ADV-trash-9). Ids
+        // this purge already trashed are counted purged directly; only the rest are processed again.
+        const scope = scopeWhere(auth);
+        const { results: already } = await env.DB.prepare(
+          `SELECT id FROM entries_trash WHERE reason = 'disconnect' AND id IN (SELECT value FROM json_each(?)) AND ${scope.clause}`,
+        ).bind(JSON.stringify(pageIds), ...scope.bindings).all<{ id: string }>();
+        const alreadyTrashed = new Set((already ?? []).map((r) => r.id));
+        const toProcess = pageIds.filter((id) => !alreadyTrashed.has(id));
+        const result = await trashMirroredEntries(env, auth, toProcess, { provider: provider.id });
+        purged = tally.purged + alreadyTrashed.size + result.purged;
+        skipped = tally.skipped + result.skipped;
+        if (remainingKeys.length > page.length) {
+          const nextCursor = page[page.length - 1];
+          await updateIntegration(env, provider.id, (r) => { r.disconnecting = { purged, skipped, fromCursor: cursor, nextCursor }; });
+          return json({ ok: true, done: false, purged, skipped, next_cursor: nextCursor }, 202);
+        }
+      }
     }
     await deleteIntegration(env, provider.id);
     // A separate name rather than integration_connected with a boolean, for the
@@ -457,6 +490,7 @@ export async function handleIntegrationsRoutes(
     // asked for, plus anything a purge was not allowed to touch.
     return json({
       ok: true,
+      done: true,
       purged,
       kept: body.purge ? skipped : Object.keys(record.itemMap).length,
     });

@@ -27,6 +27,8 @@ function dbOf(s: SqliteD1) {
   return {
     prepare: (sql: string) => s.db.prepare(sql),
     exec: (sql: string) => s.db.exec(sql),
+    // The vector-ownership snapshot make-env's Vectorize double reads (T-0089.1.1).
+    __vectorOwners: () => s.db.__vectorOwners(),
     async batch(stmts: { run(): Promise<any> }[]) {
       const out: any[] = [];
       for (const st of stmts) out.push(await st.run());

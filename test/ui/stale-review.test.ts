@@ -250,7 +250,6 @@ function loadWithCrud(entries: any[]) {
     refreshAll: () => {},
     alert: () => {},
     setTimeout: (fn: () => void) => fn(),
-    apiMcp: async () => ({ ok: true }),
     fetch: async () => ({ ok: true, json: async () => ({ ok: true, entries, total: entries.length }) }),
     document: {
       getElementById: (id: string) => {

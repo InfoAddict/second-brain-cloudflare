@@ -34,7 +34,11 @@ describe("GET /entry", () => {
     expect(res.status).toBe(200);
     const data = await res.json() as any;
     expect(data.ok).toBe(true);
-    expect(data.entry).toEqual({
+    // history (BE-7, contract 4.1) is asserted separately below: its footer.not_recorded_before
+    // is versions:since, which this D1Mock has no entry_versions rows to derive deterministically
+    // (it falls back to Date.now()), so it cannot join the exact toEqual below.
+    const { history, ...entry } = data.entry;
+    expect(entry).toEqual({
       id: "a",
       content: longContent, // full content, not an 80-char label
       tags: ["work", "kind:semantic"],
@@ -59,6 +63,8 @@ describe("GET /entry", () => {
       can_edit: true,
       timeline: [],
     });
+    expect(history).toMatchObject({ items: [], footer: { pruned: false, kept: 20, shared_cut_by: null } });
+    expect(typeof history.footer.not_recorded_before).toBe("number");
   });
 
   it("reports a memory recall cannot see as unindexed", async () => {

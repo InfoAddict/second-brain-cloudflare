@@ -259,9 +259,14 @@ async function runNotionSync(env: IntegrationEnv, store: MirrorStore): Promise<S
       const text = await notionFetchPageText(record.credentials.token, page.id);
       const content = buildPageContent(page.title, page.url, text);
       const existing = delta.get(page.id);
-      if (existing && await store.updateEntry(existing.entryId, content)) {
-        delta.put(page.id, { entryId: existing.entryId, version: page.lastEdited });
+      const result = existing ? await store.updateEntry(existing.entryId, content) : "not_found";
+      if (result === "updated") {
+        delta.put(page.id, { entryId: existing!.entryId, version: page.lastEdited });
         updated++;
+      } else if (result === "busy") {
+        // Still live, just lost every compare-and-set: leave the item map untouched so the
+        // next sync retries this same page rather than duplicating it (round 2 adversary).
+        failed++;
       } else {
         // New page — or its mirror was deleted out-of-band; (re-)create it.
         const entryId = await store.createEntry(content, [notionProvider.id], notionProvider.id);

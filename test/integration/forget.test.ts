@@ -1,29 +1,24 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import worker from "../../src/index";
-import { makeTestEnv, makeTestDb, makeVectorizeMock } from "../helpers/make-env";
+import { makeTrashEnv, type TrashEnv } from "../helpers/trash-env";
+import { makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
-import type { Env } from "../../src/env";
-import { D1Mock } from "../helpers/d1-mock";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
 
+let t: TrashEnv;
+afterEach(() => t?.close());
+
 describe("POST /forget", () => {
-  let env: Env;
-  let db: D1Mock;
-
-  beforeEach(() => {
-    db = makeTestDb();
-    env = makeTestEnv(db);
-  });
-
   it("returns 400 when body is invalid JSON", async () => {
+    t = await makeTrashEnv();
     const res = await worker.fetch(
       new Request("http://localhost/forget", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
         body: "{not json",
       }),
-      env,
+      t.env,
       ctx
     );
     expect(res.status).toBe(400);
@@ -32,7 +27,8 @@ describe("POST /forget", () => {
   });
 
   it("returns 400 when id is missing", async () => {
-    const res = await worker.fetch(req("POST", "/forget", { body: {} }), env, ctx);
+    t = await makeTrashEnv();
+    const res = await worker.fetch(req("POST", "/forget", { body: {} }), t.env, ctx);
     expect(res.status).toBe(400);
     const data = await res.json() as any;
     expect(data.ok).toBe(false);
@@ -40,89 +36,57 @@ describe("POST /forget", () => {
   });
 
   it("returns 404 for non-existent id", async () => {
-    const res = await worker.fetch(req("POST", "/forget", { body: { id: "no-such-id" } }), env, ctx);
+    t = await makeTrashEnv();
+    const res = await worker.fetch(req("POST", "/forget", { body: { id: "no-such-id" } }), t.env, ctx);
     expect(res.status).toBe(404);
     const data = await res.json() as any;
     expect(data.ok).toBe(false);
   });
 
-  it("deletes an existing entry and its vectors", async () => {
+  it("moves an existing entry to the trash and deletes its vectors", async () => {
     const deleteByIdsMock = vi.fn().mockResolvedValue({ mutationId: "m" });
-    env = makeTestEnv(db, {
-      VECTORIZE: makeVectorizeMock({ deleteByIds: deleteByIdsMock }),
-    });
-    db.entries.push({
-      id: "entry-1",
-      content: "Some content",
-      tags: "[]",
-      source: "api",
-      created_at: Date.now(),
-      vector_ids: '["entry-1","entry-1-update-111"]',
-    });
+    t = await makeTrashEnv({ VECTORIZE: makeVectorizeMock({ deleteByIds: deleteByIdsMock }) });
+    t.seed("entry-1", { vector_ids: '["entry-1","entry-1-update-111"]' });
 
-    const res = await worker.fetch(req("POST", "/forget", { body: { id: "entry-1" } }), env, ctx);
+    const res = await worker.fetch(req("POST", "/forget", { body: { id: "entry-1" } }), t.env, ctx);
     expect(res.status).toBe(200);
     const data = await res.json() as any;
     expect(data.ok).toBe(true);
     expect(data.id).toBe("entry-1");
     expect(data.deletedVectors).toBe(2);
+    expect(data.trash).toBe(true);
 
-    expect(db.entries.find((e: any) => e.id === "entry-1")).toBeUndefined();
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'entry-1'`)).toBeNull();
+    expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'entry-1'`)).not.toBeNull();
     expect(deleteByIdsMock).toHaveBeenCalledWith(["entry-1", "entry-1-update-111"]);
   });
 
   it("trims whitespace from id before lookup", async () => {
-    db.entries.push({
-      id: "entry-1",
-      content: "Some content",
-      tags: "[]",
-      source: "api",
-      created_at: Date.now(),
-      vector_ids: "[]",
-    });
-
-    const res = await worker.fetch(req("POST", "/forget", { body: { id: "  entry-1  " } }), env, ctx);
+    t = await makeTrashEnv();
+    t.seed("entry-1");
+    const res = await worker.fetch(req("POST", "/forget", { body: { id: "  entry-1  " } }), t.env, ctx);
     expect(res.status).toBe(200);
     const data = await res.json() as any;
     expect(data.id).toBe("entry-1");
   });
 
   it("cascade-deletes edges touching the forgotten entry", async () => {
-    db.entries.push({
-      id: "entry-1", content: "Some content", tags: "[]", source: "api", created_at: Date.now(), vector_ids: "[]",
-    });
-    db.edges.push(
-      { id: "e1", source_id: "entry-1", target_id: "other", type: "relates_to", weight: 0.5, provenance: "inferred", metadata: "{}", created_at: 1, updated_at: 1 },
-      { id: "e2", source_id: "another", target_id: "entry-1", type: "relates_to", weight: 0.5, provenance: "inferred", metadata: "{}", created_at: 1, updated_at: 1 },
-      { id: "e3", source_id: "x", target_id: "y", type: "relates_to", weight: 0.5, provenance: "inferred", metadata: "{}", created_at: 1, updated_at: 1 },
-    );
-
-    const res = await worker.fetch(req("POST", "/forget", { body: { id: "entry-1" } }), env, ctx);
+    t = await makeTrashEnv();
+    t.seed("entry-1");
+    t.edge("e1", "entry-1", "other"); t.edge("e2", "another", "entry-1"); t.edge("e3", "x", "y");
+    const res = await worker.fetch(req("POST", "/forget", { body: { id: "entry-1" } }), t.env, ctx);
     expect(res.status).toBe(200);
-
     // Edges with entry-1 as source OR target are removed; the unrelated edge survives — no dangling edges.
-    expect(db.edges.map((e: any) => e.id)).toEqual(["e3"]);
+    expect((await t.all(`SELECT id FROM edges`)).map((e) => e.id)).toEqual(["e3"]);
   });
 
   it("is non-fatal when Vectorize delete fails", async () => {
-    env = makeTestEnv(db, {
-      VECTORIZE: makeVectorizeMock({
-        deleteByIds: vi.fn().mockRejectedValue(new Error("Vectorize down")),
-      }),
-    });
-    db.entries.push({
-      id: "entry-1",
-      content: "Some content",
-      tags: "[]",
-      source: "api",
-      created_at: Date.now(),
-      vector_ids: '["entry-1"]',
-    });
-
-    const res = await worker.fetch(req("POST", "/forget", { body: { id: "entry-1" } }), env, ctx);
+    t = await makeTrashEnv({ VECTORIZE: makeVectorizeMock({ deleteByIds: vi.fn().mockRejectedValue(new Error("Vectorize down")) }) });
+    t.seed("entry-1", { vector_ids: '["entry-1"]' });
+    const res = await worker.fetch(req("POST", "/forget", { body: { id: "entry-1" } }), t.env, ctx);
     expect(res.status).toBe(200);
     const data = await res.json() as any;
     expect(data.ok).toBe(true);
-    expect(db.entries.find((e: any) => e.id === "entry-1")).toBeUndefined();
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'entry-1'`)).toBeNull();
   });
 });
