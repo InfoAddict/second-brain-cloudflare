@@ -9,6 +9,10 @@ import type { Env } from "../env";
 import { withHold, type HoldReason } from "./tags";
 import type { SignalHit } from "./score";
 
+/** Shared across every write path a hold can land on (5.4): what a caller needs to tell the
+ * reader and the audit trail that this write ended up held. */
+export interface HeldInfo { reasons: HoldReason[]; score: number }
+
 /** Structural twin of Track 1's `Params`: allocates the next dense `?n` placeholder, reusing one for a repeated value. */
 export interface PlaceholderSink {
   add(value: unknown): string;

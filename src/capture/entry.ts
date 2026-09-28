@@ -25,9 +25,8 @@ import { standingTouched, type StandingCacheConfig } from "../standing/cache";
 import { buildDecisionCapture } from "../decisions/capture";
 import { buildCommitmentTags, validateT7Capture, type T7CaptureInput, type T7ReplyInfo } from "./t7-capture";
 import { scoreWrite, type QuarantineChannel, type ScoreResult } from "../quarantine/score";
-import { heldTagsFor, holdStatements } from "../quarantine/hold";
+import { heldTagsFor, holdStatements, type HeldInfo } from "../quarantine/hold";
 import { countMcpWritesInWindow } from "../quarantine/burst";
-import type { HoldReason } from "../quarantine/tags";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -80,9 +79,6 @@ export function buildEntryFilterQuery(params: {
 
   return { sql, bindings };
 }
-
-/** Present on "stored" and "flagged" only: held writes never merge, replace, supersede or deprecate (5.4). */
-export interface HeldInfo { reasons: HoldReason[]; score: number }
 
 export type CaptureResult = (
   | { status: "blocked"; matchId: string; score: number }
