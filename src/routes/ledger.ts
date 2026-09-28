@@ -104,7 +104,10 @@ export async function handleLedgerRoutes(
       env, ctx, auth, body.id.trim(), body.result as DecisionOutcomeResult, body.note, { actorId: auth.userId, channel: "rest" },
     );
     if (!outcome.ok) return json({ ok: false, error: outcome.error }, outcome.status);
-    return json({ ok: true, id: outcome.id, message: outcome.reply });
+    // review_at/reviews_done (18-copy-deck.md 8.4): structured next-review data for the dashboard,
+    // built from the same tag transition `message`'s English already describes. MCP and REST both
+    // keep reading `message` as-is; only this REST reply also carries the structured pair.
+    return json({ ok: true, id: outcome.id, message: outcome.reply, review_at: outcome.reviewAt, reviews_done: outcome.reviewsDone });
   }
 
   return null;

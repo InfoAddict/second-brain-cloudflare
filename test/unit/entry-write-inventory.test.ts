@@ -103,14 +103,15 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED 591 -> 592 (T-0089.2.1): the retraction-exempt marker above it.
   { file: 'src/lib/team-admin.ts', line: 592, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
-  { file: 'src/memory/actions.ts', line: 71, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 129, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 143, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 155, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 167, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 248, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 289, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 301, kind: 'snapshot' },
+  // MOVED +2 (review_at/reviewsDone, 18-copy-deck.md 8.4): OutcomeActionResult grew two fields.
+  { file: 'src/memory/actions.ts', line: 73, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 145, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 157, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 169, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 250, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 291, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 303, kind: 'snapshot' },
   // MOVED 218 -> 220, 605 -> 607 (T-0089.1.1 round 2): the trash insert is a plain INSERT, with a comment saying why.
   // MOVED 220 -> 221, 607 -> 608 (T-0089.1.1 round 3): trash.ts imports the shared edge readability guard.
   { file: 'src/memory/trash.ts', line: 228, kind: 'trash' },

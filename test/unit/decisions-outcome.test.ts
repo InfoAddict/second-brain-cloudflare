@@ -17,6 +17,10 @@ describe("buildOutcomeUpdate", () => {
     expect(u.nextTags).toEqual(["ledger:decision", "confidence:0.70", "outcome:right"]);
     expect(u.nextWhen).toEqual({ when_at: null, when_kind: null, when_source: "cleared" });
     expect(u.reply).toBe("Recorded: Decided to hire Dana for the design lead role; strong went right. Undo is available.");
+    // A definitive outcome is not a re-arm: there is nothing left to review, but re-arming was
+    // never in progress either, so reviewsDone (which means "gave up asking") is false, not true.
+    expect(u.reviewAt).toBeNull();
+    expect(u.reviewsDone).toBe(false);
   });
 
   it("a second outcome replaces the first (drops the old outcome tag)", () => {
@@ -37,12 +41,17 @@ describe("buildOutcomeUpdate", () => {
     expect(u.nextWhen).toEqual({ when_at: now + 90 * 86400000, when_kind: "due", when_source: "explicit" });
     expect(u.reply).toMatch(/^OK, I'll ask again around .+\.$/);
     expect(u.reply).not.toContain("Undo is available");
+    // "Can't tell yet" moves the review date: review_at carries the new date, and asking continues.
+    expect(u.reviewAt).toBe(now + 90 * 86400000);
+    expect(u.reviewsDone).toBe(false);
   });
 
   it("unknown re-arms to review-rearms:2 on the second call", () => {
     const u = buildOutcomeUpdate(["ledger:decision", "outcome:unknown", "review-rearms:1"], "unknown", CONTENT, 0, CFG);
     expect(u.nextTags).toEqual(["ledger:decision", "outcome:unknown", "review-rearms:2"]);
     expect(u.nextWhen.when_at).not.toBeNull();
+    expect(u.reviewAt).toBe(u.nextWhen.when_at);
+    expect(u.reviewsDone).toBe(false);
   });
 
   it("unknown clears when_* with no more rearms on the third call", () => {
@@ -50,6 +59,10 @@ describe("buildOutcomeUpdate", () => {
     expect(u.nextTags).toEqual(["ledger:decision", "outcome:unknown"]);
     expect(u.nextWhen).toEqual({ when_at: null, when_kind: null, when_source: "cleared" });
     expect(u.reply).toBe("OK, no more reviews for this one.");
+    // Re-arming has stopped: review_at is null, and reviewsDone says why, distinctly from a
+    // definitive right/wrong/mixed outcome (which is also null but was never asking).
+    expect(u.reviewAt).toBeNull();
+    expect(u.reviewsDone).toBe(true);
   });
 });
 

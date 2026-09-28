@@ -19,7 +19,9 @@ import { auditValidity, retractionHook, RETRACTED_SOURCE_TAG, type ValidityHook 
 
 export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true" | "received" | "stop_standing";
 export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number; content?: string } | { ok: false; error: string; status: number };
-export type OutcomeActionResult = { ok: true; id: string; reply: string } | { ok: false; error: string; status: number };
+export type OutcomeActionResult =
+  { ok: true; id: string; reply: string; reviewAt: number | null; reviewsDone: boolean }
+  | { ok: false; error: string; status: number };
 
 type AuditContext = { waitUntil(promise: Promise<unknown>): void };
 /** BE-5/BE-6 (T-0101.5.1/T-0101.5.2): every audit event this file writes carries the same
@@ -252,7 +254,7 @@ export async function resolveDecisionOutcome(
 
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { decision_outcome: result, prior: { tags, ...priorWhen }, ...channelPayload(change) } });
 
-    return { ok: true, id, reply: update.reply };
+    return { ok: true, id, reply: update.reply, reviewAt: update.reviewAt, reviewsDone: update.reviewsDone };
   }
   return { ok: false, error: "Could not resolve, try again", status: 409 };
 }
