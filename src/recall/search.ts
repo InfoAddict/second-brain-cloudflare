@@ -47,6 +47,8 @@ import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
 import { applyOccupancyCap, CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates, liftFor } from "./source-trust";
 import { enrichWithAsOf, asOfPredicateSql, asOfPredicateBindings } from "./as-of";
 import { getVersionsSince } from "../memory/versions";
+import { supersededBySql } from "../memory/validity";
+import { maybeLogRecall, type RecallLogChannel } from "./log";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -104,8 +106,6 @@ async function keywordSearchLike(
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
   // `not` are terms whose rows are excluded (already read whole by an earlier window); `max` is the window's row cap.
   // The rows come back without their text: each carries, for every term, how the note holds it (see keyword-rows.ts).
-  // validity: current: a superseded or ended row must not take a keyword pool slot from one that is still true (5.5); as-of (5.7 item 2) also lets through a belief the OR's second arm names, confirmed later by as-of.ts's belief batch
-  const validitySql = asOf === undefined ? "(valid_until IS NULL OR valid_until > ?)" : asOfPredicateSql();
   const validityBindings = asOf === undefined ? [now] : asOfPredicateBindings(asOf);
   const windowFor = (subset: string[], max: number, not: string[] = []) => {
     const where = subset.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
@@ -115,8 +115,8 @@ async function keywordSearchLike(
     // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
     const tokenWhere = subset.length > 1 && (timeWhere || scopeSql || exclude) ? `(${where})` : where;
     // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name
-    // validity: current: a superseded or ended row must not take a keyword pool slot from one that is still true (5.5); as-of swaps validitySql for the 5.7 item 2 predicate
-    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql} AND ${validitySql}${exclude} AND ${NOT_HELD_SQL} ORDER BY created_at DESC LIMIT ?`;
+    // validity: current: a superseded or ended row must not take a keyword pool slot from one that is still true (5.5); as-of (5.7 item 2) also lets through a belief the OR's second arm names, confirmed later by as-of.ts's belief batch
+    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql} AND ${asOf === undefined ? "(valid_until IS NULL OR valid_until > ?)" : asOfPredicateSql()}${exclude} AND ${NOT_HELD_SQL} ORDER BY created_at DESC LIMIT ?`;
     const levels = withMatchLevels(inner, ["id", "created_at", "tags", "source"], terms, "created_at DESC");
     return env.DB.prepare(levels.sql)
       .bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), ...validityBindings, ...not.map(contentLikePattern), max, ...levels.binds);
@@ -175,20 +175,20 @@ async function keywordSearchFts(
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
   const shortHits = shortTerms.map(() => `(e.content LIKE ? ${CONTENT_LIKE_ESCAPE})`).join(" + ");
   const shortBindings = shortTerms.map(contentLikePattern);
-  // validity: current: a superseded or ended row must not take a keyword pool slot from one that is still true (5.5); as-of (5.7 item 2) also lets through a belief the OR's second arm names, confirmed later by as-of.ts's belief batch
-  const validitySql = asOf === undefined ? "(e.valid_until IS NULL OR e.valid_until > ?)" : asOfPredicateSql("e");
   const validityBindings = asOf === undefined ? [now] : asOfPredicateBindings(asOf);
   // Rows come back without their text, with per-term match levels instead (keyword-rows.ts). `sh` and `rk` carry the ranking
   // (short-token hits, then bm25) so the outer SELECT keeps the order the LIMIT chose.
   // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
+  // validity: current: a superseded or ended row must not take a keyword pool slot from one that is still true (5.5); as-of (5.7 item 2) also lets through a belief the OR's second arm names, confirmed later by as-of.ts's belief batch
   const rankedInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, ${shortHits || "0"} AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${timeWhere}${scopeSql} AND ${validitySql} AND ${NOT_HELD_SQL}
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql} AND ${asOf === undefined ? "(e.valid_until IS NULL OR e.valid_until > ?)" : asOfPredicateSql("e")} AND ${NOT_HELD_SQL}
        ORDER BY sh DESC, rk, ord LIMIT ?`;
   // scope-checked: same clause, same reason as above
+  // validity: current: same predicate as rankedInner above (5.5/5.7 item 2)
   const andTierInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${timeWhere}${scopeSql} AND ${validitySql} AND ${NOT_HELD_SQL}
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql} AND ${asOf === undefined ? "(e.valid_until IS NULL OR e.valid_until > ?)" : asOfPredicateSql("e")} AND ${NOT_HELD_SQL}
        ORDER BY entries_fts.rowid DESC LIMIT ?`;
   const rankedLevels = withMatchLevels(rankedInner, ["id", "created_at", "tags", "source", "sh", "rk", "ord"], terms, "sh DESC, rk, ord", ["id", "created_at", "tags", "source"]);
   const andTierLevels = withMatchLevels(andTierInner, ["id", "created_at", "tags", "source", "ord"], terms, "ord DESC", ["id", "created_at", "tags", "source"]);
@@ -429,7 +429,7 @@ export function fuseDenseAndKeyword(
 }
 
 export async function recallEntries(
-  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean; project?: readonly ProjectRow[]; explain?: boolean },
+  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean; project?: readonly ProjectRow[]; explain?: boolean; channel?: RecallLogChannel },
   env: Env,
   ctx: ExecutionContext,
   // Resolved once at request entry by the route/MCP caller and threaded down.
@@ -955,13 +955,7 @@ export async function recallEntries(
       // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by d1Filters above — so it can never cross a workspace boundary
       // validity: current: d1Filters carries the predicate (5.5)
       `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id, valid_from, valid_until,
-              (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
-                 FROM edges g JOIN entries s ON s.id = g.source_id
-                WHERE g.target_id = entries.id AND g.type = 'supersedes'
-                  AND s.tags NOT LIKE '%"status:deprecated"%'
-                  AND s.workspace_id = entries.workspace_id
-                  AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
-                ORDER BY s.created_at DESC LIMIT 1) AS superseded_by_json
+              ${supersededBySql("entries")} AS superseded_by_json
          FROM entries WHERE id IN (${placeholders})${d1Filters}`
     ).bind(...batch, ...filterBindings).all() as { results: Record<string, any>[] };
     d1Rows.push(...results);
@@ -1312,6 +1306,18 @@ export async function recallEntries(
         .catch(e => console.error("recall_count update failed (non-fatal):", e))
     );
   }
+
+  // T-0089.5.2 Part A: opt-in (RECALL_LOG, off by default everywhere) and sampled — a
+  // no-op below cfg.RECALL_LOG === "on", so this costs nothing on every brain that never
+  // turns it on. Never touches `matches`, so ranking is unaffected either way.
+  ctx.waitUntil(maybeLogRecall(env, cfg, {
+    workspaceId: identity?.personalWorkspaceId ?? "",
+    channel: params.channel ?? "rest",
+    query,
+    params: { topK, tag: tag ?? null, after: after ?? null, before: before ?? null, kind: kind ?? null, hops, project: params.project?.map(p => p.id) ?? null },
+    returnedIds: matches.map(m => m.id),
+    now,
+  }));
 
   const maxScore = matches.reduce((mx, m) => Math.max(mx, m.score), 0);
   if (maxScore > 0) for (const m of matches) m.score = m.score / maxScore;

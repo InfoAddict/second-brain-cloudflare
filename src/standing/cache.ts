@@ -2,6 +2,7 @@ import { VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
 import type { Config } from "../config";
 import type { Env } from "../env";
 import { encodeVector, parseStandingCache, type StandingCacheItem, type StandingCacheV1 } from "./codec";
+import { currentValidityAt } from "../memory/validity";
 
 /** The config keys this module needs. Passed explicitly (Task 3: "no config.ts edit is needed yet"); STANDING_MAX and EMBEDDING_DIM are Task 6 additions to DEFAULTS, EMBEDDING_MODEL already exists there today. */
 export type StandingCacheConfig = { STANDING_MAX: number; EMBEDDING_DIM: number } & Pick<Config, "EMBEDDING_MODEL">;
@@ -67,15 +68,17 @@ async function buildStandingCacheNow(
 ): Promise<StandingCacheV1> {
   const now = opts.now ?? Date.now();
   const { results } = await env.DB.prepare(
+    // validity: current: a replaced or ended standing instruction must not fire (T-0089.2.1, 5.5)
     `SELECT id, tags, vector_ids, created_at FROM entries
       WHERE workspace_id = ?1
         AND instr(lower(tags), '"standing:active"') > 0
         AND tags NOT LIKE '%"status:deprecated"%'
         AND tags NOT LIKE '%"conflict-held"%'
         AND tags NOT LIKE '%"quarantine:%'
+        AND ${currentValidityAt("", "?3")}
       ORDER BY created_at ASC, id ASC
       LIMIT ?2`,
-  ).bind(workspaceId, cfg.STANDING_MAX).all<EntryRow>();
+  ).bind(workspaceId, cfg.STANDING_MAX, now).all<EntryRow>();
   const rows = results ?? [];
 
   const knownFirstChunk = new Map(known.map(k => [k.id, k.vector]));

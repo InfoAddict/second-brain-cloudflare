@@ -107,9 +107,12 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   "src/brief/compute.ts": [110, 118, 127, 142, 344, 347],
   "src/compression/digest.ts": [145, 183, 257, 286, 296],
   "src/insight/weekly.ts": [354],
-  "src/mcp/server.ts": [524],
+  // REMOVED mcp/server.ts:489 (T-0089.2.1 fix round, release/v4 d3b5b25c): the digest tool's read
+  // now carries its own `validity: current` marker and predicate.
+  "src/mcp/server.ts": [],
   "src/routes/admin.ts": [609, 622, 634, 659, 732, 757, 806, 855, 860, 999, 1006, 1122, 1128, 1434, 1525, 1555, 1667],
-  "src/routes/entries.ts": [41, 63, 94],
+  // MOVED +1 (R16): entries.ts imports supersededBySql.
+  "src/routes/entries.ts": [42, 64, 95],
 };
 
 /**

@@ -22,6 +22,7 @@ import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { parseSupersededBy, validitySummary } from "../recall/validity-view";
 import { getTagVocabulary } from "../tags/vocabulary";
 import { projectRowsOf } from "../projects/registry";
+import { supersededBySql } from "../memory/validity";
 
 /** Most entries GET /tags?counts=1 reads; matches the /projects counts cap. */
 const TAG_COUNTS_SCAN_LIMIT = 5000;
@@ -390,13 +391,7 @@ export async function handleEntriesRoutes(
       `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated,
               importance_score, recall_count, contradiction_wins, contradiction_losses, vector_ids,
               workspace_id, actor_id, when_at, when_kind, when_source, valid_from, valid_until,
-              (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
-                 FROM edges g JOIN entries s ON s.id = g.source_id
-                WHERE g.target_id = entries.id AND g.type = 'supersedes'
-                  AND s.tags NOT LIKE '%"status:deprecated"%'
-                  AND s.workspace_id = entries.workspace_id
-                  AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
-                ORDER BY s.created_at DESC LIMIT 1) AS superseded_by_json
+              ${supersededBySql("entries")} AS superseded_by_json
        FROM entries WHERE id = ? AND ${scope.clause}`
     ).bind(id, ...scope.bindings).first() as Record<string, any> | null;
     if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);

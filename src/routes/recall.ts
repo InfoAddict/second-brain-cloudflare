@@ -189,7 +189,7 @@ export async function handleRecallRoutes(
       if (typeof parsed !== "number") return json({ ok: false, error: parsed.error }, 400);
       asOf = parsed;
     }
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale, asOf: asOfHeader } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team, asOf });
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale, asOf: asOfHeader } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize, channel: "rest" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team, asOf });
 
     if (!matches.length) {
       return json({

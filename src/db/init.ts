@@ -214,6 +214,11 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // device replaces rather than duplicates it.
   push_subscriptions: `CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', endpoint_hash TEXT NOT NULL, subscription_json TEXT NOT NULL, content_free INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_ok_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0, UNIQUE(endpoint_hash))`,
   idx_push_subscriptions_workspace: `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id)`,
+  // Sampled recall log (T-0089.5.2 Part A). Additive, like push_subscriptions above: old
+  // code never reads this table and rollback is a no-op. Opt-in and sampled, so a brain
+  // that never turns RECALL_LOG on never writes a row here.
+  recall_log: `CREATE TABLE IF NOT EXISTS recall_log (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, created_at INTEGER NOT NULL, channel TEXT NOT NULL, query TEXT NOT NULL, params TEXT NOT NULL, returned_ids TEXT NOT NULL, followed_ids TEXT NOT NULL DEFAULT '[]')`,
+  idx_recall_log_ws: `CREATE INDEX IF NOT EXISTS idx_recall_log_ws ON recall_log(workspace_id, created_at DESC)`,
   // Content history and soft delete (4.0). Additive: old code never reads either table,
   // so rollback is a no-op. Never backfilled.
   entry_versions: `CREATE TABLE IF NOT EXISTS entry_versions (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT '', seq INTEGER NOT NULL, content TEXT, prior_length INTEGER, prior_length_utf16 INTEGER, tags TEXT NOT NULL, state TEXT NOT NULL DEFAULT '{}', actor_id TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', valid_from INTEGER, created_at INTEGER NOT NULL, CHECK ((content IS NULL) <> (prior_length IS NULL)), CHECK (prior_length_utf16 IS NULL OR prior_length IS NOT NULL))`,

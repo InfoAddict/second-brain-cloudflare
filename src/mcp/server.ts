@@ -26,6 +26,7 @@ import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
 import { WHEN_KIND_VALUES, parseExplicitWhen } from "../when/input";
 import { recallEntries } from "../recall/search";
+import { maybeMarkFollowed, maybeMarkFollowedMany } from "../recall/log";
 import { renderRecallText, memoryHeader, validityBracket } from "../recall/render";
 import { parseSupersededBy, validitySummary } from "../recall/validity-view";
 import { RECALL_OUTPUT_BUDGET, SNIPPET_MAX_CHARS, snippetOf, truncationNote } from "../recall/snippet";
@@ -44,7 +45,7 @@ import { resolveClientLabel, type McpClientExtra, type McpClientProps } from "./
 import { heldReason, holdReasonPhrase, isHeld } from "../quarantine/tags";
 import { contentByteLength, isOverContentLimit, tooLargeMcpMessage, MAX_CONTENT_BYTES } from "../lib/content-size";
 import {
-  parseValidityDate, parseValidityInput, supersedeReply, updateEntryValidity, updateValidityReply, validityReplySuffix, VALIDITY_WITH_CONTENT_ERROR,
+  currentValidityAt, parseValidityDate, parseValidityInput, supersededBySql, supersedeReply, updateEntryValidity, updateValidityReply, validityReplySuffix, VALIDITY_WITH_CONTENT_ERROR,
 } from "../memory/validity";
 
 // Asking the calling model for this is the whole point: it has already read the content
@@ -521,12 +522,14 @@ export function buildMcpServer(
       const scope = scopeWhereForRead(identity, { layer: workspace, teamId: teamRead.teamId });
       const digestTag = slug ? `project:${slug}` : topic!;
       const row = await env.DB.prepare(
+        // validity: current: a replaced or ended digest is not the current summary (T-0089.2.1)
         `SELECT content, created_at FROM entries
          WHERE ${scope.clause} AND actor_id = '' AND source = 'system' AND tags NOT LIKE '%"status:deprecated"%'
            AND tags NOT LIKE '%"status:draft"%' AND tags NOT LIKE '%"conflict-held"%'
            AND tags LIKE ? ${TAG_LIKE_ESCAPE} AND tags LIKE ? ${TAG_LIKE_ESCAPE}
+           AND ${currentValidityAt("", "?")}
          ORDER BY created_at DESC, id DESC LIMIT 1`,
-      ).bind(...scope.bindings, tagLikePattern("synthesized"), tagLikePattern(digestTag))
+      ).bind(...scope.bindings, tagLikePattern("synthesized"), tagLikePattern(digestTag), Date.now())
         .first<{ content: string; created_at: number }>();
       if (!row) return { content: [{ type: "text", text: "No digest yet. One is built automatically overnight once there are 10 or more eligible memories. Use recall with project instead." }] };
       const text = `${STORED_DATA_NOTICE}\nDigest from ${new Date(row.created_at).toISOString().slice(0, 10)}:\n----- digest (begin) -----\n${cleanStored(row.content)}\n----- digest (end) -----`;
@@ -645,7 +648,7 @@ export function buildMcpServer(
       if (result.status === "contradiction") {
         const text = result.supersede
           ? supersedeReply(result.id, result.resolvedConflict, result.supersede, (await resolveConfig(env)).TIMEZONE)
-          : `Stored. ID: ${result.id}. It replaces entry ${result.resolvedConflict}.`;
+          : `Stored. ID: ${result.id}. It replaces memory ${result.resolvedConflict}.`;
         return { content: [{ type: "text", text: `${text}${noteSuffix}` }] };
       }
       if (result.status === "contradiction_protected") {
@@ -726,9 +729,10 @@ export function buildMcpServer(
       }
 
       const client = identity ? await resolveClient(extra) : undefined;
+      const cfg = await resolveConfig(env);
       let indexed: boolean;
       try {
-        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx, { ...mcpChange, client }, whenInput, row.workspace_id as string);
+        indexed = await appendToEntry(env, id, existingContent, a, tags, source, cfg, volatility as Volatility | undefined, writeCtx, { ...mcpChange, client }, whenInput, row.workspace_id as string);
       } catch (e) {
         if (e instanceof WriteConflictError) return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was appended. Please try again.` }] };
         if (e instanceof EntryGoneError) return { content: [{ type: "text", text: e.message }] };
@@ -741,6 +745,10 @@ export function buildMcpServer(
       if (identity) {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "mcp", ...(client ? { client } : {}) } });
       }
+      // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
+      // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+      // hand from appendToEntry above, so this adds no second KV read.
+      ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
 
       return {
         content: [{
@@ -779,8 +787,8 @@ export function buildMcpServer(
         const r = await updateEntryValidity(env, id, validity!.value as { from?: number | null; until?: number | null }, mcpChange, validityCfg as Config, workspaceId);
         if (r.status === "updated") return updateValidityReply(id, r, (validityCfg as Config).TIMEZONE);
         if (r.status === "refused") return r.error;
-        if (r.status === "no_change") return `Entry ${id} already has those dates; nothing changed.`;
-        if (r.status === "conflict") return `Entry ${id} changed while saving, so nothing was written. Please try again.`;
+        if (r.status === "no_change") return `Memory ${id} already has those dates; nothing changed.`;
+        if (r.status === "conflict") return `Memory ${id} changed while saving, so nothing was written. Please try again.`;
         return `No entry found with ID: ${id}`;
       };
       if (content === undefined) {
@@ -822,7 +830,8 @@ export function buildMcpServer(
       const noteSuffix = ignoredReservedTags.length ? ` ${reservedTagsNote(ignoredReservedTags)}` : "";
 
       const client = identity ? await resolveClient(extra) : undefined;
-      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx, { ...mcpChange, client }, row.workspace_id as string);
+      const cfg = await resolveConfig(env);
+      const result = await updateEntryContent(env, id, newContent, cfg, volatility as Volatility | undefined, tags, writeCtx, { ...mcpChange, client }, row.workspace_id as string);
 
       // Only reachable if the entry was deleted between the guard read and the write.
       if (result.status === "not_found") {
@@ -848,6 +857,12 @@ export function buildMcpServer(
 
       if (identity && result.status === "updated") {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "mcp", ...(client ? { client } : {}) } });
+      }
+      // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
+      // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
+      // hand from updateEntryContent above, so this adds no second KV read.
+      if (result.status === "updated") {
+        ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
       }
 
       // New content plus an end date: the text first, then the window, each its own version.
@@ -1038,7 +1053,7 @@ export function buildMcpServer(
         if (typeof parsed !== "number") return { content: [{ type: "text", text: parsed.error }] };
         asOf = parsed;
       }
-      const { matches, insight, semanticUnavailable, queryTokens, compoundStale, asOf: asOfHeader } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId, asOf });
+      const { matches, insight, semanticUnavailable, queryTokens, compoundStale, asOf: asOfHeader } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain, channel: "mcp" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId, asOf });
 
       const notice = semanticUnavailable
         ? `Note: semantic search was unavailable or incomplete for this query, so these results may be keyword matches only. ${SEMANTIC_UNAVAILABLE_DETAIL}\n\n`
@@ -1240,18 +1255,17 @@ export function buildMcpServer(
         // scope-exempt: identity-less branch: production MCP always resolves an identity (src/mcp/handler.ts); this arm is unit fixtures only
         // validity: any: get is a single-memory fetch, not a current-facts answer (5.9)
         `SELECT id, content, tags, source, created_at, workspace_id, actor_id, valid_from, valid_until,
-                (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
-                   FROM edges g JOIN entries s ON s.id = g.source_id
-                  WHERE g.target_id = entries.id AND g.type = 'supersedes'
-                    AND s.tags NOT LIKE '%"status:deprecated"%'
-                    AND s.workspace_id = entries.workspace_id
-                    AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
-                  ORDER BY s.created_at DESC LIMIT 1) AS superseded_by_json
+                ${supersededBySql("entries")} AS superseded_by_json
          FROM entries WHERE id = ?${scope ? ` AND ${scope.clause}` : ""}`
       ).bind(...(scope ? [id, ...scope.bindings] : [id])).first() as Record<string, any> | null;
       if (!row) {
         return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       }
+      // T-0089.5.2 Part B: a get on a recently-recalled id is implicit feedback that
+      // the recall was used ("the agent opened it"). Checks recall_log first and only
+      // resolves config if a matching row is found, so the common (RECALL_LOG never
+      // turned on, table empty) case costs one cheap D1 read and no KV read at all.
+      ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id as string, id, Date.now()));
       const tags: string[] = JSON.parse(row.tags ?? "[]");
       // get is the tool an agent calls before acting on a memory, so it is the
       // one that can least afford to omit "this is shared, and someone else
@@ -1415,6 +1429,11 @@ export function buildMcpServer(
 
       const edge = await createEdge(source_id, target_id, type, { provenance: "explicit", weight: 1.0, workspaceId: source.workspace_id, readableWorkspaceIds: identity ? readableWorkspaces(identity) : [source.workspace_id] }, env);
       if (!edge) return { content: [{ type: "text", text: "Cannot link an entry to itself." }] };
+      // T-0089.5.2 Part B: a link on a recently-recalled id is implicit feedback that
+      // the recall was used. Checked for both ends together (one shared read-then-write,
+      // not two racing ones); config is only resolved if a matching row is found, so the
+      // common case (RECALL_LOG never turned on) costs no KV read.
+      ctx.waitUntil(maybeMarkFollowedMany(env, source.workspace_id, [source_id, target_id], Date.now()));
       return { content: [{ type: "text", text: `Linked ${edge.source_id} → ${edge.target_id} (${edgeLabel(edge.type)}).` }] };
     }
   );

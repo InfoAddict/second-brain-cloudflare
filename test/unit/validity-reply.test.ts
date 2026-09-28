@@ -9,14 +9,14 @@ describe("validityReplySuffix", () => {
   });
   it("names one restored memory, with the forget wording for forget", () => {
     const v = { ...NO_VALIDITY_CHANGE, restored: [one] };
-    expect(validityReplySuffix(v, "x", "status")).toBe(` Entry y ("Lives in Denver") is current again.`);
+    expect(validityReplySuffix(v, "x", "status")).toBe(` Memory y ("Lives in Denver") is current again.`);
     expect(validityReplySuffix(v, "x", "forget")).toBe(" The older memory y is current again.");
   });
   it("counts several restored and re-closed memories", () => {
     expect(validityReplySuffix({ ...NO_VALIDITY_CHANGE, restored: [one, { id: "z", preview: "" }] }, "x", "status"))
       .toBe(" 2 older memories are current again: y, z.");
-    expect(validityReplySuffix({ ...NO_VALIDITY_CHANGE, reclosed: [one] }, "x", "undo")).toBe(" Entry y is replaced by x again.");
-    expect(validityReplySuffix({ ...NO_VALIDITY_CHANGE, reclosed: [one, { id: "z", preview: "" }] }, "x", "undo")).toBe(" Entries y, z are replaced by x again.");
+    expect(validityReplySuffix({ ...NO_VALIDITY_CHANGE, reclosed: [one] }, "x", "undo")).toBe(" Memory y is replaced by x again.");
+    expect(validityReplySuffix({ ...NO_VALIDITY_CHANGE, reclosed: [one, { id: "z", preview: "" }] }, "x", "undo")).toBe(" Memories y, z are replaced by x again.");
   });
   it("says how many dependents were flagged", () => {
     expect(validityReplySuffix({ ...NO_VALIDITY_CHANGE, flagged: 1 }, "x", "status")).toBe(" 1 memory built on it was flagged for a check.");

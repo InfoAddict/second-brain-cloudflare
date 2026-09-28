@@ -14,6 +14,7 @@ import { scopeWhereForRead } from "../lib/scope";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus, type MemoryStatus } from "../memory/status";
 import { buildChain, workspaceReadable, type VersionRow } from "../memory/versions";
+import { currentValidityAt, EFFECTIVE_FROM } from "../memory/validity";
 import type { RecallMatch, RetractedBelief } from "./types";
 
 /** Beliefs shown under/after actually-true results: at most this many, newest retraction first (spec 14 5.7 item 7). */
@@ -21,18 +22,21 @@ export const AS_OF_BELIEFS_MAX = 3;
 
 /**
  * The as-of candidate predicate (spec 14 5.7 items 2-3): valid at T, or a deprecated belief
- * candidate created at or before T (confirmed later by enrichWithAsOf's belief batch). The one
- * place this SQL is spelled out, per the director (lane A's R16 fix on v4/t2-core-fix 134e0824
- * ships `currentValidityAt`/`supersededBySql`, the one definition of "current" this codebase will
- * standardize on): every call site in search.ts calls this rather than inlining its own copy, so
- * swapping the body to build on those helpers once that branch merges is a one-function change.
+ * candidate created at or before T (confirmed later by enrichWithAsOf's belief batch). Built on
+ * lane A's R16 helpers (src/memory/validity.ts) — EFFECTIVE_FROM and currentValidityAt(alias, "?"),
+ * the same "still open" shape currentValidityAt gives every current-only reader, just handed a
+ * bound placeholder instead of SQL_NOW_MS — so this predicate and "current" never drift apart.
+ * The one place this SQL is spelled out: every call site in search.ts calls this rather than
+ * inlining its own copy.
  */
 export function asOfPredicateSql(alias = ""): string {
   const col = (name: string) => (alias ? `${alias}.${name}` : name);
   // Branch A requires NOT deprecated explicitly: a deprecated row can still have an open
   // valid_until (not every deprecation closes the window), and without this guard such a row
   // would satisfy both branches — true-at-T AND a belief candidate — at once.
-  return `((${col("tags")} NOT LIKE '%"status:deprecated"%' AND COALESCE(${col("valid_from")}, ${col("created_at")}) <= ? AND (${col("valid_until")} IS NULL OR ${col("valid_until")} > ?)) OR (${col("tags")} LIKE '%"status:deprecated"%' AND ${col("created_at")} <= ?))`;
+  // EFFECTIVE_FROM always needs a table qualifier; the unaliased callers' FROM is literally
+  // `FROM entries`, so "entries." is valid there too even though col() itself omits it.
+  return `((${col("tags")} NOT LIKE '%"status:deprecated"%' AND ${EFFECTIVE_FROM(alias || "entries")} <= ? AND ${currentValidityAt(alias, "?")}) OR (${col("tags")} LIKE '%"status:deprecated"%' AND ${col("created_at")} <= ?))`;
 }
 
 /** Three bindings for asOfPredicateSql's three placeholders, all the same T. */

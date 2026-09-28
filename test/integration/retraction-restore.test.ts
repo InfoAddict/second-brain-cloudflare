@@ -285,13 +285,13 @@ describe("replies name the restored memory", () => {
   it("set_status, forget and undo replies name the restored memory, with no em dash", async () => {
     await replaced();
     const wrong = await mcpCall("set_status", { id: "x", status: "deprecated" });
-    expect(wrong).toBe(`Marked memory x as wrong: it is hidden from recall and kept in its history. Undo is available. Entry y ("Lives in Denver") is current again.`);
+    expect(wrong).toBe(`Marked memory x as wrong: it is hidden from recall and kept in its history. Undo is available. Memory y ("Lives in Denver") is current again.`);
     const back = await mcpCall("undo", { id: "x" });
-    expect(back).toContain(" Entry y is replaced by x again.");
+    expect(back).toContain(" Memory y is replaced by x again.");
     const gone = await mcpCall("forget", { id: "x" });
     expect(gone).toMatch(/^Moved entry x to the trash; it is removed for good after \d+ days\. The older memory y is current again\.$/);
     const restored = await mcpCall("undo", { id: "x" });
-    expect(restored).toBe("Restored entry x from the trash. Entry y is replaced by x again.");
+    expect(restored).toBe("Restored entry x from the trash. Memory y is replaced by x again.");
     for (const text of [wrong, back, gone, restored]) expect(text).not.toMatch(/—/);
   });
 

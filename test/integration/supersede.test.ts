@@ -121,6 +121,19 @@ describe("a contradiction supersedes", () => {
     expect(JSON.parse((await row((r as any).id)).tags)).toContain("contradiction-resolved");
   });
 
+  it("a newcomer with no stated start that ties the older start (same millisecond, clock skew) still replaces it", async () => {
+    await setup([{ id: "old", score: 0.72 }], contradicts("old"));
+    const t0 = Date.now() + 5_000; // the older row's start is at or after this capture's own clock
+    await seed("old", "I live in NYC", { createdAt: t0 });
+    const spy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      const r = await capture("I moved to LA");
+      expect(r).toMatchObject({ status: "contradiction", supersede: { closedId: "old", direction: "older", at: t0 + 1 } });
+      expect(await row((r as any).id)).toMatchObject({ valid_from: t0 + 1, valid_until: null });
+      expect((await row("old")).valid_until).toBe(t0 + 1);
+    } finally { spy.mockRestore(); }
+  });
+
   it("audits superseded on the closed row, not status_changed", async () => {
     await setup([{ id: "old", score: 0.72 }], contradicts("old"));
     await seed("old", "I live in NYC");
@@ -312,7 +325,7 @@ describe("surfaces", () => {
     const until = (await row("old")).valid_until;
     const date = new Date(until).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
     const preview = "Lives in Denver, in the house on Elm Street near the park and the old library".slice(0, 60);
-    expect(text).toBe(`Stored. ID: ${id}. It replaces entry old ("${preview}"), which is kept as history: true until ${date}. If that was wrong, undo(old) makes old current again.`);
+    expect(text).toBe(`Stored. ID: ${id}. It replaces memory old ("${preview}"), which is kept as history: true until ${date}. If that was wrong, undo(old) makes old current again.`);
     expect(text).not.toMatch(/—/);
   });
 
@@ -322,7 +335,7 @@ describe("surfaces", () => {
     const r = await capture("Lived in Boston", { validity: { from: Date.UTC(2018, 0, 1) } });
     const { supersedeReply } = await import("../../src/memory/validity");
     expect(supersedeReply((r as any).id, (r as any).resolvedConflict, (r as any).supersede, "UTC")).toBe(
-      `Stored. ID: ${(r as any).id} as history: it was true until Jan 1, 2024, when entry denver began.`);
+      `Stored. ID: ${(r as any).id} as history: it was true until Jan 1, 2024, when memory denver began.`);
   });
 
   it("POST /capture returns the supersede fields", async () => {

@@ -17,7 +17,7 @@ import { CONFLICT_HELD_TAG, isCapsuleTag, stripNewReservedTags, SYSTEM_JOB_TAGS,
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES, VERSION_ROW_BUDGET_BYTES } from "../constants";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
-import { planSupersede, statedWindow, supersedeStatements, windowClosedSql, type SupersedePlan, type Window } from "../memory/validity";
+import { planSupersede, statedWindow, supersededBySql, supersedeStatements, windowClosedSql, type SupersedePlan, type Window } from "../memory/validity";
 import type { WhenKind, WhenSource } from "../when/input";
 import { extractUnambiguousDate } from "../when/heuristic";
 
@@ -64,13 +64,7 @@ export function buildEntryFilterQuery(params: {
   // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, scoped by the caller's own clause spliced in below
   // scope-exempt: builder only: callers splice the caller's scope in before ORDER BY — routes/recall.ts always, but mcp/server.ts only `if (identity)`, so an identity-less MCP caller gets this SQL unscoped
   let sql = `SELECT id, content, tags, source, created_at, vector_ids, workspace_id, actor_id, valid_from, valid_until,
-    (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
-       FROM edges g JOIN entries s ON s.id = g.source_id
-      WHERE g.target_id = entries.id AND g.type = 'supersedes'
-        AND s.tags NOT LIKE '%"status:deprecated"%'
-        AND s.workspace_id = entries.workspace_id
-        AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
-      ORDER BY s.created_at DESC LIMIT 1) AS superseded_by_json
+    ${supersededBySql("entries")} AS superseded_by_json
     FROM entries`;
   if (conds.length) sql += ` WHERE ` + conds.join(` AND `);
   sql += ` ORDER BY created_at DESC LIMIT ?`;
@@ -374,6 +368,10 @@ export async function captureEntry(
         id: contradiction.conflicting_id, from: (conflictRow.valid_from ?? conflictRow.created_at) as number,
         until: (conflictRow.valid_until ?? null) as number | null, workspaceId: writeCtx.workspaceId, status: conflictStatus,
       };
+      // A newcomer told now, with no stated start, is newer than the fact it contradicts even when the
+      // clocks tie (the same millisecond, or another isolate's clock ahead of this one): it starts just
+      // after the older fact, and that start is stored, so the older row's end still meets it exactly.
+      if (window.valid_from === null && window.valid_until === null && now <= older.from) window.valid_from = older.from + 1;
       newer = { id, from: window.valid_from ?? now, until: window.valid_until, workspaceId: writeCtx.workspaceId, status: getStatus(t) };
       plan = planSupersede(older, newer);
     }
