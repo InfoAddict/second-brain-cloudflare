@@ -1122,7 +1122,7 @@ export async function handleAdminRoutes(
     const now = Date.now();
     const [rows, countRow] = await Promise.all([
       env.DB.prepare(
-        `SELECT id, content, tags, source, created_at, when_at, COALESCE(updated_at, created_at) AS last_updated
+        `SELECT id, content, tags, source, created_at, when_at, valid_until, COALESCE(updated_at, created_at) AS last_updated
          FROM entries
          WHERE ${STALE_REVIEW_SQL} AND ${scope.clause}
          ORDER BY COALESCE(updated_at, created_at) ASC LIMIT ? OFFSET ?`,
@@ -1146,6 +1146,7 @@ export async function handleAdminRoutes(
           source: r.source as string,
           created_at: r.created_at as number,
           last_updated: r.last_updated as number,
+          valid_until: r.valid_until as number | null,
           reason: staleReasonFor(tags, r.when_at as number | null, now),
         };
       }),

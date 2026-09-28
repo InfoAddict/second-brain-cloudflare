@@ -23,18 +23,20 @@ export const STALE_AS_OF = "stale:as-of";
 export const STALE_REVIEW_SQL =
   `(tags LIKE '%"${STALE_AS_OF}"%' OR tags LIKE '%"${RETRACTED_SOURCE_TAG}"%') AND tags NOT LIKE '%"status:deprecated"%' AND ${currentValidityAt("", SQL_NOW_MS)}`;
 
-export type StaleReason = "age" | "date_passed" | "retracted_source";
+export type StaleReason = "not_confirmed" | "date_passed" | "retracted_source";
 
 /**
- * Why a row sits in the review queue (spec 14 5.9's `GET /stale` contract), derived from its
- * current tags and `when_at` rather than stored, so it always reflects the row as it reads now.
- * `retracted-source` wins over a volatile row's own passed date: being built on a retracted
- * source is a different claim than "this is old", and the more specific one is worth naming.
+ * Why a row sits in the review queue (spec 14 5.9's `GET /stale` contract; director, 2026-09-28,
+ * on the dashboard lane's contract: `not_confirmed`/`date_passed`/`retracted_source`), derived
+ * from its current tags and `when_at` rather than stored, so it always reflects the row as it
+ * reads now. `retracted-source` wins over a volatile row's own passed date: being built on a
+ * retracted source is a different claim than "this is old", and the more specific one is worth
+ * naming.
  */
 export function staleReasonFor(tags: readonly string[], whenAt: number | null, now: number): StaleReason {
   if (tags.includes(RETRACTED_SOURCE_TAG)) return "retracted_source";
   if (whenAt !== null && whenAt < now) return "date_passed";
-  return "age";
+  return "not_confirmed";
 }
 
 export function hasStaleAsOf(tags: string[]): boolean {

@@ -439,7 +439,7 @@ export async function handleEntriesRoutes(
     const { timeline, labelMap } = timelineResult;
     const history = await buildEntryHistoryFromReads(env, auth, {
       id: row.id as string, workspace_id: String(row.workspace_id ?? ""), actor_id: String(row.actor_id ?? ""),
-      content: row.content as string, created_at: row.created_at as number,
+      content: row.content as string, created_at: row.created_at as number, valid_until: row.valid_until as number | null,
     }, config, chain, timelineResult);
     const layer = layerOf(auth, row.workspace_id);
     const actorName = resolveActorLabel(String(row.actor_id ?? ""), labelMap, {

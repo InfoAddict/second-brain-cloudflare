@@ -123,7 +123,7 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // held-row exclusion.
   // MOVED (T-0089.2.3): GET /stale's own `reason` computation (spec 14 5.9) added lines above it
   // and everything after; recomputed against the real scanner output.
-  "src/routes/admin.ts": [611, 624, 636, 661, 734, 759, 808, 857, 862, 1001, 1008, 1125, 1131, 1459, 1550, 1580, 1696],
+  "src/routes/admin.ts": [611, 624, 636, 661, 734, 759, 808, 857, 862, 1001, 1008, 1125, 1131, 1460, 1551, 1581, 1697],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };

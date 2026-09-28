@@ -130,7 +130,19 @@ describe("GET /stale", () => {
     expect(retracted).toBeDefined();
     expect(retracted.reason).toBe("retracted_source");
     const aged = data.entries.find((e: any) => e.id === "old-1");
-    expect(aged.reason).toBe("age");
+    expect(aged.reason).toBe("not_confirmed");
+  });
+
+  // Director, 2026-09-28 (dashboard lane D3's contract): the stale sheet needs valid_until
+  // alongside reason, already read by the same query, to render the reason line.
+  it("carries valid_until so the stale sheet can render the reason line", async () => {
+    sq = await migrated();
+    seedStale(sq, "old-1", "Our deploy target is the staging cluster");
+
+    const data = await (await worker.fetch(req("GET", "/stale"), envOf(sq), ctx)).json() as any;
+
+    expect(data.entries[0]).toHaveProperty("valid_until");
+    expect(data.entries[0].valid_until).toBeNull();
   });
 
   it("counts the whole queue, not the page", async () => {
