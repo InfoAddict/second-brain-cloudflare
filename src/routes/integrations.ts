@@ -364,16 +364,23 @@ export async function handleIntegrationsRoutes(
       // regardless of restamp outcome.
       const d1Reserved = d1Spent + 1;
       let vectorizeSpent = 0;
+      // Codex review class A (T-0089.4.2): restampVectorWorkspace's own held-row re-check spends
+      // one D1 read per call (one per entry here, not per chunk — it combines every getByIds
+      // batch's parent ids into a single read), which this projection has to count alongside the
+      // Vectorize cost or the self-throttling below stops protecting the real ceiling.
+      let restampD1Spent = 0;
       let vectorFailures = 0;
       for (const entry of toRestamp) {
         if (!entry.vectorIds.length) continue;
         const chunks = Math.ceil(entry.vectorIds.length / VECTORIZE_GET_BY_IDS_BATCH);
-        const projectedCost = chunks * 2; // one getByIds + one upsert per chunk
-        if (d1Reserved + vectorizeSpent + projectedCost > FREE_PLAN_SUBREQUESTS) {
+        const projectedVectorizeCost = chunks * 2; // one getByIds + one upsert per chunk
+        const projectedD1Cost = 1; // restampVectorWorkspace's own held-row re-check
+        if (d1Reserved + restampD1Spent + projectedD1Cost + vectorizeSpent + projectedVectorizeCost > FREE_PLAN_SUBREQUESTS) {
           vectorFailures++;
           continue;
         }
-        vectorizeSpent += projectedCost;
+        vectorizeSpent += projectedVectorizeCost;
+        restampD1Spent += projectedD1Cost;
         const restamp = await restampVectorWorkspace(env, entry.vectorIds, entry.workspaceId);
         if (!restamp.ok) vectorFailures++;
       }

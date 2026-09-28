@@ -1654,6 +1654,8 @@ export async function handleAdminRoutes(
     const bScope = scopeWhere(auth, undefined, "b.workspace_id");
     const dryRunNow = Date.now();
     // validity: current: a replaced side of a candidate pair is not insight material (5.5)
+    // Codex review class E (T-0089.4.2): same gap and same fix as src/insight/weekly.ts's own
+    // draw query — a candidate accrued clean can be held by the time this preview reads it.
     const { results } = await env.DB.prepare(
       `SELECT c.id, c.a_id, c.b_id, c.score, a.content AS a_content, b.content AS b_content,
               a.tags AS a_tags, b.tags AS b_tags

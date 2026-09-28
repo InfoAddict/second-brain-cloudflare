@@ -20,7 +20,11 @@ const sse = (text: string) => new ReadableStream({
 function makeAI(decision: () => string) {
   return {
     run: vi.fn().mockImplementation(async (model: string, opts: any) => {
-      if (model.startsWith("@cf/baai/bge")) return { data: [new Array(384).fill(0.1)] };
+      // R20's batchEmbeds sends every chunk in one call: answer with one vector per requested text.
+      if (model.startsWith("@cf/baai/bge")) {
+        const texts = Array.isArray(opts?.text) ? opts.text : [opts?.text];
+        return { data: texts.map(() => new Array(384).fill(0.1)) };
+      }
       const prompt = String(opts?.messages?.[0]?.content ?? "");
       if (prompt.includes("Choose exactly one action") || prompt.includes("checking if a new memory contradicts")) return sse(decision());
       return opts?.stream ? sse("A digest of the work memories.") : { response: "3" };

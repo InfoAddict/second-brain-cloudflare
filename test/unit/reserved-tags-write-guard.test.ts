@@ -22,16 +22,19 @@
  * with a fixed literal tags array (the provider id), never external content,
  * so they are not a vector either -- both are asserted structurally below.
  *
- * import keeps stored tags by design (entries/import.ts) and is deliberately
- * left alone: it is a person restoring their own export, not an inbound
- * caller-tag surface, and 16-t3-t4-trust-spec.md 3.4 (W-f) already classifies
- * it as unscored for the same reason.
+ * Codex recheck (T-0089.4.2): import (entries/import.ts's parseTags) was left out of the class
+ * above on the theory that it is a person restoring their own export, not an inbound caller-tag
+ * surface. A forged `quarantine:*`/`edited-canonical:*`/Track 7 tag on an imported row proved
+ * that theory wrong -- it let an import hide a memory, or forge a trust label, exactly like a
+ * caller could through capture or replace. parseTags now runs the same stripNewReservedTags
+ * guard, so import is no longer exempt.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { captureEntry } from "../../src/capture/entry";
 import { updateEntryContent } from "../../src/capture/store";
+import { importExportPayload } from "../../src/entries/import";
 import { OWNER_WRITE_CONTEXT } from "../../src/lib/scope";
 import { makeTestDb, makeTestEnv } from "../helpers/make-env";
 import type { Env } from "../../src/env";
@@ -105,6 +108,20 @@ describe("a caller cannot forge a reserved tag through updateEntryContent (repla
     await updateEntryContent(env, created.id, "Edited", undefined, undefined, ["work"], OWNER_WRITE_CONTEXT, { actorId: "", channel: "rest" }, "");
     const row = db.entries.find(e => e.id === created.id)!;
     expect(JSON.parse(row.tags)).toEqual(["work"]);
+  });
+});
+
+describe("a caller cannot forge a reserved tag through import either", () => {
+  it("drops every forged tag from an imported row, keeps an ordinary one", async () => {
+    const db = makeTestDb();
+    const env = makeTestEnv(db);
+    const summary = await importExportPayload(env, {
+      entries: [{ id: "imported-1", content: "A note", tags: [...FORGED_TAGS, "work"] }],
+    }, { writeCtx: OWNER_WRITE_CONTEXT });
+    expect(summary.imported).toBe(1);
+    const stored = JSON.parse(db.entries[0].tags);
+    expect(stored).toContain("work");
+    for (const forged of FORGED_TAGS) expect(stored).not.toContain(forged);
   });
 });
 

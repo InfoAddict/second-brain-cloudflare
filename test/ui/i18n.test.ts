@@ -659,6 +659,14 @@ describe("dashboard i18n", () => {
       prefix: "patterns.shapes.",
       by: "t(`patterns.shapes.${shape}`) in public/js/brief.js and public/js/patterns.js",
     },
+    {
+      // Lane W (T-0089.4.2, copy deck 9) added these ahead of the dashboard UI: the too-long
+      // hold chip/line and history entry have no lane-W-owned consumer yet. Lane S wires the
+      // chip/banner/history rendering (spec 16, S4/S5) and should remove this entry once real
+      // call sites exist.
+      keys: ["held.tooLongChip", "held.tooLongLine", "history.reasonHeldTooLong"],
+      by: "not yet consumed: reserved for lane S's too-long chip, banner and history rendering",
+    },
   ];
 
   it("every key in I18N_EN is read by some call site", () => {

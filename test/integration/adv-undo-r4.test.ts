@@ -147,16 +147,27 @@ describe("ADV-U19 (MINOR): the oversize fallback drops the record, so 'at most o
     const e = mergingEnv("big");
     await seed("big", { content: "Old text", tags: ["work"] });
     const incoming = "i".repeat(900_000);
-    expect((await capture(e, incoming)).status).toBe("merged");
+    // Codex recheck (T-0089.4.2): a person's own 900 KB capture (channel mcp/rest) would score
+    // `partial` and hold too_long, which now refuses to merge at all (finding #1) -- the exact
+    // protection this test's own scenario would otherwise defeat. This omits channel purely to
+    // reach the same oversized-merge shape ADV-U19 is about, unrelated to what this finding
+    // fixed -- commitPerson still runs, since systemWrite is still unset. `capture()`'s own
+    // `pending.push` is replicated here since this bypasses that helper.
+    pending.push(incoming);
+    expect((await captureEntry(incoming, [], "api", e, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId })).status).toBe("merged");
     const mergeSeq = (await versions("big"))[0].seq;
-    // The row keeps growing after the merge (still well inside D1's 2 MB row).
-    expect(await appendToEntry(e, "big", "", "g".repeat(950_000), [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), undefined, owner.personalWorkspaceId)).toBe(true);
+    // The row keeps growing after the merge (still well inside D1's 2 MB row). The result is
+    // well over the scorer's 32 KB budget, so class D (T-0089.4.2) holds it too_long and
+    // skips the embed rather than index a row nobody has fully read yet.
+    expect((await appendToEntry(e, "big", "", "g".repeat(950_000), [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), undefined, owner.personalWorkspaceId)).indexed).toBe(false);
     // First rollback: the version row needs a full 1.85 MB copy, so recreated_incoming is dropped.
-    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("reverted");
+    // The row is currently held (too_long, from the append above) and the merge-time target
+    // was not, so per 5.6 this rollback is a release, not a plain revert (class D, T-0089.4.2).
+    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("released");
     expect(live(incoming)).toHaveLength(1);
     // Undo the rollback, then roll back to the merge again.
     expect((await revertEntry(e, owner, "big", change(), DEFAULTS, undefined, owner.personalWorkspaceId)).status).toBe("reverted");
-    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("reverted");
+    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("released");
     expect(live(incoming)).toHaveLength(1); // actual: 2
   }, 120_000);
 });

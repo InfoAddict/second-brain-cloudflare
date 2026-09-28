@@ -11,6 +11,7 @@ import {
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
 import { embed, readStreamText } from "../lib/ai";
+import { excludeHeld } from "../quarantine/tags";
 import { nearestParents } from "../vectorize/parents";
 import { queryVectorizeScoped, singleWorkspaceFilter } from "../vectorize/scope";
 
@@ -51,6 +52,14 @@ export async function checkDuplicateAndContradiction(
   // queryVectorizeScoped a fire-and-forget KV write on filter degradation —
   // src/vectorize/scope.ts itself stays env-free.
   ctx?: { waitUntil(promise: Promise<unknown>): void },
+  opts: {
+    /**
+     * A held write (16-t3-t4-trust-spec.md 5.4 W-a, P6): duplicate flagging still runs (the
+     * embed and Vectorize query above are unconditional), but no model call is made, so a
+     * planted note can never talk its way into a merge or a contradiction verdict.
+     */
+    skipModelCall?: boolean;
+  } = {},
 ): Promise<{
   duplicate: DuplicateResult;
   contradiction: ContradictionResult;
@@ -111,9 +120,12 @@ export async function checkDuplicateAndContradiction(
     // Scoped, not by-id-exempt: see the comment on the candidate prompt below.
     // validity: current: superseded rows are dropped in JS below, from the candidates and from the duplicate verdict
     const { results } = await env.DB.prepare(
-      `SELECT id, content, valid_until FROM entries WHERE id IN (${placeholders}) AND +workspace_id = ?`
-    ).bind(...readIds, writerWorkspaceId).all() as { results: { id: string; content: string; valid_until: number | null }[] };
-    for (const r of results ?? []) {
+      `SELECT id, content, tags, valid_until FROM entries WHERE id IN (${placeholders}) AND +workspace_id = ?`
+    ).bind(...readIds, writerWorkspaceId).all() as { results: { id: string; content: string; tags: string; valid_until: number | null }[] };
+    // Codex review class E (T-0089.4.2): Vectorize's stale vector for a row held AFTER it was
+    // embedded can still surface here as a "match" — this read is what actually keeps a held
+    // neighbor's content out of the merge/contradiction prompt below, not the vector query.
+    for (const r of excludeHeld(results ?? [])) {
       if (r.valid_until !== null && r.valid_until !== undefined && r.valid_until <= now) superseded.add(r.id);
       else candidateRows.push({ id: r.id, content: r.content });
     }
@@ -131,7 +143,7 @@ export async function checkDuplicateAndContradiction(
   let contradiction: ContradictionResult = { detected: false };
   let mergeAction: MergeAction | null = null;
 
-  if (duplicate.status !== "blocked") {
+  if (duplicate.status !== "blocked" && !opts.skipModelCall) {
     const candidates = matches.filter(m => m.score >= CANDIDATE_SCORE_THRESHOLD);
     if (candidates.length) {
       const parentIds = new Set(candidates.map(m => (m.metadata as any)?.parentId ?? m.id));

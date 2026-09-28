@@ -24,6 +24,9 @@ import { STANDING_TAG } from "../tags/t7";
 import { standingTouched, type StandingCacheConfig } from "../standing/cache";
 import { buildDecisionCapture } from "../decisions/capture";
 import { buildCommitmentTags, validateT7Capture, type T7CaptureInput, type T7ReplyInfo } from "./t7-capture";
+import { scoreWrite, type QuarantineChannel, type ScoreResult } from "../quarantine/score";
+import { heldTagsFor, holdDecision, holdStatements, type HeldInfo } from "../quarantine/hold";
+import { countMcpWritesInWindow } from "../quarantine/burst";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -79,8 +82,8 @@ export function buildEntryFilterQuery(params: {
 
 export type CaptureResult = (
   | { status: "blocked"; matchId: string; score: number }
-  | { status: "stored"; id: string; tags: string[] }
-  | { status: "flagged"; id: string; matchId: string; score: number }
+  | { status: "stored"; id: string; tags: string[]; held?: HeldInfo }
+  | { status: "flagged"; id: string; matchId: string; score: number; held?: HeldInfo }
   | {
     status: "contradiction"; id: string; resolvedConflict: string; reason?: string;
     /** Which window closed (T-0089.2.1): the conflicting row ("older"), or the late-told newcomer ("newer"). */
@@ -234,7 +237,34 @@ export async function captureEntry(
     standingTouched(env, ctx, cfg as StandingCacheConfig, [writeCtx.workspaceId], [{ id: entryId, vector }]);
   };
 
-  const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(c, env, cfg, writeCtx.workspaceId, ctx);
+  // Track 4 (16-t3-t4-trust-spec.md 5.4 W-a): scored BEFORE duplicate and contradiction
+  // detection, so a held write's model calls below can be skipped outright rather than run
+  // and discarded. Only "mcp" and "rest" channels are content-writer channels captureEntry
+  // ever scores; a system job (digest, weekly insight) is never scored (Q-F, 5.1) and takes
+  // neither branch below.
+  let score: ScoreResult | null = null;
+  if (opts.channel === "mcp" || opts.channel === "rest") {
+    const channel: QuarantineChannel = opts.channel;
+    const mcpWritesInWindow = channel === "mcp"
+      ? await countMcpWritesInWindow(env, writeCtx.actorId, Date.now(), cfg.QUARANTINE_WRITE_BURST)
+      : undefined;
+    score = scoreWrite(
+      { content: c, tags: t, source, channel, kind: "create", mcpWritesInWindow, capsuleTagsChanged: t.some(isCapsuleTag) },
+      cfg,
+    );
+  }
+  // Codex review class D (T-0089.4.2): a `partial` score (over 32 KB, only the head and tail
+  // scanned) holds too, reason too_long, not just an outright `hold` — see holdDecision.
+  const decision = score ? holdDecision(score) : { hold: false as const };
+  // Codex review class E (T-0089.4.2): a held write's content is unreviewed — too_long included,
+  // since only the head and tail were ever scanned — and must never reach a model prompt, the
+  // same rule that governs every candidate ROW read for a prompt (excludeHeld, quarantine/tags.ts).
+  // This costs an oversized-but-benign write its own automatic merge/contradiction verdict; it
+  // lands as a standalone row instead (finding #1 already refuses to commit a merge for one
+  // anyway), which is the smaller loss next to sending unscanned text into an AI call.
+  const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(
+    c, env, cfg, writeCtx.workspaceId, ctx, { skipModelCall: decision.hold },
+  );
 
   const definesCapsule = t.some(isCapsuleTag);
   if (definesCapsule && getStatus(t) === null) t.push("status:draft");
@@ -245,7 +275,14 @@ export async function captureEntry(
 
   // A capsule definition must land as its own row: a merge discards the
   // incoming tags, and the slot tags are the whole point of the write.
-  if (dup.status === "flagged" && mergeAction && mergeAction.action !== "keep_both" && !definesCapsule) {
+  //
+  // Codex recheck (T-0089.4.2): a held write — too_long included — must never merge, replace,
+  // supersede or deprecate an existing row. The model call above still runs for a merely-oversized
+  // write (skipModelCall is narrower than decision.hold, see above), so mergeAction can still come
+  // back "merge"/"replace" for one; committing that would publish the write's own unscanned or
+  // unreviewed content into a target row that was never held, exactly the exposure a hold exists
+  // to prevent. A held write always falls through to landing as its own standalone (held) row.
+  if (dup.status === "flagged" && mergeAction && mergeAction.action !== "keep_both" && !definesCapsule && !decision.hold) {
     const targetId = mergeAction.target_id;
     const newContent = mergeAction.action === "merge" ? mergeAction.merged_content : c;
 
@@ -388,7 +425,11 @@ export async function captureEntry(
             // This merge's own upload never became the row's (round 6: ids are per upload): delete it.
             await discardUpload(env, targetId, newVectorIds);
           } else {
-            if (opts.systemWrite === undefined && t.includes(STANDING_TAG)) {
+            // Either side: the incoming capture's own standing tag (propagated by refreshedTags
+            // above), or the target already being standing:active before this merge/replace ever
+            // ran — either way its content and vector just changed, so the cache's stored vector
+            // for it is now stale (spec 15 2.6).
+            if (opts.systemWrite === undefined && (t.includes(STANDING_TAG) || existingTags.includes(STANDING_TAG))) {
               standingTouched(env, ctx, cfg as StandingCacheConfig, [writeCtx.workspaceId], newVectorValues ? [{ id: targetId, vector: newVectorValues }] : undefined);
             }
             try {
@@ -493,7 +534,7 @@ export async function captureEntry(
   })();
 
   // versioning: exempt: creation — a new row has no prior state to keep
-  await env.DB.prepare(
+  const insertStatement = env.DB.prepare(
     `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source, when_label, valid_from, valid_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, c, JSON.stringify(finalTags), source, now, now, "[]", writeCtx.workspaceId, writeCtx.actorId,
@@ -503,7 +544,30 @@ export async function captureEntry(
     // paths never generate one, matching every other when_label writer in this codebase.
     (resolvedWhen && "label" in resolvedWhen) ? resolvedWhen.label : null,
     window.valid_from, window.valid_until,
-  ).run();
+  );
+
+  if (decision.hold) {
+    // 5.4: the INSERT (with the tags the write asked for) and the hold's own version, guarded
+    // UPDATE and prune all land in ONE batch, so a crash between them can never leave an
+    // unheld row. No scheduleIndex: a held create is never vectorized (5.3 point 1). Class D
+    // (T-0089.4.2): this also covers a `partial` score, held reason too_long.
+    const heldTags = heldTagsFor(finalTags, decision.reasons);
+    await env.DB.batch([
+      insertStatement,
+      ...holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: cfg.VERSION_KEEP }, {
+        entryId: id, reasons: decision.reasons, score: decision.score, signals: decision.signals, change, heldTags, now,
+      }),
+    ]);
+    ctx.waitUntil(rememberTags(env, finalTags, writeCtx.workspaceId));
+    const held: HeldInfo = { reasons: decision.reasons, score: decision.score };
+    return withT7(
+      dup.status === "flagged"
+        ? { status: "flagged", id, matchId: dup.matchId, score: dup.score, held }
+        : { status: "stored", id, tags: heldTags, held },
+    );
+  }
+
+  await insertStatement.run();
 
   // Indexed once the outcome is known, with the tags the row will actually keep: a system capture can
   // still be turned into a held draft by a lost compare-and-set below.
@@ -603,6 +667,14 @@ export async function captureEntry(
       classifyThenInfer(id, c, env, ctx, cfg, kind =>
         inferEdgesOnWrite(id, neighbors, env, { suppressId, newKind: kind }));
       return withT7({ status: "stored", id, tags: keptTags });
+    }
+
+    // The supersede close (spec 15 2.6): the CLOSED row just left "current", which is what the
+    // cache build's own currentValidityAt filter admits on. Only the closed side's tags matter —
+    // the closer (still open) had no eligibility change of its own from this write.
+    const closedTags: string[] = closesOlder ? JSON.parse(snap.tags ?? "[]") : finalTags;
+    if (closedTags.includes(STANDING_TAG)) {
+      standingTouched(env, ctx, cfg as StandingCacheConfig, [writeCtx.workspaceId]);
     }
 
     if (opts.channel) {

@@ -99,6 +99,22 @@ const PIPELINE_TAG_NAMES = new Set([
   RETRACTED_SOURCE_TAG,
 ]);
 
+/**
+ * The one normalization every caller-, import- or sync-supplied tag list must pass through
+ * before it is ever written (Codex review class B, T-0089.4.2): trims each tag and drops any
+ * that become empty. A stored tag with a leading or trailing space still matches
+ * `isWorkerOwnedTag`/`isHeld` (both trim before checking), but never matches the literal LIKE
+ * patterns (NOT_HELD_SQL, INDEXABLE_SQL) those same tags drive at the SQL layer — a held row
+ * with a stray space around its `quarantine:` tag would then read as excluded in application
+ * code but still surface through a raw SQL filter. Applied at every entry point tags can first
+ * reach storage from outside this Worker's own write paths (capture already trims via
+ * normalizeCaptureInput; this covers the ones that do not): import, trash restore, and mirror
+ * sync. Idempotent, so calling it more than once on the same list is harmless.
+ */
+export function normalizeTagList(tags: readonly unknown[]): string[] {
+  return tags.filter((t): t is string => typeof t === "string").map(t => t.trim()).filter(Boolean);
+}
+
 /** True when the tag is the brain's own bookkeeping rather than the user's word. */
 export function isWorkerOwnedTag(tag: string): boolean {
   if (typeof tag !== "string") return false;
