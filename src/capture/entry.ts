@@ -256,12 +256,14 @@ export async function captureEntry(
   // Codex review class D (T-0089.4.2): a `partial` score (over 32 KB, only the head and tail
   // scanned) holds too, reason too_long, not just an outright `hold` — see holdDecision.
   const decision = score ? holdDecision(score) : { hold: false as const };
-  // The model call below is skipped only for a real hold (a matched suspicious signal), not
-  // merely because the write is oversized and too_long: a benign large capture still
-  // deserves a normal merge/duplicate decision, and skipping it would silently strand every
-  // oversized merge as a standalone held row instead of landing on its target.
+  // Codex review class E (T-0089.4.2): a held write's content is unreviewed — too_long included,
+  // since only the head and tail were ever scanned — and must never reach a model prompt, the
+  // same rule that governs every candidate ROW read for a prompt (excludeHeld, quarantine/tags.ts).
+  // This costs an oversized-but-benign write its own automatic merge/contradiction verdict; it
+  // lands as a standalone row instead (finding #1 already refuses to commit a merge for one
+  // anyway), which is the smaller loss next to sending unscanned text into an AI call.
   const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(
-    c, env, cfg, writeCtx.workspaceId, ctx, { skipModelCall: score?.hold === true },
+    c, env, cfg, writeCtx.workspaceId, ctx, { skipModelCall: decision.hold },
   );
 
   const definesCapsule = t.some(isCapsuleTag);

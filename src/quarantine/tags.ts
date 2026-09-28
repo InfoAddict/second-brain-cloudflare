@@ -35,6 +35,19 @@ export function isHeld(tags: readonly string[]): boolean {
   return tags.some(t => isTagString(t) && t.trim().toLowerCase().startsWith(QUARANTINE_TAG_PREFIX));
 }
 
+/**
+ * Codex review class E (T-0089.4.2): the one gate between a candidate row and any AI model
+ * prompt — contradiction, duplicate/merge, digest, insight, classify, or anything else. A held
+ * row's content is unreviewed (that is what the hold means); every candidate-row query behind a
+ * model call must select `tags` and filter its results through this before any row's content is
+ * spliced into a prompt. See test/unit/model-prompt-held-inventory.test.ts.
+ */
+export function excludeHeld<T extends { tags: string | null | undefined }>(rows: readonly T[]): T[] {
+  return rows.filter(r => {
+    try { return !isHeld(JSON.parse(r.tags ?? "[]")); } catch { return true; }
+  });
+}
+
 /** The row's hold reason, or null when it is not held or the reason is unrecognized. */
 export function heldReason(tags: readonly string[]): HoldReason | null {
   for (const tag of tags) {

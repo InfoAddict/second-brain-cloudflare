@@ -11,6 +11,7 @@ import {
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
 import { embed, readStreamText } from "../lib/ai";
+import { excludeHeld } from "../quarantine/tags";
 import { nearestParents } from "../vectorize/parents";
 import { queryVectorizeScoped, singleWorkspaceFilter } from "../vectorize/scope";
 
@@ -119,9 +120,12 @@ export async function checkDuplicateAndContradiction(
     // Scoped, not by-id-exempt: see the comment on the candidate prompt below.
     // validity: current: superseded rows are dropped in JS below, from the candidates and from the duplicate verdict
     const { results } = await env.DB.prepare(
-      `SELECT id, content, valid_until FROM entries WHERE id IN (${placeholders}) AND +workspace_id = ?`
-    ).bind(...readIds, writerWorkspaceId).all() as { results: { id: string; content: string; valid_until: number | null }[] };
-    for (const r of results ?? []) {
+      `SELECT id, content, tags, valid_until FROM entries WHERE id IN (${placeholders}) AND +workspace_id = ?`
+    ).bind(...readIds, writerWorkspaceId).all() as { results: { id: string; content: string; tags: string; valid_until: number | null }[] };
+    // Codex review class E (T-0089.4.2): Vectorize's stale vector for a row held AFTER it was
+    // embedded can still surface here as a "match" — this read is what actually keeps a held
+    // neighbor's content out of the merge/contradiction prompt below, not the vector query.
+    for (const r of excludeHeld(results ?? [])) {
       if (r.valid_until !== null && r.valid_until !== undefined && r.valid_until <= now) superseded.add(r.id);
       else candidateRows.push({ id: r.id, content: r.content });
     }

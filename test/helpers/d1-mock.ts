@@ -1268,7 +1268,7 @@ export class D1Mock {
           const results = rows.map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results };
         }
-        if (s.includes("SELECT id, content, COALESCE(updated_at, created_at) AS row_version FROM entries") && s.includes("WHERE tags LIKE") && s.includes("ORDER BY created_at DESC")) {
+        if (s.includes("SELECT id, content, tags, COALESCE(updated_at, created_at) AS row_version FROM entries") && s.includes("WHERE tags LIKE") && s.includes("ORDER BY created_at DESC")) {
           // compressTag raw entries query — tag match, system-tag exclusion, and the
           // recall/age/contradiction eligibility predicate (cutoff is the 2nd bind param).
           const tagPattern = args[0] as string;
@@ -1284,6 +1284,9 @@ export class D1Mock {
               if (tags.includes("synthesized") || tags.includes("auto-pattern") || tags.includes("auto-insight") || tags.includes("rolled-up")) return false;
               // Capsule definitions are never digest members (digest.ts `tags NOT LIKE '%"capsule:%'`).
               if (tags.some(t => t.toLowerCase().startsWith("capsule:"))) return false;
+              // Codex review class E (T-0089.4.2): a held row's content must never reach the
+              // digest model's prompt — excludeHeld's own behavior, mirrored here.
+              if (tags.some(t => t.toLowerCase().startsWith("quarantine:"))) return false;
               if (!(e.importance_score == null || e.importance_score < COMPRESSION_IMPORTANCE_THRESHOLD)) return false;
               const rc = e.recall_count; // NULL/undefined → recall clause is falsy → protected (matches SQL)
               if (!(rc === 0 || (rc < COMPRESSION_MIN_RECALL && e.created_at < cutoff))) return false;
@@ -1292,13 +1295,13 @@ export class D1Mock {
             })
             .sort((a: any, b: any) => b.created_at - a.created_at)
             .slice(0, 50)
-            .map((e: any) => ({ id: e.id, content: e.content, row_version: e.updated_at ?? e.created_at }));
+            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, row_version: e.updated_at ?? e.created_at }));
           return { results };
         }
-        if (s.includes("SELECT id, content FROM entries WHERE id IN") || s.includes("SELECT id, content, valid_until FROM entries WHERE id IN")) {
+        if (s.includes("SELECT id, content FROM entries WHERE id IN") || s.includes("SELECT id, content, tags, valid_until FROM entries WHERE id IN")) {
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, content: e.content, valid_until: e.valid_until ?? null }));
+            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, valid_until: e.valid_until ?? null }));
           return { results };
         }
         if (s.includes("json_each(entries.tags)") && s.includes("HAVING count > 10")) {
