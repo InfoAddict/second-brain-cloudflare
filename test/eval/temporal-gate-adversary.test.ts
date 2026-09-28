@@ -7,7 +7,10 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSyntheticCorpus } from "./corpus/synthetic";
 import { evaluateGate } from "./gate";
-import { beliefTimeAsOf, currentOracleNoRestore, onlyCategory, oracleBeliefFirst, type Transform } from "./temporal-transforms";
+import {
+  beliefTimeAsOf, currentOracle, currentOracleNoRestore, demoteNewest, dropOwnTimeline, onlyCategory, oracleBeliefFirst,
+  oracleBeliefsUnderTarget, oracleWithoutBeliefs, planOracle, staleDemote, type Transform,
+} from "./temporal-transforms";
 import { scoreQuery } from "./metrics";
 import type { VariantReport } from "./types";
 
@@ -71,5 +74,37 @@ describe("adversary: D-RET in as-of is ungated against the recorded baseline", (
     const r = gate("temporal-during", cand(onlyCategory("temporal-during", currentOracleNoRestore)));
     console.log("F7", show(r));
     expect(r.verdict).toBe("FAIL");
+  });
+});
+
+// T-0089.2.6 adversary round 3: KU-4's PASS turned out to depend on clusterKey, an eval-only grouping (the query's
+// own timeline instance) that B6's real code cannot compute -- ku-silent has no supersede edge by design, so
+// production has no way to know a rival exists at all. A "right" transform used to decide a ship default
+// (proof-matrix rows marked PASS: 1, 2, 3, KU-1, KU-4) must read only fields B6's real code can see; clusterKey
+// (directly, or through the timelineEntries helper) may appear only in a transform demonstrating a WRONG
+// candidate, where reading test-only structure is fine because the candidate is never shipped.
+describe("adversary round 3: ship-decision transforms read only production fields", () => {
+  const SHIP_DECISION: readonly [string, Transform][] = [
+    ["planOracle (row 1, KU-1's currentOracle)", planOracle],
+    ["oracleWithoutBeliefs (row 2)", oracleWithoutBeliefs],
+    ["oracleBeliefsUnderTarget (row 3)", oracleBeliefsUnderTarget],
+    ["staleDemote (KU-4)", staleDemote],
+  ];
+  const WRONG: readonly [string, Transform][] = [
+    ["demoteNewest (row 5)", demoteNewest],
+    ["dropOwnTimeline (row 14)", dropOwnTimeline],
+    ["oracleBeliefFirst (row 9)", oracleBeliefFirst],
+    ["currentOracleNoRestore (row 12, KU-2)", currentOracleNoRestore],
+  ];
+  const readsClusterKey = (t: Transform) => /clusterKey|timelineEntries/.test(t.toString());
+
+  it.each(SHIP_DECISION)("%s reads no clusterKey or timelineEntries", (_name, t) => {
+    expect(readsClusterKey(t)).toBe(false);
+  });
+  it("currentOracle is exactly planOracle (KU-1 uses the same production-feasible transform as row 1)", () => {
+    expect(currentOracle).toBe(planOracle);
+  });
+  it.each(WRONG)("%s is allowed to (and does) read clusterKey or timelineEntries, as a WRONG candidate", (_name, t) => {
+    expect(readsClusterKey(t)).toBe(true);
   });
 });

@@ -194,22 +194,23 @@ export const currentOracle: Transform = planOracle;
  * hidden even after "bad" is itself retracted (the belief-time reading D-RET replaced, applied to a current
  * question instead of a past one). */
 /** KU-4: approximates the rank effect of T-0089.2.3's stale-penalty multiplier (0.9 on volatility:state rows in
- * "current" queries) by demoting any candidate that is state-volatile and structurally unsuperseded (no validUntil
- * or retractedAt of its own: nothing ever closed it) below every other candidate. This is an upper bound on what a
- * 0.9 multiplier could achieve, not a proportional simulation: rankedIds carry no raw score to multiply. */
-/** T-0089.2.3's own rule (STALE_THRESHOLD_DAYS): the penalty applies only past 90 days, and only where this
- * query's own timeline (via clusterKey, not gold) actually has more than one member to prefer over it -- a lone,
- * unrivalled state fact (silent-true, adversary round 2) has nothing to lose to and must not be demoted just for
- * being old. Age-blind and rival-blind demotion (round 2's R1) demotes silent-fresh's still-current "old" and
- * silent-true's lone gold too; this is why those are wrong. */
+ * "current" queries) by demoting any candidate that is state-volatile, past STALE_THRESHOLD_DAYS (90) and
+ * structurally unsuperseded (no validUntil or retractedAt of its own: nothing ever closed it) below every other
+ * candidate. This is an upper bound on what a 0.9 multiplier could achieve, not a proportional simulation:
+ * rankedIds carry no raw score to multiply.
+ *
+ * PRODUCTION-COMPUTABLE ONLY (T-0089.2.6 adversary round 3): an earlier version also required a same-timeline
+ * rival, found via `clusterKey` -- an eval-only grouping B6 cannot compute in production, where `ku-silent` has
+ * no supersede edge by design and so no way to know a rival exists at all. This is the one transform any ship
+ * decision (KU-4) is allowed to read; it must use only fields B6's real code can see (the tag, the age, whether
+ * the row is itself superseded), never `clusterKey` or any other test-only grouping. See
+ * `temporal-gate-adversary.test.ts`'s "ship-decision transforms" describe block, which enforces this mechanically. */
 export const staleDemote: Transform = (report, corpus) => apply(report, corpus, (ranked, q, byId) => {
   const now = questionTime(q);
-  const hasRival = timelineEntries(q, byId).length > 1;
   const isStaleUnsuperseded = (id: string) => {
     const e = byId.get(id);
     if (!e || !e.tags.includes("volatility:state") || e.validUntil !== undefined || e.retractedAt !== undefined) return false;
-    const ageDays = (now - e.createdAt) / DAY_MS;
-    return ageDays >= STALE_THRESHOLD_DAYS && hasRival;
+    return (now - e.createdAt) / DAY_MS >= STALE_THRESHOLD_DAYS;
   };
   return [...ranked.filter(id => !isStaleUnsuperseded(id)), ...ranked.filter(isStaleUnsuperseded)];
 });

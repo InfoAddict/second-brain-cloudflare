@@ -169,13 +169,21 @@ describe("knowledge-update: D-RET's restore is what a right implementation needs
     expect(rule(result, "regression")?.status).toBe("fail");
   });
 
-  it("KU-4: T-0089.2.3's stale-penalty upper bound PASSes ku-silent through --target-subsets, the category margin alone cannot see it", () => {
+  it("KU-4: T-0089.2.3's stale-penalty MEASURED verdict, staleDemote using only production-computable fields (T-0089.2.6 adversary round 3)", () => {
+    // staleDemote no longer reads clusterKey (adversary round 3: B6's real code cannot compute a same-timeline
+    // rival, since ku-silent has no supersede edge by design). Recorded as measured, not asserted to a
+    // predetermined verdict: PASS or FAIL are both spec-valid outcomes (14-t2-time-spec.md 6.5). FAIL is what this
+    // corpus actually measures -- the penalty wins on ku-silent (+0.1675 MRR via --target-subsets) but wrongly
+    // demotes ku-silent-true's lone, unrivalled true fact (-0.8884 MRR), which production-computable fields alone
+    // cannot tell apart from a real rival. This means B6 ships at its default multiplier of 1.0 (off) unless the
+    // real 0.9 multiplier (a proportional score adjustment, not this transform's absolute demote-to-bottom upper
+    // bound) can pass on its own.
     const result = evaluateGate(baseline, candidate("ku-stale-demote", onlyCategory("knowledge-update", staleDemote)), {
       targetCategories: ["knowledge-update"], targetSubsets: [KU_SILENT_TARGET], bootstrap: BOOTSTRAP, allowUnmeasuredRowsRead: true, floors: corpus.floors,
     });
-    expect(result.verdict).toBe("PASS");
-    expect(rule(result, "improvement")?.status).toBe("pass");
-    expect(rule(result, "improvement")?.detail).toContain(KU_SILENT_TARGET);
+    expect(result.verdict).toBe("FAIL");
+    expect(rule(result, "subset-regression")?.status).toBe("fail");
+    expect(result.subsetRegressions.some(s => s.includes("[subset:ku-silent-true]"))).toBe(true);
   });
 });
 
