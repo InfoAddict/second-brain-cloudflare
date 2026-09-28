@@ -6,7 +6,7 @@ import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus } from "./status";
 import { withUserEditMarker } from "../tags/system";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import { discardUpload, upsertEntryVectors, type StoredEntry } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
@@ -405,11 +405,11 @@ export async function revertEntry(
   } catch (e) {
     // A thrown batch: this undo's own upload never became the row's (ids are per upload, T-0089.1.1),
     // so delete it; the row's listed vectors were never touched.
-    if (needsReembed) await discardUpload(env, newVectorIds);
+    if (needsReembed) await discardUpload(env, id, newVectorIds);
     // The incoming rows never landed either (same batch, same guard, and now nothing to undo — the
     // INSERTs are gone with the rest of the transaction). Their vectors are fresh ids under no row,
     // not a live row's own, so cleaning them up here breaks no rule (U18).
-    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteVectorIds(env, ins.vectorIds); } catch (e2) { console.error("Orphan vector cleanup failed (non-fatal):", e2); } } }
+    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteEntryVectors(env, [{ entryId: ins.id, vectorIds: ins.vectorIds }]); } catch (e2) { console.error("Orphan vector cleanup failed (non-fatal):", e2); } } }
     throw e;
   }
 
@@ -420,23 +420,23 @@ export async function revertEntry(
     const stillThere = await env.DB.prepare(`SELECT 1 AS ok FROM entries WHERE id = ?`).bind(id).first();
     if (!stillThere) {
       // The row is truly gone: the fresh vectors this undo wrote describe a row nothing owns now.
-      if (newVectorIds) { try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
+      if (newVectorIds) { try { await deleteEntryVectors(env, [{ entryId: id, vectorIds: newVectorIds }]); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
       // The incoming inserts share the UPDATE's own guard, so they missed too: nothing landed for
       // them either, and their fresh vectors are equally orphaned.
-      for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteVectorIds(env, ins.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
+      for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteEntryVectors(env, [{ entryId: ins.id, vectorIds: ins.vectorIds }]); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
       return { status: "not_found" };
     }
     // The row is still there, committed by someone else: its vectors are its own, and this undo's
     // upload (per-upload ids) is deleted without touching them.
-    if (needsReembed) await discardUpload(env, newVectorIds);
+    if (needsReembed) await discardUpload(env, id, newVectorIds);
     // Same shared guard, same miss: the incoming inserts landed nowhere, so their vectors are orphans.
-    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteVectorIds(env, ins.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
+    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteEntryVectors(env, [{ entryId: ins.id, vectorIds: ins.vectorIds }]); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
     return { status: "stale" };
   }
 
   if (targetStatus === "deprecated" || needsReembed) {
     const stale = targetStatus === "deprecated" ? oldVectorIds : oldVectorIds.filter(v => !(newVectorIds ?? []).includes(v));
-    try { if (stale.length) await deleteVectorIds(env, stale); } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
+    try { if (stale.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds: stale }]); } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
   }
 
   await writeAuditEvents(env, [{

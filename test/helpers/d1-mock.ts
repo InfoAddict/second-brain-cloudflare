@@ -104,7 +104,23 @@ export class D1Mock {
   workspaces: any[] = [];
   memberships: any[] = [];
 
+  /**
+   * Vector id -> the row that listed it, remembered across statements (T-0089.1.1): the index still
+   * holds a row's vectors after the write that clears its vector_ids, until they are deleted. Read by
+   * make-env's Vectorize double to answer deleteEntryVectors' parentId check the way real data would.
+   */
+  private listedVectors = new Map<string, string>();
+  private rememberListed(): void {
+    for (const r of [...this.entries, ...this.trash]) {
+      let ids: string[] = [];
+      try { ids = JSON.parse(r.vector_ids ?? "[]"); } catch { ids = []; }
+      for (const v of ids) if (!this.listedVectors.has(v)) this.listedVectors.set(v, r.id);
+    }
+  }
+  __vectorOwners(): Map<string, string> { this.rememberListed(); return this.listedVectors; }
+
   prepare(sql: string) {
+    if (/^\s*(UPDATE entries|DELETE FROM entries|INSERT INTO entries_trash)/i.test(sql)) this.rememberListed();
     let s = sql.replace(/\s+/g, " ").trim();
 
     // Team-edition workspace scoping. Production appends `AND workspace_id IN (?, ?)`

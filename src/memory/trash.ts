@@ -7,7 +7,7 @@ import type { Identity } from "../lib/identity";
 import { scopeWhere } from "../lib/scope";
 import { assertCanMutateEntry } from "../lib/entry-access";
 import { writeAuditEvents, type AuditEventInput } from "../lib/audit";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import { edgeEndpointsReadableSql } from "../graph/edges";
 import { EDGE_ROW_COLUMNS, edgesJsonSql, restoreColumnsSql, rowJsonSql } from "./entry-columns";
 import { upsertEntryVectors, deleteStaleVectors, discardUpload } from "../capture/store";
@@ -284,9 +284,9 @@ export async function trashMirroredEntries(
     purged += done.length;
     skipped += allowed.length - done.length;
 
-    const vectorIds = done.flatMap((r) => { try { return JSON.parse(r.vector_ids ?? "[]") as string[]; } catch { return []; } });
+    const owned = done.map((r) => { try { return { entryId: r.id, vectorIds: JSON.parse(r.vector_ids ?? "[]") as string[] }; } catch { return { entryId: r.id, vectorIds: [] }; } });
     try {
-      if (vectorIds.length) await deleteVectorIds(env, vectorIds);
+      await deleteEntryVectors(env, owned);
     } catch (e) {
       console.error("Vectorize delete failed during disconnect purge (non-fatal):", e);
     }
@@ -507,7 +507,7 @@ export type RestoreResult =
 async function deleteOrphanedRestoreVectors(
   env: Env, _id: string, vectorIds: string[], _source: string, _cfg: Readonly<Config>, _writeCtx: { workspaceId: string; actorId: string },
 ): Promise<void> {
-  await discardUpload(env, vectorIds);
+  await discardUpload(env, _id, vectorIds);
 }
 
 /**
@@ -630,7 +630,7 @@ export async function restoreEntry(
   // keyword-only-degrade branch above), leaving the stored ids as the entry's only index.
   try {
     const storedIds = JSON.parse(trashed.vector_ids ?? "[]") as string[];
-    await deleteStaleVectors(env, storedIds, vectorIds);
+    await deleteStaleVectors(env, trashed.id, storedIds, vectorIds);
   } catch (e) {
     console.error("Stale trash vector cleanup failed (non-fatal):", e);
   }
@@ -723,7 +723,7 @@ export async function deleteForever(
     vectorIds = [...new Set([...stored, ...deterministicVectorIds(id, row.content, row.source ?? "api")])];
   }
   try {
-    if (vectorIds.length) await deleteVectorIds(env, vectorIds);
+    if (vectorIds.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds }]);
   } catch (e) {
     console.error("Vectorize delete failed during Delete forever (non-fatal):", e);
   }

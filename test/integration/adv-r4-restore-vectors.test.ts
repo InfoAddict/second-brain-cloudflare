@@ -48,6 +48,8 @@ function vectorEnv() {
     upsert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v); return { mutationId: "m" } as any; }),
     insert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v); return { mutationId: "m" } as any; }),
     deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
+    // deleteEntryVectors reads metadata.parentId first (T-0089.1.1): answer from this store.
+    getByIds: vi.fn(async (ids: string[]) => ids.filter(i => store.has(i)).map(i => store.get(i))) as any,
   });
   const e = makeTestEnv(undefined, {
     DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,

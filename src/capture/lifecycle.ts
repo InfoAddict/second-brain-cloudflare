@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { getStatus, withStatus, type MemoryStatus } from "../memory/status";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import { reembedOrDegrade, discardUpload } from "./store";
 import type { Config } from "../config";
 import type { ChangeContext } from "../lib/audit";
@@ -49,7 +49,7 @@ export async function forgetEntry(
   if (changesOf(results[results.length - 1]) === 0) return { status: "not_found" };
 
   try {
-    if (vectorIds.length) await deleteVectorIds(env, vectorIds);
+    if (vectorIds.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds }]);
   } catch (e) {
     console.error("Vectorize delete failed (non-fatal):", e);
   }
@@ -132,7 +132,7 @@ export async function deprecateEntry(
   if (changesOf(results[1]) === 0) return false;
 
   try {
-    if (vectorIds.length) await deleteVectorIds(env, vectorIds);
+    if (vectorIds.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds }]);
   } catch (e) {
     console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e);
   }
@@ -198,7 +198,7 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
   ]);
   if (changesOf(results[1]) === 0) {
     // This call's own upload never became the row's: delete it (its ids are this upload's alone).
-    if (newVectorIdsJson !== undefined) await discardUpload(env, JSON.parse(newVectorIdsJson) as string[]);
+    if (newVectorIdsJson !== undefined) await discardUpload(env, id, JSON.parse(newVectorIdsJson) as string[]);
     return { status: "not_found" };
   }
   return { status: "ok", indexed };

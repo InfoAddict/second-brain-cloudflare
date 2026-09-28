@@ -170,7 +170,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
         }
         if (committed) {
           try {
-            await deleteStaleVectors(env, oldVectorIds, newVectorIds);
+            await deleteStaleVectors(env, id, oldVectorIds, newVectorIds);
           } catch (e) {
             console.error("Old vector cleanup failed (non-fatal):", e);
           }

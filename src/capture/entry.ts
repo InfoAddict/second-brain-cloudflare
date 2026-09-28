@@ -18,7 +18,7 @@ import { CONFLICT_HELD_TAG, isCapsuleTag, stripNewReservedTags, SYSTEM_JOB_TAGS,
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES, VERSION_ROW_BUDGET_BYTES } from "../constants";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import type { WhenKind, WhenSource } from "../when/input";
 import { extractUnambiguousDate } from "../when/heuristic";
 
@@ -298,10 +298,10 @@ export async function captureEntry(
           if (!landed) {
             console.error("Merge lost the row to a concurrent edit — keeping both");
             // This merge's own upload never became the row's (round 6: ids are per upload): delete it.
-            await discardUpload(env, newVectorIds);
+            await discardUpload(env, targetId, newVectorIds);
           } else {
             try {
-              await deleteStaleVectors(env, oldVectorIds, newVectorIds);
+              await deleteStaleVectors(env, targetId, oldVectorIds, newVectorIds);
             } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
 
             // The survivor's content just changed, so its graph position should
@@ -466,7 +466,7 @@ export async function captureEntry(
       deprecatedBySystem = true;
       try {
         const oldVectorIds: string[] = JSON.parse(snap.vector_ids ?? "[]");
-        if (oldVectorIds.length) await deleteVectorIds(env, oldVectorIds);
+        if (oldVectorIds.length) await deleteEntryVectors(env, [{ entryId: conflictId, vectorIds: oldVectorIds }]);
       } catch (e) { console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e); }
       if (opts.channel) {
         auditEvent(env, ctx, {

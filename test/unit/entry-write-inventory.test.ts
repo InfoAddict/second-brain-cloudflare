@@ -72,6 +72,7 @@ function scanInventory(): Site[] {
 // shifting lines this branch's own commits never touched. Recomputed against the real scanner
 // output after combining rather than hand-reconciling two independently-tracked line sets, same
 // reasoning as every prior cross-track merge this table records — see the history further below.
+// MOVED (T-0089.1.1 final round): shared delete helper and the id bound shifted these lines; same sites.
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
@@ -99,10 +100,10 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/store.ts', line: 632, kind: 'snapshot' },
   { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot' },
   // MOVED 26 -> 30 (T-0089.1.1 round 2): the id-uniqueness comment above import's insert, which now mints a fresh id in-statement.
-  { file: 'src/entries/import.ts', line: 30, kind: 'exempt' },
+  { file: 'src/entries/import.ts', line: 32, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 96, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 148, kind: 'snapshot' },
-  { file: 'src/lib/team-admin.ts', line: 587, kind: 'hard-delete' },
+  { file: 'src/lib/team-admin.ts', line: 591, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
   { file: 'src/memory/actions.ts', line: 64, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 107, kind: 'snapshot' },

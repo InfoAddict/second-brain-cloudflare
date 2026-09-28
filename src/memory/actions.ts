@@ -9,7 +9,7 @@ import { parseExplicitWhen } from "../when/input";
 import { resolveConfig } from "../config";
 import { withStatus, getStatus } from "./status";
 import { withKind } from "./kind";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors, type OwnedVectors } from "../vectorize/batch";
 import { buildCasGuard, changesOf, Params, pruneManyStatement, pruneStatement, snapshotStatement, type WhenChange } from "./versions";
 
 export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true";
@@ -187,7 +187,7 @@ export async function applyInsightResolution(
   }
   const resolved: string[] = [];
   const auditRows: AuditEventInput[] = [];
-  const vectorsToDrop: string[] = [];
+  const vectorsToDrop: OwnedVectors[] = [];
   if (statements.length) {
     statements.push(pruneManyStatement(env, rows.map(r => r.id), cfg.VERSION_KEEP));
     const results = await env.DB.batch(statements);
@@ -195,12 +195,12 @@ export async function applyInsightResolution(
       if (changesOf(results[r.updateAt]) === 0) continue;
       resolved.push(r.id);
       auditRows.push({ entryId: r.id, actorId: change.actorId, event: action === "confirm" ? "insight_confirmed" : "insight_dismissed", payload: { prior: { tags: r.tags }, ...channelPayload(change) } });
-      if (action === "dismiss") vectorsToDrop.push(...r.vectorIds);
+      if (action === "dismiss") vectorsToDrop.push({ entryId: r.id, vectorIds: r.vectorIds });
     }
   }
   auditEvents(env, ctx, auditRows);
   if (vectorsToDrop.length) {
-    try { await deleteVectorIds(env, vectorsToDrop); }
+    try { await deleteEntryVectors(env, vectorsToDrop); }
     catch (e) { console.error("Vectorize deleteByIds failed during bulk dismiss (non-fatal):", e); }
   }
   return { resolved, skipped: requestedCount - resolved.length };

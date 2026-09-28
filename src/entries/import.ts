@@ -4,6 +4,8 @@ import { edgeEndpointsReadableSql, isSymmetric, isValidEdgeType } from "../graph
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
+// MAX_ENTRY_ID_BYTES: the one bound on a caller-chosen entry id, applied through boundedEntryId.
+import { boundedEntryId } from "../vectorize/ids";
 import { parseImportedProject, type ImportedProject } from "../projects/registry";
 
 /**
@@ -167,6 +169,8 @@ const DEFAULT_EDGE_WEIGHT = 0.5;
 
 interface PendingInsert {
   id: string;
+  /** The export's own id, when it was over MAX_ENTRY_ID_BYTES and the row takes a minted one instead. */
+  originalId?: string;
   content: string;
   tags: string[];
   source: string;
@@ -297,7 +301,8 @@ function orphanVersionsDelete(env: Env, ids: string[]) {
 /** The id the insert actually wrote (RETURNING); a fresh one means the export's id was taken. */
 function importedResult(row: PendingInsert, res: { results?: unknown[] } | undefined): ImportEntryResult {
   const id = (res?.results?.[0] as { id?: string } | undefined)?.id ?? row.id;
-  return id === row.id ? { id, status: "imported" } : { id, status: "imported", original_id: row.id };
+  const original = row.originalId ?? (id === row.id ? undefined : row.id);
+  return original === undefined ? { id, status: "imported" } : { id, status: "imported", original_id: original };
 }
 
 async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<string>> {
@@ -640,7 +645,14 @@ export async function importExportPayload(
   // chunked query over exactly the ids that might insert.
   const parsedPage: ({ row: PendingInsert } | { failure: ImportEntryResult })[] = [];
   for (const entry of page) {
-    parsedPage.push(parseEntryRow(entry));
+    const parsed = parseEntryRow(entry);
+    // One rule for every caller-chosen id (T-0089.1.1): over MAX_ENTRY_ID_BYTES it would leave no room
+    // for the per-upload vector suffix under Vectorize's 64-byte limit, so the row takes a minted id.
+    if ("row" in parsed) {
+      const bounded = await boundedEntryId(parsed.row.id);
+      if (bounded !== parsed.row.id) parsed.row = { ...parsed.row, originalId: parsed.row.id, id: bounded };
+    }
+    parsedPage.push(parsed);
   }
 
   const pageIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
@@ -700,7 +712,13 @@ export async function importExportPayload(
     type ParsedEdge = { edge: PendingEdge } | { failure: ImportEdgeResult };
     const parsedEdges: ParsedEdge[] = [];
     for (const edge of edgePage) {
-      parsedEdges.push(parseEdgeRow(edge));
+      const parsed = parseEdgeRow(edge);
+      // An endpoint over MAX_ENTRY_ID_BYTES was imported under its minted id: follow it there.
+      if ("edge" in parsed) {
+        const [source_id, target_id] = await Promise.all([boundedEntryId(parsed.edge.source_id), boundedEntryId(parsed.edge.target_id)]);
+        parsed.edge = { ...parsed.edge, source_id, target_id };
+      }
+      parsedEdges.push(parsed);
     }
 
     // Endpoints the importer can READ, in one chunked scoped query. existingIds is not enough: it

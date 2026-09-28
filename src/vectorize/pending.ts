@@ -170,7 +170,7 @@ export async function runNightlyVectorizePending(
     // upload's ids are its own, so delete them; a still-pending row retries next night.
     const { row, vectorIds } = upserted[i];
     try {
-      await discardUpload(env, vectorIds);
+      await discardUpload(env, row.id, vectorIds);
     } catch (e) {
       console.error("Nightly re-embed settle failed for entry", row.id, e);
     }

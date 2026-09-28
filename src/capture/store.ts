@@ -5,7 +5,7 @@ import { embed, embedMany } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
 import { chunkText } from "../text/chunk";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import { newVectorIds as mintVectorIds } from "../vectorize/ids";
 import { rememberTags } from "../tags/vocabulary";
 import { applyTagReplacement, withUserEditMarker } from "../tags/system";
@@ -63,7 +63,7 @@ export async function storeEntry(
   ).bind(JSON.stringify(stored.vectorIds), id, content, writeCtx.workspaceId, commit.expectedVectorIds).run();
 
   if (changesOf(result) === 0) {
-    await discardUpload(env, stored.vectorIds);
+    await discardUpload(env, id, stored.vectorIds);
     return { ...stored, committed: false };
   }
 
@@ -75,9 +75,9 @@ export async function storeEntry(
  * superseded attempt). Its ids were minted for this upload alone (newVectorIds), so deleting them can
  * never touch another writer's vectors, and the row's own listed vectors were never overwritten.
  */
-export async function discardUpload(env: Env, uploadedIds: string[] | null | undefined): Promise<void> {
+export async function discardUpload(env: Env, entryId: string, uploadedIds: string[] | null | undefined): Promise<void> {
   if (!uploadedIds?.length) return;
-  try { await deleteVectorIds(env, uploadedIds); } catch (e) { console.error("Deleting a discarded vector upload failed (non-fatal):", e); }
+  try { await deleteEntryVectors(env, [{ entryId, vectorIds: uploadedIds }]); } catch (e) { console.error("Deleting a discarded vector upload failed (non-fatal):", e); }
 }
 
 /**
@@ -155,11 +155,11 @@ export async function upsertEntryVectors(
   return { vectorIds, values: vectors[0]?.values ?? null };
 }
 
-export async function deleteStaleVectors(env: Env, oldIds: string[], newIds: string[]): Promise<void> {
+export async function deleteStaleVectors(env: Env, entryId: string, oldIds: string[], newIds: string[]): Promise<void> {
   if (!newIds.length) return;
   const keep = new Set(newIds);
   const stale = oldIds.filter(v => !keep.has(v));
-  if (stale.length) await deleteVectorIds(env, stale);
+  if (stale.length) await deleteEntryVectors(env, [{ entryId, vectorIds: stale }]);
 }
 
 /**
@@ -270,7 +270,7 @@ export async function updateEntryContent(
   // A lost, failed or superseded attempt's own upload: its ids are this attempt's alone (round 6),
   // so it is deleted outright; the row's own listed vectors were never overwritten by it.
   const recoverFromLostAttempt = async () => {
-    await discardUpload(env, reembedded?.vectorIds);
+    await discardUpload(env, id, reembedded?.vectorIds);
     reembedded = null;
   };
 
@@ -401,7 +401,7 @@ export async function updateEntryContent(
 
     if (newVectorIds) {
       try {
-        await deleteStaleVectors(env, oldVectorIds, newVectorIds);
+        await deleteStaleVectors(env, id, oldVectorIds, newVectorIds);
       } catch (e) {
         console.error("Old vector cleanup failed (non-fatal):", e);
       }
@@ -483,13 +483,13 @@ export async function appendToEntry(
   let chunk: { id: string; indexed: boolean; values: number[] } | null = null;
   const retireChunk = async () => {
     if (chunk?.indexed) {
-      try { await deleteVectorIds(env, [chunk.id]); } catch (e) { console.error("Append chunk cleanup failed (non-fatal):", e); }
+      try { await deleteEntryVectors(env, [{ entryId: id, vectorIds: [chunk.id] }]); } catch (e) { console.error("Append chunk cleanup failed (non-fatal):", e); }
     }
   };
 
   // A lost attempt's own upload: its ids are this attempt's alone (round 6), so it is deleted outright.
   const recoverFromLostAttempt = async (_existingVectorIds: string[], _source: string, _embedCtx: WriteContext, uploaded: string[] | null) => {
-    await discardUpload(env, uploaded);
+    await discardUpload(env, id, uploaded);
   };
 
   for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
@@ -570,7 +570,7 @@ export async function appendToEntry(
       // Skipped when Vectorize is unavailable: the old vectors are the entry's only remaining semantic index.
       if (newVectorIds) {
         try {
-          await deleteStaleVectors(env, existingVectorIds, newVectorIds);
+          await deleteStaleVectors(env, id, existingVectorIds, newVectorIds);
         } catch (e) {
           console.error("Old vector cleanup failed (non-fatal):", e);
         }

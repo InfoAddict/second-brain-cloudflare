@@ -127,6 +127,8 @@ describe("ADV systemWrite", () => {
     decision = () => JSON.stringify({ action: "merge", target_id: "old-digest", merged_content: "combined digest text" });
     const upserts: { id: string; metadata: any }[] = [];
     (env.VECTORIZE as any).upsert = async (v: any[]) => { upserts.push(...v); return { mutationId: "m" }; };
+    // deleteEntryVectors reads metadata.parentId first (T-0089.1.1): answer from what was upserted.
+    (env.VECTORIZE as any).getByIds = async (ids: string[]) => upserts.filter(u => ids.includes(u.id));
     // The person's edit commits after the merge read the row and before its UPDATE runs.
     const db = env.DB as any;
     const realPrepare = db.prepare.bind(db);
@@ -160,6 +162,8 @@ describe("ADV systemWrite", () => {
     const vz = env.VECTORIZE as any;
     vz.upsert = async (v: any[]) => { for (const x of v) store.set(x.id, x.metadata); return { mutationId: "m" }; };
     vz.deleteByIds = async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" }; };
+    // deleteEntryVectors reads metadata.parentId first (T-0089.1.1): answer from this store.
+    vz.getByIds = async (ids: string[]) => ids.filter(i => store.has(i)).map(i => ({ id: i, values: [], metadata: store.get(i) }));
     return store;
   }
   function raceOnMergeUpdate(action: () => void) {

@@ -13,7 +13,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import worker from "../../src/index";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
-import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
+import { makeTestEnv, makeVectorizeMock, ownedBy } from "../helpers/make-env";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { createMember } from "../../src/lib/team-admin";
@@ -69,6 +69,8 @@ describe("POST /team/members/remove with a failing Vectorize index", () => {
 
     const failing = makeVectorizeMock({
       deleteByIds: vi.fn().mockRejectedValue(new Error("vectorize down")),
+      // p1's vector names p1 (deleteEntryVectors checks parentId first, T-0089.1.1).
+      getByIds: ownedBy({ "v-p1": "p1" }),
     });
     env.VECTORIZE = failing;
 

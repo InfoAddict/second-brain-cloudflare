@@ -45,7 +45,8 @@ const SEEDED_AT = Date.parse("2024-01-17T00:00:00Z");
 /** Vectorize with real insert/upsert/delete semantics, so "what is indexed" is observable. */
 function makeStatefulVectorize(seed: { id: string; content: string }[], overrides: Partial<VectorizeIndex> = {}) {
   const store = new Map<string, any>();
-  for (const v of seed) store.set(v.id, { id: v.id, values: [], metadata: { content: v.content } });
+  // Real vectors name their entry in metadata.parentId (deleteEntryVectors checks it, T-0089.1.1).
+  for (const v of seed) store.set(v.id, { id: v.id, values: [], metadata: { content: v.content, parentId: v.id.replace(/-chunk-\d+$/, "") } });
   const index = makeVectorizeMock({
     insert: vi.fn(async (vectors: any[]): Promise<any> => {
       for (const v of vectors) if (!store.has(v.id)) store.set(v.id, v);
@@ -59,6 +60,7 @@ function makeStatefulVectorize(seed: { id: string; content: string }[], override
       for (const id of ids) store.delete(id);
       return { mutationId: "m" };
     }),
+    getByIds: vi.fn(async (ids: string[]): Promise<any> => ids.filter(id => store.has(id)).map(id => store.get(id))),
     ...overrides,
   });
   return { store, index };

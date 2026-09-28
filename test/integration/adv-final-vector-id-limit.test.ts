@@ -19,9 +19,13 @@ it("an imported entry with a valid 60-byte legacy id can be indexed under Vector
     if (vectors.some(v => new TextEncoder().encode(v.id).length > 64)) throw new Error("Vectorize id exceeds 64 bytes");
     return upsert(vectors);
   };
+  // Director's rule: an id too long to leave room for the upload suffix is imported under a minted id,
+  // reported as { id, original_id }.
+  const item = imported.results.find((r: any) => r.original_id === id) as { id: string } | undefined;
+  expect(item).toBeDefined();
   const row = (await t.one<PendingRow>(
-    "SELECT id, content, tags, source, created_at, workspace_id, actor_id FROM entries WHERE id = ?", id))!;
+    "SELECT id, content, tags, source, created_at, workspace_id, actor_id FROM entries WHERE id = ?", item!.id))!;
   await expect(indexPendingRow(t.env, row, DEFAULTS)).resolves.toBe(true);
-  const listed = (await t.one<{ vector_ids: string }>("SELECT vector_ids FROM entries WHERE id = ?", id))!;
+  const listed = (await t.one<{ vector_ids: string }>("SELECT vector_ids FROM entries WHERE id = ?", item!.id))!;
   expect(JSON.parse(listed.vector_ids)).toHaveLength(1);
 });
