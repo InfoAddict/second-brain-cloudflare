@@ -78,14 +78,6 @@ const I18N_EN = {
     receiptSimilar: 'stored, close to something you already had',
     receiptSimilarNote: 'Flagged as a possible duplicate so you can compare them later.',
     receiptFiledUnder: 'filed under',
-    firstRunEyebrow: 'Getting started',
-    firstRunHero: 'Your Second Brain is empty. Here is where everything lives.',
-    firstRunStep1:
-      'The box above does both: write a statement and it is saved, ask a question and it is answered. It says which one it is about to do before you send.',
-    firstRunStep2:
-      'Memories is everything you have kept, as a list by date or as a graph of how it connects.',
-    firstRunStep3:
-      'Settings is where you connect Claude, ChatGPT, Cursor, your email and calendar, so they read from and add to this same memory.',
     autoPersonalYours: 'Auto → Personal (your setting)',
     autoPersonalOrg: 'Auto → Personal (org default)',
     autoSharedYours: 'Auto → Shared (your setting)',
@@ -191,8 +183,6 @@ const I18N_EN = {
     topicBrowse: 'Show memories tagged {tag}',
   },
   recall: {
-    eyebrow: 'Recall',
-    hero: "Ask me anything you've stored away. I'll find it and answer in your own words.",
     placeholder: 'Ask your brain...',
     backHome: 'Back to home',
     allTags: 'All tags',
@@ -1231,14 +1221,6 @@ const I18N_IT = {
     receiptSimilar: 'salvato, vicino a qualcosa che avevi già',
     receiptSimilarNote: 'Segnato come possibile duplicato così puoi confrontarli più tardi.',
     receiptFiledUnder: 'archiviato sotto',
-    firstRunEyebrow: 'Per iniziare',
-    firstRunHero: 'Il tuo Second Brain è vuoto. Qui vive tutto.',
-    firstRunStep1:
-      'Il riquadro sopra fa entrambe le cose: scrivi un’affermazione e viene salvata, fai una domanda e viene risposta. Indica quale sta per fare prima di inviare.',
-    firstRunStep2:
-      'Ricordi è tutto ciò che hai tenuto, come elenco per data o come grafo dei collegamenti.',
-    firstRunStep3:
-      'Impostazioni è dove colleghi Claude, ChatGPT, Cursor, email e calendario, così leggono e aggiungono a questa stessa memoria.',
     autoPersonalYours: 'Auto → Personale (tua impostazione)',
     autoPersonalOrg: 'Auto → Personale (predefinito dell’organizzazione)',
     autoSharedYours: 'Auto → Condiviso (tua impostazione)',
@@ -1344,8 +1326,6 @@ const I18N_IT = {
     topicBrowse: 'Mostra i ricordi con il tag {tag}',
   },
   recall: {
-    eyebrow: 'Richiamo',
-    hero: 'Chiedimi qualsiasi cosa tu abbia messo da parte: la trovo e rispondo con le tue parole.',
     placeholder: 'Chiedi al tuo cervello...',
     backHome: 'Torna alla home',
     allTags: 'Tutti i tag',
