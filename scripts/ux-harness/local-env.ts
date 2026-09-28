@@ -84,14 +84,27 @@ function makeLocalVectorize(persistPath: string): VectorizeIndex {
   } as unknown as VectorizeIndex;
 }
 
-/** Cloudflare's Vectorize filter is a small Mongo-like subset ($eq is what this codebase emits); this
- * covers exactly that, not the whole language. */
+/**
+ * Cloudflare's Vectorize filter is a small Mongo-like subset. The Worker emits exactly two shapes
+ * (grep confirms it, src/vectorize/scope.ts is the only place a filter is ever built): bare
+ * equality (an implicit $eq) and `{ workspace_id: { $in: [...] } }` (workspaceFilter /
+ * singleWorkspaceFilter, every scoped duplicate/contradiction/recall query). This covers exactly
+ * those, not the whole documented operator language.
+ *
+ * `$in` on a vector whose metadata is missing the field: graph/pass.ts's own comment calls this
+ * "not determinable... there is no local Vectorize to observe it against" and deliberately avoids
+ * depending on either answer. This mock takes the same "unfavorable" reading that comment already
+ * assumes when reasoning about correctness elsewhere: a missing field matches nothing, the same as
+ * `[].includes` on an absent value -- there is no stored scalar for `$in` to check membership of.
+ */
 function matchesFilter(v: StoredVector, filter?: Record<string, unknown>): boolean {
   if (!filter) return true;
   for (const [key, want] of Object.entries(filter)) {
     const have = (v.metadata ?? {})[key];
-    if (typeof want === "object" && want !== null && "$eq" in (want as Record<string, unknown>)) {
-      if (have !== (want as Record<string, unknown>).$eq) return false;
+    if (typeof want === "object" && want !== null) {
+      const ops = want as Record<string, unknown>;
+      if ("$eq" in ops && have !== ops.$eq) return false;
+      if ("$in" in ops && !(Array.isArray(ops.$in) && have !== undefined && (ops.$in as unknown[]).includes(have))) return false;
     } else if (have !== want) return false;
   }
   return true;
@@ -109,10 +122,61 @@ function sse(text: string): ReadableStream {
   });
 }
 
+interface CapturePromptCandidate { id: string; text: string }
+
+/** Pulls the new memory's text and each offered candidate's id/text out of
+ * src/capture/duplicate.ts's own prompt shape (both the "choose one action" and the plain
+ * contradiction-check prompts build `existingList` from `[${i+1}] ID: ${r.id}\n${r.content}`
+ * blocks, joined by a blank line, right after a `New memory: "${content}"` line). */
+function parseCapturePrompt(prompt: string): { newText: string; candidates: CapturePromptCandidate[] } | null {
+  const newMatch = /New memory: "([\s\S]*?)"\n\n/.exec(prompt);
+  if (!newMatch) return null;
+  const candidates: CapturePromptCandidate[] = [];
+  const re = /\[\d+\] ID: (\S+)\n([\s\S]*?)(?=\n\n\[\d+\] ID:|\n\nChoose exactly one action|\n\nA contradiction means|$)/g;
+  for (let m = re.exec(prompt); m; m = re.exec(prompt)) candidates.push({ id: m[1], text: m[2].trim() });
+  return { newText: newMatch[1], candidates };
+}
+
+/**
+ * A simple, general contradiction heuristic, not tuned to any one test string: two memories that
+ * share a leading run of at least 3 words and then diverge -- "I live in Austin" / "I live in
+ * Denver" -- are a contradiction, the same canonical shape this codebase's own comments already
+ * use as the illustrative case (src/graph/pass.ts, src/capture/duplicate.ts's own prompt text).
+ * One memory that is simply a prefix or superset of the other (no divergence) is an elaboration,
+ * not a contradiction -- the prompt's own instruction, honored here by requiring both texts to
+ * still have a differing word at the point the shared run ends.
+ */
+function findContradiction(newText: string, candidates: readonly CapturePromptCandidate[]): CapturePromptCandidate | null {
+  const words = (s: string) => s.toLowerCase().replace(/[.,!?]/g, "").split(/\s+/).filter(Boolean);
+  const newWords = words(newText);
+  let best: { candidate: CapturePromptCandidate; prefixLen: number } | null = null;
+  for (const candidate of candidates) {
+    const candWords = words(candidate.text);
+    let prefixLen = 0;
+    while (prefixLen < newWords.length && prefixLen < candWords.length && newWords[prefixLen] === candWords[prefixLen]) prefixLen++;
+    const diverges = prefixLen < newWords.length && prefixLen < candWords.length;
+    if (diverges && prefixLen >= 3 && (!best || prefixLen > best.prefixLen)) best = { candidate, prefixLen };
+  }
+  return best?.candidate ?? null;
+}
+
 /** Deterministic, rule-based stand-in for every non-embedding model call this codebase makes
  * (classify, contradiction/merge decisions, digest synthesis). No network, no randomness. */
 function cannedChatCompletion(prompt: string): ReadableStream {
-  if (prompt.includes("Choose exactly one action")) return sse('{"action":"keep_both"}');
+  if (prompt.includes("Choose exactly one action")) {
+    const parsed = parseCapturePrompt(prompt);
+    const hit = parsed && findContradiction(parsed.newText, parsed.candidates);
+    return hit
+      ? sse(JSON.stringify({ action: "contradiction", conflicting_id: hit.id, reason: "contradicts an existing memory" }))
+      : sse('{"action":"keep_both"}');
+  }
+  if (prompt.includes("checking if a new memory contradicts")) {
+    const parsed = parseCapturePrompt(prompt);
+    const hit = parsed && findContradiction(parsed.newText, parsed.candidates);
+    return hit
+      ? sse(JSON.stringify({ contradicts: true, conflicting_id: hit.id, reason: "contradicts an existing memory" }))
+      : sse('{"contradicts": false}');
+  }
   if (prompt.includes("Classify this memory")) return sse('{"kind":"note","status":"draft"}');
   // Digest synthesis and anything else: a short, clearly-labeled placeholder paragraph, never empty.
   return sse("(ux-harness local stub: no real model ran for this summary)");
