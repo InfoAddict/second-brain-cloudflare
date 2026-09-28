@@ -19,6 +19,7 @@ import { normalizeTagList } from "../tags/system";
 import { Params } from "./params";
 import { chunkText } from "../text/chunk";
 import { auditValidity, outcomeOf, retractionHook, unretractionHook, type ValidityOutcome } from "./validity";
+import { standingTouched } from "../standing/cache";
 
 export type TrashReason = "forget" | "mirror" | "disconnect";
 
@@ -37,6 +38,8 @@ export interface TrashCandidate extends TrashSizes {
   workspace_id: string;
   actor_id: string;
   vector_ids: string;
+  /** Standing invalidation (spec 15 2.6) needs to know, before the row leaves entries, whether it was standing:active. */
+  tags: string;
 }
 
 /**
@@ -68,7 +71,7 @@ export function planTrash(rows: TrashCandidate[], budget = TRASH_ROW_BUDGET_BYTE
  * (the disconnect purge) build their own read with the same select list.
  */
 export function trashSizeSelect(alias = "e"): string {
-  return `${alias}.id, ${alias}.workspace_id, ${alias}.actor_id, ${alias}.vector_ids,
+  return `${alias}.id, ${alias}.workspace_id, ${alias}.actor_id, ${alias}.vector_ids, ${alias}.tags,
        length(CAST(${alias}.content AS BLOB)) AS content_bytes,
        length(CAST(${rowJsonSql(alias)} AS BLOB)) AS row_json_bytes,
        COALESCE(length(CAST(${edgesJsonSql(alias)} AS BLOB)), 2) AS edges_json_bytes,
@@ -154,8 +157,8 @@ async function readTrashCandidateForcedTier3(
     // applied: the caller's clause IS applied into `where` above when given; the lexer cannot
     // see into this JS-assembled fragment. No content, row_json or edges_json read here at all;
     // this id is going to tier 3 regardless.
-    `SELECT e.id, e.workspace_id, e.actor_id, e.vector_ids FROM entries e WHERE ${where}`,
-  ).bind(...bindings).first<Pick<TrashCandidate, "id" | "workspace_id" | "actor_id" | "vector_ids">>();
+    `SELECT e.id, e.workspace_id, e.actor_id, e.vector_ids, e.tags FROM entries e WHERE ${where}`,
+  ).bind(...bindings).first<Pick<TrashCandidate, "id" | "workspace_id" | "actor_id" | "vector_ids" | "tags">>();
   if (!row) return null;
   return { ...row, content_bytes: SIZE_UNMEASURABLE, row_json_bytes: 0, edges_json_bytes: 0, vector_ids_bytes: 0 };
 }
@@ -255,6 +258,7 @@ export async function trashMirroredEntries(
   auth: Identity,
   entryIds: string[],
   opts: { provider: string; budget?: number },
+  ctx?: ExecutionContext,
 ): Promise<{ purged: number; skipped: number }> {
   let purged = 0;
   let skipped = 0;
@@ -308,6 +312,15 @@ export async function trashMirroredEntries(
       await deleteEntryVectors(env, owned);
     } catch (e) {
       console.error("Vectorize delete failed during disconnect purge (non-fatal):", e);
+    }
+
+    // Bulk: once per workspace this chunk touched, not per row (spec 15 2.6).
+    if (ctx) {
+      const touchedWorkspaces = [...new Set(
+        done.filter(r => { try { return (JSON.parse(r.tags ?? "[]") as string[]).includes("standing:active"); } catch { return false; } })
+          .map(r => r.workspace_id ?? ""),
+      )];
+      if (touchedWorkspaces.length) standingTouched(env, ctx, cfg ?? await resolveConfig(env), touchedWorkspaces);
     }
 
     const tier3 = new Set(plan.tier3);
@@ -539,6 +552,7 @@ export async function restoreEntry(
   trashed: TrashedEntryRow,
   change: ChangeContext,
   config?: Readonly<Config>,
+  ctx?: ExecutionContext,
 ): Promise<RestoreResult> {
   // A row that predates the nonce column (adv-final MAJOR 1) has no safe per-row identity to
   // pin this batch to: id can be reused after a purge, and so can SQLite's own rowid, on the
@@ -673,6 +687,7 @@ export async function restoreEntry(
 
   const done = hook.read(results, 3);
   await auditValidity(env, change, done);
+  if (ctx && tags.includes("standing:active")) standingTouched(env, ctx, cfg, [trashed.workspace_id]);
   return {
     status: "restored",
     edgesRestored: changedRows(results[1]),

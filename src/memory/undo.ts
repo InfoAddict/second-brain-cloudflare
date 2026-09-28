@@ -20,6 +20,7 @@ import {
   type StateChange, type VersionChain, type VersionRow, type WhenChange,
 } from "./versions";
 import { NO_VALIDITY_CHANGE, outcomeOf, retractionHook, unretractionHook, validityEvents, validityReplySuffix, type ValidityOutcome } from "./validity";
+import { standingTouched } from "../standing/cache";
 
 export type UndoResult =
   | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true; keptIncoming?: { id: string; reason: string }[]; deferredIncoming?: number; validity: ValidityOutcome }
@@ -248,6 +249,7 @@ export async function revertEntry(
   authorizedWorkspaceId: string,
   /** Optional: the trash row the caller saw. Given, undo only restores that exact row, never reverts a live one. */
   trashNonce?: string,
+  ctx?: ExecutionContext,
 ): Promise<UndoResult> {
   const row = await getReadableEntry(env, identity, id, ENTRY_COLUMNS) as EntryRow | null;
   if (row && trashNonce !== undefined) return { status: "not_found" };
@@ -263,7 +265,7 @@ export async function revertEntry(
     // itself permission to bring a company memory back.
     const denied = assertCanMutateEntry(identity, trashed);
     if (denied) return { status: "forbidden" };
-    const restored = await restoreEntry(env, trashed, change, config);
+    const restored = await restoreEntry(env, trashed, change, config, ctx);
     switch (restored.status) {
       case "restored": {
         await writeAuditEvents(env, [{
@@ -614,6 +616,14 @@ export async function revertEntry(
     payload: { target_seq: target.seq, reverted_reason: target.reason, channel: change.channel },
   }, ...validityEvents(change, ...hookResults)]);
 
+  // Release (undo of a quarantine hold) also touches: spec 15 2.13 calls it out by name, and the
+  // gate is the same either way — whatever this revert restores the row TO is what decides.
+  if (ctx) {
+    const priorTags: string[] = (() => { try { return JSON.parse(row.tags); } catch { return []; } })();
+    if (priorTags.includes("standing:active") || restoredTags.includes("standing:active")) {
+      standingTouched(env, ctx, config, [row.workspace_id ?? ""]);
+    }
+  }
   if (releasing) return { status: "released" };
 
   const result: UndoResult = { status: "reverted", targetSeq: target.seq, validity: hookResults.length ? outcomeOf(...hookResults) : NO_VALIDITY_CHANGE };

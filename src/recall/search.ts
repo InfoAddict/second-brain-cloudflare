@@ -7,13 +7,14 @@ import {
   RECALL_BLOCK,
   RECALL_DEEP_POOL_SIZE,
   RECALL_POOL_SIZE,
+  STANDING_MAX_FIRES,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
 import { isRerankMode, resolveConfig, type Config, type RerankMode } from "../config";
-import { embed } from "../lib/ai";
+import { embed, embedMany } from "../lib/ai";
 import type { Identity } from "../lib/identity";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
-import { layerOf, scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
+import { layerOf, readScopeWorkspaces, scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
 import { expandGraph } from "../graph/traverse";
 import type { GraphNeighbor } from "../graph/types";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
@@ -31,7 +32,7 @@ import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from 
 import { localEvidenceOf } from "./root-candidate";
 import { blendRerankerScores, rerankDirectCap, rerankStep } from "./model-reranker";
 import { evidenceScoreOf, selectGraphRoots, type RootCandidate } from "./root-selector";
-import type { KeywordRow, KeywordTermTrace, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage, WhySlot, WhyTrace } from "./types";
+import type { KeywordRow, KeywordTermTrace, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage, StandingFire, WhySlot, WhyTrace } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql, projectMemberTags } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
@@ -47,8 +48,10 @@ import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
 import { applyOccupancyCap, CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates, liftFor } from "./source-trust";
 import { enrichWithAsOf, asOfPredicateSql, asOfPredicateBindings } from "./as-of";
 import { getVersionsSince } from "../memory/versions";
-import { supersededBySql } from "../memory/validity";
+import { currentValidityAt, supersededBySql } from "../memory/validity";
 import { maybeLogRecall, type RecallLogChannel } from "./log";
+import { readStandingCaches } from "../standing/cache";
+import { selectStandingFires } from "../standing/fire";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -488,6 +491,13 @@ export async function recallEntries(
   // As-of (spec 14 5.7 item 1): treated exactly like an explicit after/before, so phrase parsing is skipped.
   const asOf = internal.asOf;
 
+  // Standing (spec 15 2.8): started here so its KV read overlaps distillation's D1 scan. An as-of
+  // recall answers what was true then, not what applies now, so it never fires standing.
+  const standingWorkspaceIds = identity ? readScopeWorkspaces(identity, readScope) : [""];
+  const standingCachesPromise = asOf === undefined
+    ? readStandingCaches(env, ctx, cfg, standingWorkspaceIds, now)
+    : Promise.resolve([]);
+
   let semanticQuery = query;
   if (after === undefined && before === undefined && asOf === undefined) {
     const parsed = parseTimePhrase(query, now, cfg.TIMEZONE);
@@ -514,11 +524,79 @@ export async function recallEntries(
   markStage("setup");
 
   const tokens = profile.lexicalTokens;
-  const [values, queryTags] = await Promise.all([
-    arms === "keyword-only" ? Promise.resolve([] as number[]) : embed(embedQuery, env, cfg),
+  const standingCaches = await standingCachesPromise;
+  const standingHasItems = arms !== "keyword-only" && standingCaches.some(c => c.items.length > 0);
+  // One embed call with two texts when standing needs its own (the query text recall embeds
+  // differs from the plain semantic text standing scores against), one text otherwise: never an
+  // extra AI call over today's single embedding request (spec 15 2.8 step 2).
+  const needsStandingEmbed = standingHasItems && profile.semanticQuery !== embedQuery;
+  const embedStep: Promise<{ values: number[]; standingVector?: number[] }> = arms === "keyword-only"
+    ? Promise.resolve({ values: [] })
+    : needsStandingEmbed
+      ? embedMany([embedQuery, profile.semanticQuery], env, cfg).then(([a, b]) => ({ values: a, standingVector: b }))
+      : embed(embedQuery, env, cfg).then(v => ({ values: v, standingVector: standingHasItems ? v : undefined }));
+  const [{ values, standingVector }, queryTags] = await Promise.all([
+    embedStep,
     inferQueryTags(lexicalQuery, env, ctx, identity),
   ]);
   markStage("querySignals");
+
+  // Pure candidate selection (spec 15 2.7): cheap, so computed unconditionally once a vector
+  // exists. Whether it is actually used to fire is gated at each hydration site below by the
+  // recall's own semanticUnavailable, which is not yet known this early in every arm.
+  const standingProject = params.project?.length
+    ? { slug: params.project[0].id, aliases: params.project.flatMap(p => p.aliases) }
+    : undefined;
+  const standingCandidates = standingVector
+    ? selectStandingFires(standingVector, standingCaches, { threshold: cfg.STANDING_THRESHOLD, maxFires: STANDING_MAX_FIRES, project: standingProject })
+    : [];
+
+  /** Hydrated fresh from D1 (never from KV), so a stopped/forgotten/deprecated/moved/held row can never render (spec 15 2.9/2.10). */
+  async function standingFiresFrom(rows: Record<string, any>[]): Promise<StandingFire[]> {
+    if (!rows.length) return [];
+    const scoreById = new Map(standingCandidates.map(c => [c.id, c.score]));
+    const actorIds = [...new Set(rows.map(r => r.actor_id as string).filter(id => id && id !== identity?.userId))];
+    const labelMap = actorIds.length ? await lookupActorLabels(env, actorIds) : new Map<string, string>();
+    return rows
+      .map(r => {
+        const tags = JSON.parse(r.tags ?? "[]") as string[];
+        const projectTag = tags.find(t => t.startsWith("project:"));
+        return {
+          id: r.id as string,
+          content: r.content as string,
+          createdAt: r.created_at as number,
+          workspace: layerOf(identity, r.workspace_id),
+          actorName: r.actor_id && r.actor_id !== identity?.userId
+            ? resolveActorLabel(r.actor_id as string, labelMap, { viewerId: identity?.userId })
+            : undefined,
+          project: projectTag ? projectTag.slice("project:".length) : null,
+          score: scoreById.get(r.id as string) ?? 0,
+          ...(explain ? { why: `standing: similarity ${(scoreById.get(r.id as string) ?? 0).toFixed(2)} >= ${cfg.STANDING_THRESHOLD.toFixed(2)}` } : {}),
+        } satisfies StandingFire;
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, STANDING_MAX_FIRES);
+  }
+
+  /** The standalone arm (spec 15 2.8 step 5): one extra statement, run only when there is a candidate to hydrate. */
+  async function fetchStandingFires(): Promise<StandingFire[]> {
+    if (semanticUnavailable || !standingCandidates.length) return [];
+    const placeholders = standingCandidates.map(() => "?").join(", ");
+    const standingScopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
+    // validity: current: currentValidityAt re-checks what the cache build already filtered, because the cache can be up to 24h stale (spec 15 2.4/2.6)
+    const { results } = await env.DB.prepare(
+      `SELECT id, content, tags, created_at, workspace_id, actor_id FROM entries
+        WHERE id IN (${placeholders}) AND tags LIKE '%"standing:active"%'
+          AND tags NOT LIKE '%"status:deprecated"%' AND ${NOT_HELD_SQL} AND ${currentValidityAt("", "?")}${standingScopeSql}`
+    ).bind(...standingCandidates.map(c => c.id), now, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
+    return standingFiresFrom(results);
+  }
+
+  /** No hydration will run on this path: the standing arm, if any candidate survives, is the only extra statement (spec 15 2.8 step 5). */
+  async function noResultsWithStanding(): Promise<RecallSearchResult> {
+    const standing = await fetchStandingFires();
+    return { matches: [], insight: "", semanticUnavailable, ...(standing.length ? { standing } : {}) };
+  }
 
   let keywordRows: KeywordRow[] = [];
   let keywordIdfWindow = 0;
@@ -551,7 +629,7 @@ export async function recallEntries(
     const { results: tagRows } = await env.DB.prepare(
       `SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE ${memberConds.join(" AND ")}${tagScopeSql} AND ${NOT_HELD_SQL}`
     ).bind(...memberBindings, ...(scope?.bindings ?? [])).all();
-    if (!tagRows.length) return { matches: [], insight: "", semanticUnavailable };
+    if (!tagRows.length) return await noResultsWithStanding();
     keywordRows = tagRows as unknown as KeywordRow[];
 
     const vectorIds = [...new Set(
@@ -682,7 +760,7 @@ export async function recallEntries(
   const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow, lexicalKeywordTrace);
   const fusedMatches = lexicalFusedMatches.length ? lexicalFusedMatches : rootFusedMatches;
   const keywordTrace = lexicalFusedMatches.length ? lexicalKeywordTrace : rootKeywordTrace;
-  if (!rootFusedMatches.length && !fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
+  if (!rootFusedMatches.length && !fusedMatches.length) return await noResultsWithStanding();
 
   const candidateIds = [...new Set([...fusedMatches, ...rootFusedMatches].map(m => (m.metadata as any)?.parentId ?? m.id))] as string[];
   internal.diagnostics && (internal.diagnostics.fusedIds = [...new Set(rootFusedMatches.map(m => (m.metadata as any)?.parentId ?? m.id))] as string[]);
@@ -850,7 +928,7 @@ export async function recallEntries(
   }
   markStage("candidateHydration");
 
-  if (!directCandidates.length) return { matches: [], insight: "", semanticUnavailable };
+  if (!directCandidates.length) return await noResultsWithStanding();
 
   const directParentIds = directCandidates.map((m) => (m.metadata as any)?.parentId ?? m.id);
   let selectedRoots: ReturnType<typeof selectGraphRoots> = [];
@@ -952,19 +1030,47 @@ export async function recallEntries(
     d1Filters += ` AND ${scopeWhereForIdRead(scope).clause}`;
     filterBindings.push(...scope.bindings);
   }
+  // Standing (spec 15 2.8 step 4): appended to the FIRST hydration statement only, as an OR arm that
+  // ignores the caller's tag/project/kind/time filters on purpose — a standing instruction fires on
+  // topic, not on the caller's result filters. A row this arm returns is never added to allParentIds,
+  // so it can only ever leave d1Map unread (below) or be pulled out explicitly for `standing`; it can
+  // never enter `matches`.
+  const standingArmActive = !semanticUnavailable && standingCandidates.length > 0;
+  const standingIds = standingCandidates.map(c => c.id);
+  // validity: current: currentValidityAt re-checks what the cache build already filtered, because the cache can be up to 24h stale (spec 15 2.4/2.6)
+  // scope-checked: the standing arm carries its own scopeWhereForIdRead(scope) copy, a second predicate group inside the same statement, not inside d1Filters
+  const standingClause = standingArmActive
+    ? ` OR (id IN (${standingIds.map(() => "?").join(", ")}) AND tags LIKE '%"standing:active"%' AND tags NOT LIKE '%"status:deprecated"%' AND ${NOT_HELD_SQL} AND ${currentValidityAt("", "?")}${scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : ""})`
+    : "";
+  const standingBindings: (string | number)[] = standingArmActive
+    ? [...standingIds, now, ...(scope?.bindings ?? [])]
+    : [];
+
   const d1Rows: Record<string, any>[] = [];
-  const idBatchSize = D1_MAX_BOUND_PARAMS - filterBindings.length;
+  const idBatchSize = D1_MAX_BOUND_PARAMS - filterBindings.length - standingBindings.length;
   for (let i = 0; i < allParentIds.length; i += idBatchSize) {
     const batch = allParentIds.slice(i, i + idBatchSize);
     const placeholders = batch.map(() => "?").join(", ");
+    // The unmarked form on an ordinary batch (or every batch when no standing candidate exists)
+    // is BYTE-IDENTICAL to before the standing arm existed (spec 15 2.8's own invariant) — no
+    // extra parenthesis, no extra bytes — which a D1 double that matches on the SQL string, not
+    // just its meaning, also depends on.
+    const withStanding = i === 0 && standingArmActive;
     const { results } = await env.DB.prepare(
-      // scope-checked: d1Filters applies scopeWhereForIdRead(scope) above; the lexer cannot see the leading AND inside that JS fragment
-      // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by d1Filters above — so it can never cross a workspace boundary
-      // validity: current: d1Filters carries the predicate (5.5)
-      `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id, valid_from, valid_until,
+      withStanding
+        // scope-checked: d1Filters applies scopeWhereForIdRead(scope) above; the standing arm carries its own scopeWhereForIdRead(scope) copy above in standingClause; the lexer cannot see the leading AND inside either JS fragment
+        // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by d1Filters above — so it can never cross a workspace boundary
+        // validity: current: d1Filters carries the predicate, and the standing arm carries currentValidityAt separately (5.5)
+        ? `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id, valid_from, valid_until,
+                  ${supersededBySql("entries")} AS superseded_by_json
+             FROM entries WHERE (id IN (${placeholders})${d1Filters})${standingClause}`
+        // scope-checked: d1Filters applies scopeWhereForIdRead(scope) above; the lexer cannot see the leading AND inside that JS fragment
+        // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by d1Filters above — so it can never cross a workspace boundary
+        // validity: current: d1Filters carries the predicate (5.5)
+        : `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id, valid_from, valid_until,
               ${supersededBySql("entries")} AS superseded_by_json
          FROM entries WHERE id IN (${placeholders})${d1Filters}`
-    ).bind(...batch, ...filterBindings).all() as { results: Record<string, any>[] };
+    ).bind(...batch, ...filterBindings, ...(withStanding ? standingBindings : [])).all() as { results: Record<string, any>[] };
     d1Rows.push(...results);
   }
 
@@ -974,6 +1080,12 @@ export async function recallEntries(
   // system insights) reads as "system". Clients use this to offer share/unshare
   // and to badge results.
   const candidateSignalById = new Map(rcRows.map(row => [row.id, row]));
+  // Pulled out by id membership, never by iterating d1Rows/d1Map wholesale (spec 15 2.8 step 4): a
+  // row that is both a fire and a direct/graph result is looked up separately by each side below, so
+  // the result keeps its place in `matches` and the fire still appears in `standing`.
+  const standing = standingArmActive
+    ? await standingFiresFrom(d1Rows.filter(r => standingIds.includes(r.id as string)))
+    : [];
   markStage("finalHydration");
 
   // Blocks of five in MMR order, each ordered by score: the first block is what a topK 5 call always returned, and a
@@ -1363,5 +1475,5 @@ export async function recallEntries(
     internal.diagnostics.stageMs.total = performance.now() - totalStartedAt;
   }
 
-  return { matches, insight, semanticUnavailable, queryUsed: lexicalQuery, queryTokens: tokens, compoundStale, ...(asOfHeader ? { asOf: asOfHeader } : {}) };
+  return { matches, insight, semanticUnavailable, queryUsed: lexicalQuery, queryTokens: tokens, compoundStale, ...(asOfHeader ? { asOf: asOfHeader } : {}), ...(standing.length ? { standing } : {}) };
 }

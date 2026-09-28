@@ -10,6 +10,7 @@ import { layerOf, scopeWhereForRead, readScopeWorkspaces } from "../lib/scope";
 import { lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { recallEntries } from "../recall/search";
+import type { StandingFire } from "../recall/types";
 import { readProjectParam } from "./project-param";
 import { allowanceFor, snippetOf } from "../recall/snippet";
 import { editedCanonicalAt } from "../quarantine/tags";
@@ -42,6 +43,17 @@ function scopeEntryFilterQuery(
   const sql = `${q.sql.slice(0, orderByAt)} ${hasOuterWhere ? "AND" : "WHERE"} ${scope.clause}${q.sql.slice(orderByAt)}`;
   return { sql, bindings: [...q.bindings.slice(0, -1), ...scope.bindings, ...q.bindings.slice(-1)] };
 }
+
+const standingJson = (f: StandingFire) => ({
+  id: f.id,
+  content: f.content,
+  created_at: f.createdAt,
+  workspace: f.workspace,
+  actor_name: f.actorName ?? null,
+  project: f.project,
+  score: parseFloat((f.score * 100).toFixed(1)),
+  ...(f.why ? { why: f.why } : {}),
+});
 
 export async function handleRecallRoutes(
   request: Request,
@@ -190,7 +202,7 @@ export async function handleRecallRoutes(
       if (typeof parsed !== "number") return json({ ok: false, error: parsed.error }, 400);
       asOf = parsed;
     }
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale, asOf: asOfHeader } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize, channel: "rest" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team, asOf });
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale, asOf: asOfHeader, standing } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize, channel: "rest" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team, asOf });
 
     if (!matches.length) {
       return json({
@@ -199,6 +211,8 @@ export async function handleRecallRoutes(
         query_used: queryUsed,
         semantic_unavailable: semanticUnavailable,
         ...(asOfHeader ? { as_of: { at: asOfHeader.at, not_recorded_before: asOfHeader.notRecordedBefore } } : {}),
+        // A standing instruction can fire above zero results (spec 15 2.8 step 5).
+        ...(standing?.length ? { standing: standing.map(standingJson) } : {}),
         message: semanticUnavailable
           ? `Semantic search was unavailable or incomplete for this query, so only keyword and tag matches were considered. ${SEMANTIC_UNAVAILABLE_DETAIL}`
           : "Nothing found matching that query.",
@@ -210,6 +224,7 @@ export async function handleRecallRoutes(
       query_used: queryUsed,
       compound_stale: compoundStale ?? null,
       ...(asOfHeader ? { as_of: { at: asOfHeader.at, not_recorded_before: asOfHeader.notRecordedBefore } } : {}),
+      ...(standing?.length ? { standing: standing.map(standingJson) } : {}),
       results: matches.map((m, i) => {
         const s = full
           ? { text: m.content, truncated: false, fullLength: (m.content ?? "").length }

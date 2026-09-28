@@ -8,6 +8,8 @@ import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { boundedEntryId } from "../vectorize/ids";
 import { parseImportedProject, type ImportedProject } from "../projects/registry";
 import { isOverContentLimit } from "../lib/content-size";
+import { resolveConfig } from "../config";
+import { standingTouched } from "../standing/cache";
 import { normalizeTagList, stripNewReservedTags } from "../tags/system";
 
 /**
@@ -133,6 +135,8 @@ export interface ImportOptions {
    * that have a real Identity must pass one resolved at the edge.
    */
   writeCtx?: WriteContext;
+  /** Present, a standing:active row landing on this page invalidates the importer's own workspace cache (spec 15 2.6). */
+  ctx?: ExecutionContext;
 }
 
 export interface ImportSummary {
@@ -682,6 +686,7 @@ export async function importExportPayload(
 
   const pendingBatch: PendingInsert[] = [];
   const batchCounters = { imported: 0, failed: 0 };
+  let importedStanding = false;
   for (const p of parsedPage) {
     if ("failure" in p) {
       // "skipped" (currently only the too_large case) is not a validation failure: the record
@@ -715,6 +720,7 @@ export async function importExportPayload(
     // the whole batch into the per-row fallback.
     existingIds.add(p.row.id);
     pendingBatch.push(p.row);
+    if (p.row.tags.includes("standing:active")) importedStanding = true;
 
     if (pendingBatch.length >= IMPORT_D1_BATCH_SIZE) {
       await flushInsertBatch(env, pendingBatch.splice(0), existingIds, results, batchCounters, writeCtx);
@@ -725,6 +731,7 @@ export async function importExportPayload(
   }
   imported += batchCounters.imported;
   failed += batchCounters.failed;
+  if (opts.ctx && importedStanding) standingTouched(env, opts.ctx, await resolveConfig(env), [writeCtx.workspaceId]);
 
   const remaining_entries = entries.length - next_offset;
 

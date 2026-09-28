@@ -39,7 +39,7 @@ describe("chooseTrashTier", () => {
   });
 
   it("plans a mixed set by tier", () => {
-    const row = (id: string, c: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: c, row_json_bytes: 100, edges_json_bytes: e, vector_ids_bytes: 2 });
+    const row = (id: string, c: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", tags: "[]", content_bytes: c, row_json_bytes: 100, edges_json_bytes: e, vector_ids_bytes: 2 });
     const plan = planTrash([row("a", 10, 10), row("b", 10, 9_999), row("c", 20_000, 0)], 10_000);
     expect(plan).toEqual({ tier1: ["a"], tier2: ["b"], tier3: ["c"] });
   });

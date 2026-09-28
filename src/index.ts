@@ -247,7 +247,7 @@ export default {
 
       // Trash purge and the resume of a pending member removal, on one rows-written budget.
       try {
-        await runNightlyCleanup(env);
+        await runNightlyCleanup(env, ctx);
       } catch (e) {
         console.error("Nightly cleanup failed (non-fatal):", e);
       }

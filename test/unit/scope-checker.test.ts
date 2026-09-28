@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (229 queries, 115 exceptions, 31 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (232 queries, 115 exceptions, 32 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1492,11 +1492,19 @@ describe("the checker over the real source tree", () => {
     // (Track 7-C decisions/commitments wiring, see history above) are independently-tracked deltas
     // from the same base — recomputed against the real scanner output after combining rather than
     // hand-reconciling the two.
-    // MOVED 229/115/31/1 -> 230/116/31/1 (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2):
-    // v4/t34-w's own class E/A deltas (+1 query, +1 documented exception: restampVectorWorkspace's
-    // isHeld re-check) and release/v4's own Track 2 lane B (as-of) deltas are independently-tracked
-    // from the same base c0eed34b — recomputed against the real scanner output on the merged tree.
-    ).toEqual({ queries: 230, exempt: 116, checked: 31, outerJoin: 1 });
+    // Deliberate: +2 queries (229 -> 231) for Track 7 lane D Task 11 (standing fires in recall):
+    // GET /standing's own listing read (routes/standing.ts) and the standalone standing-arm fetch
+    // recall's early-return paths use (recall/search.ts); both scope in the literal clause the
+    // checker already recognizes, so neither adds to exempt or scope-checked.
+    // Deliberate: +1 query, +1 scope-checked (231/115/31 -> 232/115/32) for the same task's main
+    // hydration statement: it is now a ternary between the byte-identical (no-standing) SQL string
+    // and the standing-arm SQL string, two template literals where there was one, each carrying its
+    // own scope-checked/validity markers so neither span reads as unscoped on its own.
+    // MOVED (merge of release/v4 5a98da4a into v4/t7-d, lane W merged): v4/t34-w's own class E/A
+    // deltas (+1 query, +1 documented exception: restampVectorWorkspace's isHeld re-check) and lane
+    // D's own Task 11/12 deltas above are independently-tracked from the same base c870e5ac —
+    // recomputed against the real scanner output on the merged tree, not hand-combined.
+    ).toEqual({ queries: 233, exempt: 116, checked: 32, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

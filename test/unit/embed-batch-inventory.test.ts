@@ -42,7 +42,7 @@ function findCallSites(): { file: string; line: number; text: string }[] {
 
 const EXEMPT: { file: string; line: number; why: string }[] = [
   {
-    file: "src/capture/store.ts", line: 66,
+    file: "src/capture/store.ts", line: 86,
     why: "storeEntry's own create-time embed. A held write never reaches storeEntry (class A takes the holdStatements batch instead), so the only content that lands here is already under the scorer's 32 KB budget — too few chunks for batching to matter.",
   },
 ];

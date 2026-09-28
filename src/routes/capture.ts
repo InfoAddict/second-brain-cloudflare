@@ -299,7 +299,7 @@ export async function handleCaptureRoutes(
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      appendResult = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
+      appendResult = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string, ctx);
     } catch (e) {
       if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
       if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
@@ -355,7 +355,7 @@ export async function handleCaptureRoutes(
     const validity = hasValidity ? parseValidityInput(body, Date.now(), (validityCfg as Config).TIMEZONE, { allowNull: true }) : null;
     if (validity && "error" in validity) return json({ ok: false, error: validity.error, field: validity.field }, 400);
     const setValidity = (workspaceId: string) =>
-      updateEntryValidity(env, body.id!.trim(), validity!.value as { from?: number | null; until?: number | null }, { actorId: identity.userId, channel: "rest" }, validityCfg as Config, workspaceId);
+      updateEntryValidity(env, body.id!.trim(), validity!.value as { from?: number | null; until?: number | null }, { actorId: identity.userId, channel: "rest" }, validityCfg as Config, workspaceId, ctx);
     const validityBody = (r: UpdateValidityResult): { status: number; body: Record<string, unknown> } => {
       if (r.status === "updated") return { status: 200, body: { validity: { valid_from: r.effectiveFrom, valid_from_stated: r.validFrom !== null, valid_until: r.validUntil, propagated: r.propagated } } };
       if (r.status === "refused") return { status: 400, body: { ok: false, error: r.error, field: r.field } };
@@ -417,7 +417,7 @@ export async function handleCaptureRoutes(
     const { ignored: ignoredReservedTags } = stripNewReservedTags(replaceTags ?? []);
 
     const cfg = await resolveConfig(env);
-    const result = await updateEntryContent(env, id, newContent, cfg, updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string);
+    const result = await updateEntryContent(env, id, newContent, cfg, updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string, ctx);
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {

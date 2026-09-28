@@ -22,11 +22,31 @@ import { isHeld, withEditedCanonical } from "../quarantine/tags";
 import { countMcpWritesInWindow } from "../quarantine/burst";
 import { getStatus } from "../memory/status";
 import { isCapsuleTag } from "../tags/system";
+import { STANDING_TAG } from "../tags/t7";
+import { buildStandingCache, standingTouched, type StandingCacheConfig } from "../standing/cache";
 
 /** 5.7/5.2 C1: the capsule: / capsule-slot: tag set changed between two tag lists. */
 function capsuleTagsDiffer(before: readonly string[], after: readonly string[]): boolean {
   const norm = (tags: readonly string[]) => JSON.stringify([...tags].filter(isCapsuleTag).sort());
   return norm(before) !== norm(after);
+}
+
+/**
+ * Review NIT fix (spec 15 2.6): updateEntryContent and appendToEntry both re-embed the row, so a
+ * standing instruction's cached vector goes stale the moment either commits — whether or not the
+ * tags themselves changed. Touched whenever either side of the edit carries standing:active,
+ * covering an edit that adds it, removes it, or leaves it in place with new content. `ctx` is
+ * optional, like updateEntryValidity's own fix: a caller with none still gets a correct rebuild,
+ * awaited inline instead of deferred off the response path.
+ */
+async function touchStandingIfNeeded(
+  env: Env, ctx: ExecutionContext | undefined, config: Readonly<Config>, workspaceId: string,
+  priorTags: readonly string[], nextTags: readonly string[],
+  known?: readonly { id: string; vector: number[] }[],
+): Promise<void> {
+  if (!priorTags.includes(STANDING_TAG) && !nextTags.includes(STANDING_TAG)) return;
+  if (ctx) standingTouched(env, ctx, config as StandingCacheConfig, [workspaceId], known);
+  else await buildStandingCache(env, config as StandingCacheConfig, workspaceId, known ?? []);
 }
 
 /** Re-embedding must stamp vectors from the row being edited, not the caller's default write target. */
@@ -288,6 +308,7 @@ export async function updateEntryContent(
    * required so an unshare in the awaited gap between that read and this call's own first read (R2-3)
    * cannot land as "authorized" here — this call's guard pins to it, not to whatever it reads later. */
   authorizedWorkspaceId: string,
+  ctx?: ExecutionContext,
 ): Promise<UpdateEntryResult> {
   // A route's own scoped read can carry workspace_id as null/undefined for a row from before the
   // workspace column existed; this call's OWN read of the same row (below) always normalizes it to
@@ -490,6 +511,7 @@ export async function updateEntryContent(
           console.error("Vectorize delete failed after a held update (non-fatal):", e);
         }
       }
+      await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, existingTags, committedTags);
       return { status: "updated", vectorIds: null, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical, capsuleChanged };
     }
 
@@ -516,6 +538,7 @@ export async function updateEntryContent(
       }
     }
 
+    await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, existingTags, committedTags, reembedded?.values ? [{ id, vector: reembedded.values }] : undefined);
     return { status: "updated", vectorIds: newVectorIds, wasCanonical, capsuleChanged };
   }
 
@@ -580,6 +603,7 @@ export async function appendToEntry(
   /** The workspace the CALLER's own scoped read authorized, same reasoning as updateEntryContent's
    * identical parameter (R2-3): this call's guard pins to it, not to whatever it reads later. */
   authorizedWorkspaceId: string,
+  ctx?: ExecutionContext,
 ): Promise<AppendResult> {
   // See updateEntryContent's identical normalization: this call's own read of the row (below)
   // always coalesces workspace_id to "", so the pin must match that or a legacy row with no
@@ -740,6 +764,7 @@ export async function appendToEntry(
             console.error("Vectorize delete failed after a held append (non-fatal):", e);
           }
         }
+        await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, rowTags, refreshedTags);
         return { indexed: false, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical };
       }
 
@@ -756,6 +781,7 @@ export async function appendToEntry(
       } catch (e) {
         console.error("Append auto-link failed (non-fatal):", e);
       }
+      await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, rowTags, refreshedTags);
       return { indexed: newVectorIds !== null, wasCanonical };
     }
 
@@ -842,6 +868,7 @@ export async function appendToEntry(
           console.error("Vectorize delete failed after a held append (non-fatal):", e);
         }
       }
+      await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, rowTags, refreshedTags);
       return { indexed: false, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical };
     }
 
@@ -850,6 +877,7 @@ export async function appendToEntry(
     } catch (e) {
       console.error("Append auto-link failed (non-fatal):", e);
     }
+    await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, rowTags, refreshedTags, values ? [{ id, vector: values }] : undefined);
     return { indexed, wasCanonical };
   }
   throw new WriteConflictError();

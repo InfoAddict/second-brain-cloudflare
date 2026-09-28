@@ -19,7 +19,7 @@ let env: Env;
 let owner: Identity;
 let companyWs = "";
 const ctx = { waitUntil: (_: Promise<unknown>) => {} } as unknown as ExecutionContext;
-const MOVE_SELECT = /^SELECT id, workspace_id, actor_id, vector_ids FROM entries WHERE id = \? AND/;
+const MOVE_SELECT = /^SELECT id, workspace_id, actor_id, vector_ids, tags FROM entries WHERE id = \? AND/;
 
 beforeEach(async () => {
   resetDatabaseInit();

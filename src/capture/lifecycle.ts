@@ -12,6 +12,11 @@ import { planTrash, purgeLimit, purgeTrash, readTrashCandidates, trashHookOffset
 import {
   auditValidity, NO_VALIDITY_CHANGE, outcomeOf, retractionHook, unretractionHook, type ValidityOutcome,
 } from "../memory/validity";
+import { standingTouched } from "../standing/cache";
+
+/** True when either tag set carries standing:active: a status change that enters or leaves it (spec 15 2.6). */
+const touchesStanding = (a: readonly string[], b: readonly string[]): boolean =>
+  a.includes("standing:active") || b.includes("standing:active");
 
 export type ForgetResult =
   | { status: "not_found" }
@@ -37,6 +42,7 @@ export async function forgetEntry(
    * the awaited gap between that read and this call's own is not this caller's to trash, even
    * though readTrashCandidates (by-id, trash.ts) would otherwise still find it. */
   authorizedWorkspaceId: string,
+  ctx?: ExecutionContext,
 ): Promise<ForgetResult> {
   const [row] = await readTrashCandidates(env, [id]);
   if (!row) return { status: "not_found" };
@@ -74,6 +80,11 @@ export async function forgetEntry(
     }
   }
 
+  if (ctx) {
+    let tags: string[] = [];
+    try { tags = JSON.parse(row.tags ?? "[]"); } catch { /* leave empty: an unparsable tags column touches nothing */ }
+    if (tags.includes("standing:active")) standingTouched(env, ctx, opts.config, [row.workspace_id ?? ""]);
+  }
   return { status: "deleted", vectorCount: vectorIds.length, trashed: plan.tier3.length === 0, edgesDropped: plan.tier2.length > 0, validity: outcomeOf(done) };
 }
 
@@ -112,11 +123,19 @@ export async function deprecateEntry(
   config: Readonly<Config>,
   workspaceId: string,
   opts: { meta?: Record<string, unknown> } = {},
+  ctx?: ExecutionContext,
 ): Promise<boolean> {
-  return (await deprecateWithValidity(id, env, change, config, workspaceId, opts)).ok;
+  return (await deprecateWithValidity(id, env, change, config, workspaceId, opts, ctx)).ok;
 }
 
-/** deprecateEntry, reporting what the retraction hook (D-RET) reopened. */
+/**
+ * deprecateEntry, reporting what the retraction hook (D-RET) reopened.
+ *
+ * `ctx` is optional (spec 15 2.6): a caller that omits it (an internal or test caller with no
+ * ExecutionContext to give) simply does not touch the standing cache — the next revalidation
+ * repairs it within STANDING_CACHE_MAX_AGE_MS regardless (P7.4), so a missing invalidation can
+ * only delay a NEW fire, never leave a stopped one live.
+ */
 export async function deprecateWithValidity(
   id: string,
   env: Env,
@@ -124,6 +143,7 @@ export async function deprecateWithValidity(
   config: Readonly<Config>,
   workspaceId: string,
   opts: { meta?: Record<string, unknown> } = {},
+  ctx?: ExecutionContext,
 ): Promise<{ ok: boolean; validity: ValidityOutcome }> {
   // A route's own scoped read can carry workspace_id as null/undefined for a legacy row; SQL NULL
   // never equals another NULL via `=`, so an un-normalized pin would fail this read and every
@@ -169,6 +189,7 @@ export async function deprecateWithValidity(
   } catch (e) {
     console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e);
   }
+  if (ctx && touchesStanding(tags, deprecatedTags)) standingTouched(env, ctx, config, [pinnedWorkspaceId]);
   return { ok: true, validity: outcomeOf(done) };
 }
 
@@ -180,9 +201,9 @@ export type ApplyStatusResult =
    * (indexed: false on the "ok" result), the same fallback restoreEntry uses (P8). */
   | { status: "reembed_failed" };
 
-export async function applyStatus(id: string, status: MemoryStatus, env: Env, change: ChangeContext, config: Readonly<Config>, workspaceId: string): Promise<ApplyStatusResult> {
+export async function applyStatus(id: string, status: MemoryStatus, env: Env, change: ChangeContext, config: Readonly<Config>, workspaceId: string, ctx?: ExecutionContext): Promise<ApplyStatusResult> {
   if (status === "deprecated") {
-    const r = await deprecateWithValidity(id, env, change, config, workspaceId, { meta: { status } });
+    const r = await deprecateWithValidity(id, env, change, config, workspaceId, { meta: { status } }, ctx);
     return r.ok ? { status: "ok", indexed: false, validity: r.validity } : { status: "not_found" };
   }
   // R2-3: pinned to the caller's authorized workspace, same reasoning as deprecateEntry above
@@ -243,5 +264,6 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
   }
   const done = hook ? [hook.read(results, 3)] : [];
   await auditValidity(env, change, ...done);
+  if (ctx && touchesStanding(currentTags, nextTags)) standingTouched(env, ctx, config, [pinnedWorkspaceId]);
   return { status: "ok", indexed, validity: outcomeOf(...done) };
 }

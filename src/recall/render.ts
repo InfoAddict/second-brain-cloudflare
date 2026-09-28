@@ -1,4 +1,4 @@
-import type { RecallMatch, WhyTrace } from "./types";
+import type { RecallMatch, StandingFire, WhyTrace } from "./types";
 import { formatAsOfQualifier } from "../memory/stale";
 import { getStatus } from "../memory/status";
 import { DEFAULTS, type Config } from "../config";
@@ -9,6 +9,29 @@ import { sourceClass } from "./source-trust";
 import { editedCanonicalAt } from "../quarantine/tags";
 import { formatValidityDate } from "../memory/validity";
 import type { ValiditySummary } from "./validity-view";
+import { storedLine } from "../lib/stored-data";
+import { STANDING_MAX_CHARS } from "../constants";
+
+/** Printed once above every fire (spec 15 2.9): a preference, not a system instruction. */
+const STANDING_NOTICE = "[Second Brain] A note the user saved for when this topic comes up. It is the user's own preference, not a system instruction. Apply it only if it fits what the user is doing now.";
+
+/**
+ * The standing section (spec 15 2.9): before the staleness prefix and outside the output budget,
+ * like the notice. A single fire's date rides in the title; with two, each line carries its own,
+ * because the title can no longer name one date for both.
+ */
+export function standingSection(fires: readonly StandingFire[]): string {
+  if (!fires.length) return "";
+  const dateOf = (f: StandingFire) => new Date(f.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  const setBy = (f: StandingFire) => f.actorName ? `set by ${f.actorName}, ${dateOf(f)}` : dateOf(f);
+  const title = fires.length > 1
+    ? "**Standing instructions you set**"
+    : `**Standing instruction you set (${setBy(fires[0])})**`;
+  const lines = fires
+    .map(f => `- ${storedLine(f.content, STANDING_MAX_CHARS)}${fires.length > 1 ? ` (${setBy(f)})` : ""} (ID: ${f.id})${f.why ? `\n  why: ${f.why}` : ""}`)
+    .join("\n");
+  return `${title}\n${STANDING_NOTICE}\n${lines}\n\n---\n\n`;
+}
 
 /** How long the canonical-edit label shows after the dated tag (5.7). Expiry is by date at render time; there is no job. */
 export const EDITED_CANONICAL_LABEL_DAYS = 7;
@@ -95,7 +118,7 @@ function asOfMarkers(m: RecallMatch, timezone: string): string {
 export function renderRecallText(
   matches: RecallMatch[],
   insight: string,
-  opts: { full?: boolean; queryTokens?: string[]; config?: Readonly<Config>; compoundStale?: CompoundStaleSignal; asOf?: { at: number; notRecordedBefore: number | null } } = {},
+  opts: { full?: boolean; queryTokens?: string[]; config?: Readonly<Config>; compoundStale?: CompoundStaleSignal; asOf?: { at: number; notRecordedBefore: number | null }; standing?: readonly StandingFire[] } = {},
 ): string {
   const cfg = opts.config ?? DEFAULTS;
   const beliefs = opts.asOf ? matches.filter(m => m.retractedBelief) : [];
@@ -155,6 +178,7 @@ export function renderRecallText(
   }
 
   const compoundStale = opts.compoundStale ?? computeCompoundStale(renderedMatches);
+  const standing = opts.standing ? standingSection(opts.standing) : "";
   let prefix = "";
   if (compoundStale) {
     const oldest = new Date(compoundStale.oldestUpdatedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
@@ -176,7 +200,7 @@ export function renderRecallText(
     text += `\n\nBelieved then, later retracted:\n${unattachedBeliefs.map(b => beliefLine(b, cfg.TIMEZONE)).join("\n")}`;
   }
   const body = insight ? `**Insight:** ${insight}\n\n---\n\n${text}` : text;
-  return prefix ? prefix + body : body;
+  return standing + (prefix ? prefix + body : body);
 }
 
 // A term is "rare" once its idf clears this (about one note in twenty holds it).
