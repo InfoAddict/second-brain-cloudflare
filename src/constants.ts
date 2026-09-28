@@ -93,7 +93,13 @@ export const MIRRORED_SOURCES: ReadonlySet<string> = new Set([
 //
 // Not MIRRORED_SOURCES: those index the first chunk only because the record
 // leads with signal and trails with boilerplate; a transcript is the inverse.
-export const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set(["claude-code"]);
+// codex-session and cursor-session are the Codex CLI / Cursor session-end
+// hooks (integrations/codex-cli-hooks, integrations/cursor-hooks). Deliberate
+// MCP writes from those same clients use the plain "codex" / "cursor" source
+// and are NOT in this set: sharing a label with the automatic hook would let
+// an unattended transcript capture supersede a deliberate memory under the
+// same-source exemption below.
+export const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set(["claude-code", "codex-session", "cursor-session"]);
 
 // ── Embedding migration (#248) ───────────────────────────────────────────────
 // Budgeted in chunks rather than entries because storeEntry fires one model call
@@ -316,3 +322,8 @@ export const MEMBER_HISTORY_CHUNK = 1000;
 export const MEMBER_HISTORY_SLICE = 1000;
 export const MEMBER_HISTORY_MAX_CHUNKS = 10;
 export const MEMBER_REMOVAL_NIGHTLY_MAX = 1;
+/** Undo: a to_version rollback re-creates one row per merge it crosses, but only re-embeds this
+ * many inline (AI + Vectorize, one call each) — at VERSION_KEEP's ceiling that could otherwise be
+ * hundreds of merges in one request, over the platform's per-invocation service subrequest limit.
+ * The rest are written with vector_ids = '[]' for POST /vectorize-pending to backfill. */
+export const UNDO_MERGE_REEMBED_INLINE = 25;

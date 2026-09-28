@@ -2,6 +2,7 @@ import { CHUNK_OVERLAP_CHARS } from "../constants";
 import { getStatus } from "../memory/status";
 import { getVolatility } from "../memory/volatility";
 import { DEFAULTS, type Config } from "../config";
+import { sourceClass, sourceWeight } from "./source-trust";
 
 export interface VectorizeMatch {
   id: string;
@@ -12,6 +13,8 @@ export interface VectorizeMatch {
 
 export interface RerankOptions {
   useRecallFrequency?: boolean;
+  /** D1's source column, keyed by parentId. Wins over Vectorize metadata's `source`, exactly as d1Tags wins over metadata tags (4.2). */
+  d1Sources?: Map<string, string>;
 }
 
 // Recency-decay floors: the minimum fraction of its semantic relevance a memory
@@ -57,62 +60,124 @@ export function cosineSim(a: ArrayLike<number>, b: ArrayLike<number>): number {
   return normA === 0 || normB === 0 ? 0 : dot / Math.sqrt(normA * normB);
 }
 
-export function rerankWithTimeDecay(
-  matches: VectorizeMatch[],
-  recallCounts: Map<string, number> = new Map(),
-  importanceScores: Map<string, number> = new Map(),
-  queryTags: string[] = [],
-  contradictionWins: Map<string, number> = new Map(),
-  contradictionLosses: Map<string, number> = new Map(),
-  d1Tags: Map<string, string[]> = new Map(),
-  // Ranking seam: config in, ordering out. Threaded rather than read from
-  // module scope so this stays pure and directly assertable without an env.
-  config: Readonly<Config> = DEFAULTS,
-  options: Readonly<RerankOptions> = {},
-): VectorizeMatch[] {
-  const now = Date.now();
+/**
+ * The factors rerankWithTimeDecay applied, reported per match (data only: see WhyTrace in types.ts).
+ * combined * importance * tag_boost * append_penalty * rolled_up_penalty is the score's multiplier.
+ */
+export interface RankMultipliers {
+  recency: number;
+  frequency: number;
+  /** min(1, recency x frequency), the cap the score actually used. */
+  combined: number;
+  importance: number;
+  tag_boost: number;
+  append_penalty: number;
+  rolled_up_penalty: number;
+  /** The source-class demotion (4.2); 1.0 for direct and for any canonical row regardless of class. */
+  source_weight: number;
+}
 
+type RerankArgs = [
+  matches: VectorizeMatch[],
+  recallCounts: Map<string, number>,
+  importanceScores: Map<string, number>,
+  queryTags: string[],
+  contradictionWins: Map<string, number>,
+  contradictionLosses: Map<string, number>,
+  d1Tags: Map<string, string[]>,
+  config: Readonly<Config>,
+  options: Readonly<RerankOptions>,
+];
+
+const rerankDefaults = (args: Partial<RerankArgs>): RerankArgs => [
+  args[0] ?? [], args[1] ?? new Map(), args[2] ?? new Map(), args[3] ?? [],
+  args[4] ?? new Map(), args[5] ?? new Map(), args[6] ?? new Map(), args[7] ?? DEFAULTS, args[8] ?? {},
+];
+
+/** The multiplier the score actually applied, plus the age-known flag `why` reports: shared by both entry points below. */
+function scoredMultiplier(
+  match: VectorizeMatch,
+  recallCounts: Map<string, number>,
+  importanceScores: Map<string, number>,
+  queryTags: string[],
+  contradictionWins: Map<string, number>,
+  contradictionLosses: Map<string, number>,
+  d1Tags: Map<string, string[]>,
+  config: Readonly<Config>,
+  options: Readonly<RerankOptions>,
+) {
+  const now = Date.now();
+  const meta = match.metadata as any;
+  const ageKnown = typeof meta?.created_at === "number";
+  const createdAt = meta?.created_at ?? now;
+  const parentId = (meta?.parentId ?? match.id) as string;
+  const metaTags: string[] = Array.isArray(meta?.tags) ? meta.tags : [];
+  const tags: string[] = d1Tags.get(parentId) ?? metaTags;
+  const ageMs = now - createdAt;
+  const rc = recallCounts.get(parentId) ?? 0;
+
+  const halfLifeMs = getHalfLifeMs(tags);
+  const imp = importanceScores.get(parentId) ?? 0;
+
+  const recencyFloor = getRecencyFloor(tags, imp, config);
+  const recency = recencyFloor + (1 - recencyFloor) * Math.exp(-ageMs / halfLifeMs);
+  const frequency = options.useRecallFrequency === false ? 1 : 1 + Math.log1p(rc);
+  const combined = Math.min(1.0, recency * frequency);
+  // metadata.isUpdate marks an append's own chunk; "-update-" is 3.7's deterministic id for one.
+  const isShortAppend = (meta?.isUpdate === true || match.id.includes("-update-")) &&
+    typeof meta?.content === "string" && meta.content.length < CHUNK_OVERLAP_CHARS;
+  const appendPenalty = isShortAppend ? 0.2 : 1.0;
+  const rolledUpPenalty = tags.includes("rolled-up") ? 0.4 : 1.0;
+
+  const wins = contradictionWins.get(parentId) ?? 0;
+  const losses = contradictionLosses.get(parentId) ?? 0;
+  const net = wins - losses;
+  let importance: number;
+  if (imp === 0 && net === 0) {
+    importance = 1.0;
+  } else {
+    const base = imp === 0 ? 3 : imp;
+    const adj = Math.sign(net) * Math.log1p(Math.abs(net)) * config.CONTRADICTION_IMPORTANCE_STEP;
+    const effectiveImp = Math.max(1, Math.min(5, base + adj));
+    importance = 0.8 + (effectiveImp / 5) * 0.4;
+  }
+
+  const overlap = queryTags.length ? tags.filter(t => queryTags.includes(t)).length : 0;
+  const tagBoost = overlap ? Math.min(config.TAG_BOOST_MAX, 1 + overlap * config.TAG_BOOST_STEP) : 1.0;
+
+  const source = options.d1Sources?.get(parentId) ?? (typeof meta?.source === "string" ? meta.source : undefined);
+  const srcWeight = getStatus(tags) === "canonical" ? 1.0 : sourceWeight(sourceClass(source, tags), config);
+
+  return { factor: combined * appendPenalty * rolledUpPenalty * importance * tagBoost * srcWeight, recency, frequency, combined, importance, tagBoost, appendPenalty, rolledUpPenalty, ageKnown, srcWeight };
+}
+
+/**
+ * Standalone: explain off never builds a RankMultipliers or ageKnown value for a match it is
+ * about to throw away. Same ordering and scores as rerankWithTimeDecayTraced.
+ */
+export function rerankWithTimeDecay(...args: Partial<RerankArgs>): VectorizeMatch[] {
+  const [matches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, config, options] = rerankDefaults(args);
   return matches
     .map(match => {
-      const meta = match.metadata as any;
-      const createdAt = meta?.created_at ?? now;
-      const parentId = (meta?.parentId ?? match.id) as string;
-      const metaTags: string[] = Array.isArray(meta?.tags) ? meta.tags : [];
-      const tags: string[] = d1Tags.get(parentId) ?? metaTags;
-      const ageMs = now - createdAt;
-      const rc = recallCounts.get(parentId) ?? 0;
-
-      const halfLifeMs = getHalfLifeMs(tags);
-      const imp = importanceScores.get(parentId) ?? 0;
-
-      const recencyFloor = getRecencyFloor(tags, imp, config);
-      const recencyMultiplier = recencyFloor + (1 - recencyFloor) * Math.exp(-ageMs / halfLifeMs);
-      const frequencyMultiplier = options.useRecallFrequency === false ? 1 : 1 + Math.log1p(rc);
-      const combinedMultiplier = Math.min(1.0, recencyMultiplier * frequencyMultiplier);
-      const isShortAppend = match.id.includes("-update-") &&
-        typeof meta?.content === "string" && meta.content.length < CHUNK_OVERLAP_CHARS;
-      const appendPenalty = isShortAppend ? 0.2 : 1.0;
-      const rolledUpPenalty = tags.includes("rolled-up") ? 0.4 : 1.0;
-
-      const wins = contradictionWins.get(parentId) ?? 0;
-      const losses = contradictionLosses.get(parentId) ?? 0;
-      const net = wins - losses;
-      let importanceMultiplier: number;
-      if (imp === 0 && net === 0) {
-        importanceMultiplier = 1.0;
-      } else {
-        const base = imp === 0 ? 3 : imp;
-        const adj = Math.sign(net) * Math.log1p(Math.abs(net)) * config.CONTRADICTION_IMPORTANCE_STEP;
-        const effectiveImp = Math.max(1, Math.min(5, base + adj));
-        importanceMultiplier = 0.8 + (effectiveImp / 5) * 0.4;
-      }
-
-      const overlap = queryTags.length ? tags.filter(t => queryTags.includes(t)).length : 0;
-      const tagBoost = overlap ? Math.min(config.TAG_BOOST_MAX, 1 + overlap * config.TAG_BOOST_STEP) : 1.0;
-
-      return { ...match, score: match.score * combinedMultiplier * appendPenalty * rolledUpPenalty * importanceMultiplier * tagBoost };
+      const { factor } = scoredMultiplier(match, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, config, options);
+      return { ...match, score: match.score * factor };
     })
     .sort((a, b) => b.score - a.score);
+}
+
+/** Same ordering and scores as rerankWithTimeDecay, with the multipliers that shaped each score alongside it. */
+export function rerankWithTimeDecayTraced(...args: Partial<RerankArgs>): { match: VectorizeMatch; multipliers: RankMultipliers; ageKnown: boolean }[] {
+  const [matches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, config, options] = rerankDefaults(args);
+  return matches
+    .map(match => {
+      const m = scoredMultiplier(match, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, config, options);
+      return {
+        match: { ...match, score: match.score * m.factor },
+        multipliers: { recency: m.recency, frequency: m.frequency, combined: m.combined, importance: m.importance, tag_boost: m.tagBoost, append_penalty: m.appendPenalty, rolled_up_penalty: m.rolledUpPenalty, source_weight: m.srcWeight },
+        ageKnown: m.ageKnown,
+      };
+    })
+    .sort((a, b) => b.match.score - a.match.score);
 }
 
 export function mmrRerank<T extends VectorizeMatch>(candidates: T[], lambda: number, k: number): T[] {

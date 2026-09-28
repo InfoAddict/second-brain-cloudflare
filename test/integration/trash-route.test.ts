@@ -33,11 +33,11 @@ function call(method: string, path: string, token: string | null): Promise<Respo
   return worker.fetch(new Request(`${BASE}${path}`, { method, headers }), env, ctx);
 }
 
-function seedTrash(id: string, workspaceId: string, actorId: string, deletedAt: number) {
+function seedTrash(id: string, workspaceId: string, actorId: string, deletedAt: number, nonce = `nonce-${id}`) {
   sqlite.db.prepare(
-    `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason)
-     VALUES (?, ?, ?, 'content', '{"source":"api"}', '[]', '[]', ?, ?, 'rest', 'forget')`,
-  ).bind(id, workspaceId, actorId, deletedAt, actorId).run();
+    `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason, nonce)
+     VALUES (?, ?, ?, 'content', '{"source":"api"}', '[]', '[]', ?, ?, 'rest', 'forget', ?)`,
+  ).bind(id, workspaceId, actorId, deletedAt, actorId, nonce).run();
 }
 
 beforeEach(async () => {
@@ -80,6 +80,7 @@ describe("GET /trash", () => {
       layer: "personal",
       can_restore: true,
       can_delete_forever: true,
+      nonce: "nonce-e1",
     });
     expect(data).toHaveProperty("next_cursor");
   });

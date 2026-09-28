@@ -35,7 +35,8 @@ it("hides a private event recorded in the same millisecond as the share event", 
     .bind("event-share", "shared-entry", alice.member.userId, "shared", '{}', 1001).run();
 
   const history = await readEntryHistory(env, bobIdentity, "shared-entry");
-  expect.soft(history?.timeline.map(e => e.event)).toEqual(["shared"]);
+  const events = history?.history.items.filter((i: any) => i.kind === "event") ?? [];
+  expect.soft(events.map((e: any) => e.event)).toEqual(["shared"]);
   const response = await worker.fetch(req("GET", "/entry?id=shared-entry", { token: bob.token }), env, { waitUntil() {} } as unknown as ExecutionContext);
   const json = await response.json() as any;
   expect.soft(JSON.stringify(json)).not.toContain("private-era");

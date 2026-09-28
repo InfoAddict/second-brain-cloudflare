@@ -13,7 +13,7 @@ import { requireAdmin, requireIdentity } from "../lib/identity";
 import { readableWorkspaces, scopeWhere } from "../lib/scope";
 import { getOrCreateVapidKeys, recordPushOrigin } from "../push/vapid";
 import { toBase64Url } from "../push/base64url";
-import { pushDueItems, sendTestNotification } from "../push/send";
+import { newPushBudget, pushDueItems, sendTestNotification } from "../push/send";
 
 /** POST /push/run's results array cap — a diagnostic sample, not a full audit log. */
 const MAX_REPORTED_PUSH_RUN_RESULTS = 10;
@@ -116,15 +116,19 @@ export async function handlePushRoutes(
     if (auth instanceof Response) return auth;
 
     const workspaces = [...new Set(readableWorkspaces(auth))];
-    const perWorkspace = await Promise.all(workspaces.map(w => pushDueItems(env, w)));
+    // One external-fetch budget for the whole request, not one per workspace.
+    const budget = newPushBudget();
+    const perWorkspace = await Promise.all(workspaces.map(w => pushDueItems(env, w, undefined, budget)));
     const sent = perWorkspace.reduce((n, r) => n + r.sent, 0);
     const candidates = perWorkspace.reduce((n, r) => n + r.candidates, 0);
     const subscriptions = perWorkspace.reduce((n, r) => n + r.subscriptions, 0);
     // Capped again here: each workspace's own results are already capped, but
     // several small workspaces together could still exceed the cap.
     const results = perWorkspace.flatMap(r => r.results).slice(0, MAX_REPORTED_PUSH_RUN_RESULTS);
+    // "busy": another run held the lease; "kv_write_failed": nothing was sent, so nothing repeats.
+    const skipped = perWorkspace.find(r => r.skipped)?.skipped;
 
-    return json({ ok: true, sent, candidates, subscriptions, results });
+    return json({ ok: true, sent, candidates, subscriptions, results, ...(skipped ? { skipped } : {}) });
   }
 
   // POST /push/test (admin) — a fixed notification to the caller's own
@@ -140,7 +144,8 @@ export async function handlePushRoutes(
     if (auth instanceof Response) return auth;
 
     const workspaces = [...new Set(readableWorkspaces(auth))];
-    const perWorkspace = await Promise.all(workspaces.map(w => sendTestNotification(env, w)));
+    const budget = newPushBudget();
+    const perWorkspace = await Promise.all(workspaces.map(w => sendTestNotification(env, w, budget)));
     const sent = perWorkspace.reduce((n, r) => n + r.sent, 0);
     const subscriptions = perWorkspace.reduce((n, r) => n + r.subscriptions, 0);
     const results = perWorkspace.flatMap(r => r.results).slice(0, MAX_REPORTED_PUSH_RUN_RESULTS);

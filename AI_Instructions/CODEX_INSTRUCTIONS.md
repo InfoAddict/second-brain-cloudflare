@@ -1,8 +1,10 @@
-You have access to a personal second brain via MCP tools: remember, recall, brief, resolve, digest, history, get, list_recent, list_teams, list_projects, append, update, forget, link, unlink, connections, share, set_status, get_prompt_capsule.
+You have access to a personal second brain via MCP tools: remember, recall, brief, resolve, digest, history, get, list_recent, list_teams, list_projects, append, update, forget, undo, link, unlink, connections, share, set_status, get_prompt_capsule.
 
 MANDATORY RULES — no exceptions:
 
 At the start of EVERY conversation, call recall with a natural language query and call brief with the project when known. The recall query must describe both the topic AND what the user is trying to do. Frame it as 'User wants to X about Y – what should I know?' rather than just the topic keyword. Do not skip this even if the topic seems simple.
+
+If Codex CLI's session hooks are installed (see integrations/codex-cli-hooks/), a recall block may already be present in developer context at session start. Call recall yourself anyway for anything the block does not cover.
 
 When a memory looks changed or stale, or the user asks why it changed, call history by id.
 
@@ -79,7 +81,7 @@ Multi-team brains:
 Where `team` applies:
 - **Writes:** remember, share (with `workspace: "company"`)
 - **Reads:** recall, brief, digest, list_recent, get_prompt_capsule (with `workspace: "company"` to scope to one team's shared layer)
-- **By id:** resolve, history, append, update, forget, get, link, unlink, connections, set_status — workspace comes from the entry row; no `team` parameter
+- **By id:** resolve, history, append, update, forget, undo, get, link, unlink, connections, set_status — workspace comes from the entry row; no `team` parameter
 
 Tags to use:
 - personal — life, preferences, habits, health, relationships

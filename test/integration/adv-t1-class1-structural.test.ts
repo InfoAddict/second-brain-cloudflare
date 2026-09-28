@@ -106,8 +106,21 @@ async function callMcpTool(mcpEnv: Env, identity: Identity, name: string, args: 
 
 interface Case {
   name: string;
+  /** A prerequisite beyond the shared seed (undo needs a version to revert to) — runs before the
+   * race environment is built and the baseline is captured, so it is setup, not part of the race.
+   * Takes the same (workspace, author) the shared seed already used, so it stays a fixture of the
+   * row the race targets rather than a fixture of its own. */
+  setup?: (id: string, workspaceId: string, actorId: string) => Promise<void>;
   /** Runs the write against a racing env and returns whether the caller saw success. */
   run: (racingEnv: Env, id: string, adminToken: string, admin?: Identity) => Promise<{ succeeded: boolean }>;
+}
+
+/** A prior version to revert to, distinct from the shared seed's current content (undo's CASES). */
+async function seedPriorVersion(id: string, workspaceId: string, actorId: string) {
+  await sqlite.db.prepare(
+    `INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, tags, state, actor_id, channel, reason, meta, valid_from, created_at)
+     VALUES (?, ?, 1, ?, NULL, '[]', '{}', ?, 'rest', 'update', '{}', 500, 900)`,
+  ).bind(id, workspaceId, "Bob's earlier company note", actorId).run();
 }
 
 const CASES: Case[] = [
@@ -146,6 +159,8 @@ const CASES: Case[] = [
       return { succeeded: res.status === 200 };
     },
   },
+  // REST /forget permanent (Delete forever, R3-1) is gone from this list: it never reads or touches a
+  // live row any more, only a trash row pinned by nonce (delete-forever-nonce-only.test.ts).
   {
     name: "MCP update",
     run: async (racingEnv, id, _adminToken, admin?: Identity) => {
@@ -182,6 +197,23 @@ const CASES: Case[] = [
     run: async (racingEnv, id, adminToken) => {
       const res = await worker.fetch(req("POST", "/share", { body: { id, workspace: "personal" }, token: adminToken }), racingEnv, ctx);
       return { succeeded: res.status === 200 };
+    },
+  },
+  {
+    name: "REST /undo",
+    setup: seedPriorVersion,
+    run: async (racingEnv, id, adminToken) => {
+      const res = await worker.fetch(req("POST", "/undo", { body: { id }, token: adminToken }), racingEnv, ctx);
+      return { succeeded: res.status === 200 };
+    },
+  },
+  {
+    name: "MCP undo",
+    setup: seedPriorVersion,
+    run: async (racingEnv, id, _adminToken, admin?: Identity) => {
+      const result = await callMcpTool(racingEnv, admin!, "undo", { id });
+      const text = (result.content as { type: string; text: string }[])[0]?.text ?? "";
+      return { succeeded: !/no entry found|changed after you looked|has no recorded changes/i.test(text) && !result.isError };
     },
   },
 ];
@@ -227,9 +259,11 @@ describe("CLASS 1 structural: an unshare between authorization and a writer's ow
     it(c.name, async () => {
       const id = `race-${c.name.replace(/[^a-z0-9]/gi, "-")}`;
       await seed(id, { content: "Bob's company note", workspaceId: companyWs, actorId: author.userId });
+      if (c.setup) await c.setup(id, companyWs, author.userId);
       const racingEnv = raceUnshare(id, author.personalWorkspaceId);
 
       const before = await live(id);
+      const versionsBefore = await versionCount(id);
       const { succeeded } = await c.run(racingEnv, id, adminToken, admin);
 
       const after = await live(id);
@@ -238,7 +272,7 @@ describe("CLASS 1 structural: an unshare between authorization and a writer's ow
       expect(succeeded, `${c.name}: reported success on a row it was never authorized to write`).toBe(false);
       expect(after.content, `${c.name}: content changed in the moved row`).toBe(before.content);
       expect(after.tags, `${c.name}: tags changed in the moved row`).toBe(before.tags);
-      expect(await versionCount(id), `${c.name}: a version was written for an unauthorized write`).toBe(0);
+      expect(await versionCount(id), `${c.name}: a version was written for an unauthorized write`).toBe(versionsBefore);
     });
   }
 });

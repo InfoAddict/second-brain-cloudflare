@@ -312,14 +312,22 @@ export async function handleIntegrationsRoutes(
               // Carries vectorIds/workspaceId too (share.ts) so a re-run over
               // an already-moved entry can still repair a stale Vectorize
               // stamp left by a previous failed/skipped re-stamp.
+              // moveEntry can reach no_change straight off its read (cost 1,
+              // already counted above) or after a missed batch whose liveness
+              // re-read found the row already at the target (cost 3: read +
+              // batch + re-read). The status alone doesn't say which; charge
+              // the worst case so the vectorize loop below never overspends.
               alreadyThere++;
+              d1Spent += 2;
               toRestamp.push({ vectorIds: result.vectorIds, workspaceId: result.workspaceId });
               break;
             case "not_found":
-              // A stale itemMap pointer (deleted elsewhere) or an entry outside
-              // the owner's own readable set — either way, not a move, and not
-              // a reason to abort the rest of the batch.
+              // A stale itemMap pointer (deleted elsewhere), an entry outside the
+              // owner's own readable set (cost 1, already counted above), or a
+              // row gone by the time a missed batch's liveness re-read ran (cost
+              // 3). Same can't-tell-which-path reasoning as no_change above.
               missing++;
+              d1Spent += 2;
               break;
             case "forbidden":
               refused++;
@@ -328,8 +336,10 @@ export async function handleIntegrationsRoutes(
               // The row moved (or was forgotten and re-captured) between this call's read and its
               // batch — the same class of transient race the disconnect-purge tests already cover
               // elsewhere in this route. Counted as missing for this pass; the next sync's own
-              // fresh read retries it.
+              // fresh read retries it. Always reached after a missed batch, so it always costs 3:
+              // the read, the batch, and the widened liveness re-read.
               missing++;
+              d1Spent += 2;
               break;
           }
         } catch (e) {

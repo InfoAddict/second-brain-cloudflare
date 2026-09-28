@@ -54,8 +54,8 @@ function renderTrashIntro() {
  */
 function trashWhoLine(item) {
   const date = formatDateUI(item.deleted_at, { year: 'numeric', month: 'short', day: 'numeric' });
-  if (item.reason === 'mirror') return t('trash.removedBySync', { date, provider: item.source || '' });
-  if (item.reason === 'disconnect') return t('trash.removedByDisconnect', { date, provider: item.source || '' });
+  if (item.reason === 'mirror') return t('trash.removedBySync', { date, provider: providerName(item.source) || '' });
+  if (item.reason === 'disconnect') return t('trash.removedByDisconnect', { date, provider: providerName(item.source) || '' });
   if (item.channel === 'mcp') {
     return item.client ? t('trash.deletedByClient', { date, client: item.client }) : t('trash.deletedByAgent', { date });
   }
@@ -134,8 +134,6 @@ function loadMoreTrash(btn) {
 
 /** Map a failed /restore onto the copy the trash view promises. */
 function trashRestoreErrorMessage(status, data) {
-  if (status === 404) return t('trash.alreadyGone');
-  if (status === 409) return t('trash.conflict');
   if (status === 502) return t('trash.reindexFailed');
   return data?.error || t('team.actionFailed');
 }
@@ -145,13 +143,21 @@ async function performTrashRestore(item) {
     const res = await fetch(`${WORKER_URL}/restore`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: JSON.stringify({ id: item.id }),
+      body: JSON.stringify({ id: item.id, ...(item.nonce ? { nonce: item.nonce } : {}) }),
     });
     let data = {};
     try {
       data = await res.json();
     } catch {}
     if (!res.ok || !data.ok) {
+      // A stale nonce - the row moved under the reader, e.g. an AI tool
+      // restored or purged it first - is a conflict, not a plain failure:
+      // refresh so the list matches what actually happened.
+      if (res.status === 404 || res.status === 409) {
+        showToast(t('trash.conflict'));
+        loadTrashPage();
+        return;
+      }
       showToast(trashRestoreErrorMessage(res.status, data));
       return;
     }
@@ -182,7 +188,7 @@ function handleTrashRestore(item) {
   if (item.reason === 'mirror') {
     openDangerConfirm({
       title: t('trash.mirrorTitle'),
-      body: t('trash.mirrorBody', { provider: item.source || '' }),
+      body: t('trash.mirrorBody', { provider: providerName(item.source) || '' }),
       confirmLabel: t('trash.restore'),
       tone: 'primary',
       onConfirm: async (_checked, done) => {
@@ -195,11 +201,16 @@ function handleTrashRestore(item) {
   performTrashRestore(item);
 }
 
-function handleTrashDeleteForever(id) {
-  openDeleteForeverConfirm(id, null, {
+function handleTrashDeleteForever(item) {
+  openDeleteForeverConfirm(item.id, null, {
+    nonce: item.nonce,
     onDone: () => {
-      trashItems = trashItems.filter((i) => i.id !== id);
+      trashItems = trashItems.filter((i) => i.id !== item.id);
       renderTrashList();
+    },
+    onConflict: () => {
+      showToast(t('trash.conflict'));
+      loadTrashPage();
     },
   });
 }
@@ -218,7 +229,7 @@ function onTrashListClick(ev) {
   if (!item) return;
   const action = btn.dataset.action;
   if (action === 'restore') handleTrashRestore(item);
-  else if (action === 'delete-forever') handleTrashDeleteForever(item.id);
+  else if (action === 'delete-forever') handleTrashDeleteForever(item);
 }
 
 document.getElementById('trash-list')?.addEventListener('click', onTrashListClick);

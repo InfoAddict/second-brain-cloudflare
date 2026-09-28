@@ -11,6 +11,7 @@ import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { createMember } from "../../src/lib/team-admin";
 import { resolveIdentityByUserId, resolveIdentityFromToken, type Identity } from "../../src/lib/identity";
 import { moveEntry } from "../../src/capture/share";
+import { VERSIONS_SINCE_KV_KEY } from "../../src/constants";
 import type { Env } from "../../src/env";
 
 let sqlite: SqliteD1;
@@ -148,7 +149,7 @@ describe("history visibility follows moves", () => {
 
     const text = await mcpCall("history", { id: "s1" }, bob);
     expect(text).not.toContain("created");
-    expect(text.match(/updated/g)?.length).toBe(1);
+    console.log(JSON.stringify(text)); expect(text.match(/updated/g)?.length).toBe(1);
     expect(text).toContain("shared");
 
     const ownerText = await mcpCall("history", { id: "s1" }, owner);
@@ -179,6 +180,11 @@ describe("history visibility follows moves", () => {
       provider: "notion", status: "connected", config: { mirrorWorkspace: "company" }, itemMap: { k1: { entryId: "m1" } },
     }));
     const now = Date.now();
+    // No real version exists for this mirror-moved row (the merge rule only ever hides an
+    // updated/status_changed event that a real version now covers); pre-warm the marker to
+    // after every bump below, so every one of them reads as older than it and this test's own
+    // D-SH assertion is not entangled with that rule.
+    await env.OAUTH_KV.put(VERSIONS_SINCE_KV_KEY, String(now + 100000));
     await seed("m1", { workspaceId: owner.personalWorkspaceId, actorId: owner.userId });
     await bump("m1", "updated", owner.userId, now - 2000, { channel: "rest" });
     await bump("m1", "status_changed", owner.userId, now - 1000, { channel: "rest" });

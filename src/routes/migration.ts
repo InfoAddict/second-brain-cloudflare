@@ -78,8 +78,8 @@ export async function handleMigrationRoutes(
   }
 
   // POST /migration/reset — forget the ledger so the next batch starts from the
-  // beginning. Rebuilding is idempotent (vector ids are deterministic, and the
-  // upsert overwrites), so this costs model calls but cannot corrupt anything.
+  // beginning. Rebuilding is safe to repeat (each row's commit replaces its vector_ids
+  // under a compare-and-set), so this costs model calls but cannot corrupt anything.
   if (url.pathname === "/migration/reset" && request.method === "POST") {
     const authErr = requireAuth(request, env);
     if (authErr) return authErr;

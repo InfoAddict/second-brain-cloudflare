@@ -243,6 +243,17 @@ async function submitHome() {
     const content = text.replace(/#[a-zA-Z][\w-]*/g, '').trim() || text
 
     const result = await apiCapture(content, tags, 'web-ui', homeLayer, selectedComposerProject())
+    // Rejected before anything is cleared: the too-large reply promises "your
+    // text is still here", so the field keeps it exactly like a network
+    // failure below does, and this is not a receipt (nothing was stored).
+    if (result && result.ok === false && result.error === 'too_large') {
+      // Not .receipt/.receipt-headline: that pairing is set in the dashboard's
+      // monospace receipt font, right for a short status word like "stored to
+      // brain" and wrong for a full sentence, which read like a debug log.
+      // The same inline-error treatment settings' save error uses instead.
+      receipts.innerHTML = `<p class="inline-error">${escHtml(t('home.tooLong'))}</p>`
+      return
+    }
     field.value = ''
     autoResize(field)
     if (result.duplicate) {

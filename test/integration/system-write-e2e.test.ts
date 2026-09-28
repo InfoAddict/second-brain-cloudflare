@@ -133,4 +133,57 @@ describe("ADV systemWrite", () => {
     const edges = (await env.DB.prepare(`SELECT target_id FROM edges WHERE source_id = ? AND type = 'drawn_from' ORDER BY target_id`).bind(insight.id).all()).results as { target_id: string }[];
     expect(edges.map(e => e.target_id)).toEqual(["a-0", "b-0"]);
   });
+
+  it("F (T-0089.3.3): two replaces of one insight in one weekly run leave only the second pair's drawn_from edges", async () => {
+    // A prior auto-insight row (real system row: actor "", source "system", the
+    // tag itself), which BOTH of this run's candidates below will replace into.
+    sqlite.seed({ id: "insight-0", content: "An older insight, now stale.", createdAt: now - 5 * DAY, tags: ["auto-insight"], source: "system" });
+    // Two unrelated topics on purpose: reasonOverPair's D8 vocabulary floor
+    // (sharesVocabulary) requires the insight text to name a word EXACT to
+    // each side's own content, and restatesRecent must not treat the second
+    // pair's insight as restating the first's — both are trivial when the
+    // two pairs share no subject matter.
+    sqlite.seed({ id: "a-0", content: "Decision: price tier flat at nine dollars a month for predictable billing.", createdAt: now - 120 * DAY, tags: ["pricing"] });
+    sqlite.seed({ id: "b-0", content: "Decision: move tier to usage-based billing instead of flat pricing.", createdAt: now, tags: ["pricing"] });
+    sqlite.seed({ id: "a-1", content: "Decision: schedule the design review every Thursday afternoon for the whole team.", createdAt: now - 120 * DAY, tags: ["meetings"] });
+    sqlite.seed({ id: "b-1", content: "Decision: moved the design review to Tuesday mornings because Thursday conflicted with client calls.", createdAt: now, tags: ["meetings"] });
+    sqlite.db.prepare(
+      `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+       VALUES ('cand-0', 'a-0', 'b-0', 0.87, ?, 10, 'vector', 'pending', ?)`,
+    ).bind(120 * DAY, now).run();
+    sqlite.db.prepare(
+      `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+       VALUES ('cand-1', 'a-1', 'b-1', 0.87, ?, 9, 'vector', 'pending', ?)`,
+    ).bind(120 * DAY, now).run();
+    // Every capture in this run sees the same near-duplicate target and the
+    // same "replace" verdict — both pairs replace into insight-0, one after
+    // the other, inside the SAME weekly batch build.
+    target = "insight-0"; score = 0.9;
+    decision = () => JSON.stringify({ action: "replace", target_id: "insight-0" });
+    const ai = env.AI as any;
+    const base = ai.run.getMockImplementation();
+    ai.run.mockImplementation(async (model: string, opts: any) => {
+      const prompt = String(opts?.messages?.[0]?.content ?? "");
+      if (prompt.includes("Memory A:")) {
+        if (prompt.includes("price tier")) {
+          return sse('{"insight": true, "shape": "contradiction", "text": "The predictable nine dollars price gave way once the plan moved to usage-based billing."}');
+        }
+        if (prompt.includes("design review")) {
+          return sse('{"insight": true, "shape": "contradiction", "text": "The whole team review moved from Thursday afternoon to Tuesday mornings because client calls conflicted."}');
+        }
+      }
+      return base(model, opts);
+    });
+    await runWeeklyInsights(env, ctx);
+
+    const insightRows = sqlite.rows().filter(r => String(r.tags).includes('"auto-insight"'));
+    // Both candidates replaced the SAME row: no second insight row was created.
+    expect(insightRows).toHaveLength(1);
+    expect(insightRows[0].id).toBe("insight-0");
+
+    const edges = (await env.DB.prepare(`SELECT target_id FROM edges WHERE source_id = ? AND type = 'drawn_from' ORDER BY target_id`).bind("insight-0").all()).results as { target_id: string }[];
+    // Only the SECOND replace's pair survives — the first replace's edges
+    // (a-0/b-0) must not linger alongside it.
+    expect(edges.map(e => e.target_id)).toEqual(["a-1", "b-1"]);
+  });
 });

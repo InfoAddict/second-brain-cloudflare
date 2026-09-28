@@ -158,15 +158,22 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
         // exactly as the manual-edit path does.
         const embedCtx = embedContextForRow(row, writeCtx);
         let newVectorIds: string[] = [];
+        let committed = false;
         try {
-          newVectorIds = (await storeEntry(env, id, content, refreshedTags, row.source as string, now, cfg, embedCtx)).vectorIds;
+          // Compare-and-set on the vector_ids read with the row (round 6): the old ids are retired
+          // below only if this upload is what replaced them.
+          const stored = await storeEntry(env, id, content, refreshedTags, row.source as string, now, cfg, embedCtx, { expectedVectorIds: (row.vector_ids as string) ?? "[]" });
+          newVectorIds = stored.vectorIds;
+          committed = stored.committed !== false;
         } catch (e) {
           console.error("Vectorize re-embed failed (non-fatal):", e);
         }
-        try {
-          await deleteStaleVectors(env, oldVectorIds, newVectorIds);
-        } catch (e) {
-          console.error("Old vector cleanup failed (non-fatal):", e);
+        if (committed) {
+          try {
+            await deleteStaleVectors(env, id, oldVectorIds, newVectorIds);
+          } catch (e) {
+            console.error("Old vector cleanup failed (non-fatal):", e);
+          }
         }
         return "updated";
       }
@@ -197,6 +204,18 @@ export async function isManagedMirror(source: string, env: Env): Promise<boolean
 export function mirrorEditError(source: string): string {
   const name = getProvider(source)?.name ?? source;
   return `This memory is synced from ${name}. Edit it in ${name} (the change syncs automatically), or disconnect the ${name} integration to make it editable.`;
+}
+
+/** Undo's own refusal text (T-0089.6.6): a revert would only be overwritten by the next sync. */
+export function mirrorUndoError(source: string): string {
+  const name = getProvider(source)?.name ?? source;
+  return `This memory is synced from ${name}. Change it in ${name}; the change syncs back.`;
+}
+
+/** Restoring a mirror row from the trash works, but the integration still thinks it is gone. */
+export function mirrorRestoreWarning(id: string, source: string): string {
+  const name = getProvider(source)?.name ?? source;
+  return `Restored entry ${id}. ${name} still has it archived, so the next sync will remove it again. Restore the page in ${name} to keep it.`;
 }
 
 /**

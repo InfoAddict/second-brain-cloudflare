@@ -1,7 +1,7 @@
 /**
  * The brain-version what's-new line (T-0101.8.4, TR-3).
  *
- * Dismissible, shown for 14 days from history_since, to everyone — owners
+ * Dismissible, shown for 14 days from history_since, to everyone: owners
  * and teammates alike (Q8). There is no static container for it in
  * index.html (this lane's regions are the Memories foot, the menu groups and
  * the two new sheets), so it builds and inserts its own element; this fake
@@ -185,5 +185,75 @@ describe("both locales", () => {
     await ctx.renderWhatsNewLine({ version: "4.0.0", history_since: Date.now() - 5 * DAY });
     expect(line(ctx).innerHTML).toContain("Novità della 4.0");
     expect(line(ctx).innerHTML).toContain("Apri il cestino");
+  });
+});
+
+/**
+ * Layout, read as text (no browser in this runner to lay grid out and
+ * measure it - the same technique the trash-view CSS guard tests use).
+ */
+describe("the banner sits in normal flow with a symmetric gap, and reflows at 390", () => {
+  const css = readFileSync(resolve(ROOT, "public/css/trash.css"), "utf8");
+  const rule = (selector: string) => css.match(new RegExp(`${selector.replace(/[.[\]]/g, "\\$&")}\\s*{([^}]*)}`, "s"))?.[1] ?? "";
+
+  it("the gap below matches #recall-messages' own flex gap plus .home's bottom padding (no extra band)", () => {
+    const line = rule(".whats-new-line");
+    const margin = Number(line.match(/margin-bottom:\s*(\d+)px/)?.[1]);
+    expect(margin).toBe(8); // .home's own padding-bottom - #recall-messages' 10px flex gap supplies the rest
+  });
+
+  it("keeps 'Open the trash' and the dismiss x on the right at the default (1280) width", () => {
+    const line = rule(".whats-new-line");
+    expect(line).toMatch(/display:\s*grid/);
+    expect(line).toContain('grid-template-areas: "text see dismiss"');
+  });
+
+  it("at 390 the x sits in its own top-right slot next to the text, never next to 'Open the trash'", () => {
+    const narrow = css.match(/@media \(max-width: 480px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+    expect(narrow).toMatch(/"text dismiss"/);
+    expect(narrow).toMatch(/"see see"/);
+  });
+});
+
+/**
+ * The actual "band" complaint was never this file's own spacing: board.css's
+ * .tiles (#board-tiles, the banner's very next sibling) carries its own
+ * margin-top, sized for when it follows .home directly with nothing between
+ * them. With the banner present that stacked on top of the gap above,
+ * doubling it. Computed from the real declarations, at both widths (nothing
+ * here is width-dependent, so one computation covers 1280 and 390), rather
+ * than hand-copied numbers that could drift from the CSS silently.
+ */
+describe("the gap below the banner equals the gap above it (within 4px)", () => {
+  const mainCss = readFileSync(resolve(ROOT, "public/css/main.css"), "utf8");
+  const trashCss = readFileSync(resolve(ROOT, "public/css/trash.css"), "utf8");
+  const rule = (source: string, selector: string) =>
+    source.match(new RegExp(`${selector.replace(/[.#[\]]/g, "\\$&")}\\s*{([^}]*)}`, "s"))?.[1] ?? "";
+
+  it("board.css's #board-tiles margin-top is cancelled when a visible banner precedes it", () => {
+    expect(trashCss).toMatch(/\.whats-new-line:not\(\[hidden\]\)\s*\+\s*#board-tiles\s*{\s*margin-top:\s*0/);
+  });
+
+  it("the two gaps compute equal (within 4px), with the override applied", () => {
+    const recallGap = Number(rule(mainCss, "#recall-messages").match(/gap:\s*(\d+)px/)?.[1]);
+    const homePaddingBottom = Number(rule(mainCss, ".home").match(/padding:\s*[\d.]+\w*\s+[\d.]+\w*\s+(\d+)px/)?.[1]);
+    const bannerMarginBottom = Number(rule(trashCss, ".whats-new-line").match(/margin-bottom:\s*(\d+)px/)?.[1]);
+
+    // #board-tiles' own margin-top is cancelled by the rule above whenever the
+    // banner is visible (the previous test pins that), so it contributes 0
+    // to the "below" gap in that state - the only state this line compares.
+    const gapAbove = homePaddingBottom + recallGap;
+    const gapBelow = bannerMarginBottom + recallGap;
+
+    expect(Number.isNaN(gapAbove)).toBe(false);
+    expect(Number.isNaN(gapBelow)).toBe(false);
+    expect(Math.abs(gapAbove - gapBelow)).toBeLessThanOrEqual(4);
+  });
+
+  it("does not touch #board-tiles' margin when the banner is hidden or absent (dismissed, or a 3.x brain)", () => {
+    // The override is scoped to ":not([hidden]) +", so a hidden or missing
+    // banner leaves .tiles' own margin-top (board.css) as the only rule in
+    // play - unchanged from before this line existed.
+    expect(trashCss).not.toMatch(/(?<!:not\(\[hidden\]\)\s*\+\s*)#board-tiles\s*{\s*margin-top:\s*0/);
   });
 });

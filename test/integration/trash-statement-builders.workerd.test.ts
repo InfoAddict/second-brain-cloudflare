@@ -63,13 +63,13 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("trash statement builders on wo
       expect(restored.status).toBe("restored");
       expect(await env.DB.prepare(`SELECT id FROM entries WHERE id = 'c'`).first()).not.toBeNull();
 
-      // Delete forever, live and trashed.
-      const live = await deleteForever(env, "c", change);
-      expect(live).toMatchObject({ status: "deleted", from: "live" });
+      // Delete forever acts on a trash row only, pinned by its nonce; the live row "c" is refused.
+      expect(await deleteForever(env, "c", change, roots.ownerPersonalWorkspaceId, "")).toMatchObject({ status: "not_found" });
       await seed("d");
       await env.DB.batch(trashManyStatements(env, planTrash(await readTrashCandidates(env, ["d"])), { reason: "forget", change, now: Date.now() }));
-      const trashResult = await deleteForever(env, "d", change);
-      expect(trashResult).toMatchObject({ status: "deleted", from: "trash" });
+      const dNonce = (await env.DB.prepare(`SELECT nonce FROM entries_trash WHERE id = 'd'`).first<{ nonce: string }>())!.nonce;
+      const trashResult = await deleteForever(env, "d", change, roots.ownerPersonalWorkspaceId, dNonce);
+      expect(trashResult).toMatchObject({ status: "deleted" });
       expect(await env.DB.prepare(`SELECT id FROM entries_trash WHERE id = 'd'`).first()).toBeNull();
 
       // The disconnect purge's own scoped read and batch (trashMirroredEntries).

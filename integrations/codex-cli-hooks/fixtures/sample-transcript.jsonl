@@ -1,0 +1,12 @@
+{"type":"session_meta","payload":{"id":"sample","timestamp":"2026-09-27T09:00:00.000Z"}}
+{ this line is not valid json at all
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"The nightly digest cron is starving the sync job again — can we move it to its own trigger?"}]}}
+{"type":"response_item","payload":{"type":"reasoning","summary":"private reasoning that must never be captured"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looking at the cron wiring now."}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"cat wrangler.toml\"}"}}
+{"type":"response_item","payload":{"type":"function_call_output","output":"API_KEY=sk-do-not-capture-this-1234567890\nsome config text"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"All five cron slots are used already, so a sixth trigger is not available on the free plan."}]}}
+{"type":"event_msg","payload":{"type":"user_message","message":"OK, run it inside the existing hourly slot behind a budget check then, cap it at 20 entries per run."}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done — digest now runs inside the hourly cron, capped at 20 entries, and logs when it stops early."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Ship it, and use this token for the deploy: Bearer abc123supersecrettoken456"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Shipped on fix/digest-budget."}]}}

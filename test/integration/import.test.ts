@@ -139,7 +139,7 @@ describe("POST /import", () => {
     expect(db.entries).toHaveLength(1);
   });
 
-  it("fails edges with missing endpoints but still imports entries", async () => {
+  it("skips edges with missing endpoints, without saying why, but still imports entries", async () => {
     const payload = {
       version: 2,
       entries: [{ id: "a", content: "Only A", created_at: 1 }],
@@ -150,13 +150,10 @@ describe("POST /import", () => {
     const data = await res.json() as any;
     expect(data.imported).toBe(1);
     expect(data.edges_imported).toBe(0);
-    expect(data.edges_failed).toBe(1);
-    expect(data.results).toContainEqual(expect.objectContaining({
-      source_id: "a",
-      target_id: "missing",
-      status: "failed",
-      reason: "missing_endpoint",
-    }));
+    // A missing endpoint and another member's private one look the same (T-0089.1.1): a plain skip.
+    expect(data.edges_skipped).toBe(1);
+    expect(data.edges_failed).toBe(0);
+    expect(JSON.stringify(data.results)).not.toMatch(/missing/);
   });
 
   it("does not trigger capture duplicate detection for similar content with a new id", async () => {
@@ -467,5 +464,31 @@ describe("POST /import", () => {
     expect(data.edges_imported).toBe(51);
     expect(data.edges_failed).toBe(0);
     expect(db.edges).toHaveLength(51);
+  });
+
+  describe("Rahil's decision: 128 KB per note (18-copy-deck.md 6.8)", () => {
+    it("skips an oversize record with a clear count, rather than failing the whole import", async () => {
+      const entries = [
+        { id: "ok", content: "a normal memory", created_at: 1000 },
+        { id: "too-big", content: "a".repeat(131_073), created_at: 2000 },
+      ];
+      const res = await worker.fetch(req("POST", "/import", { body: { version: 2, entries } }), env, ctx);
+      expect(res.status).toBe(200);
+      const data = await res.json() as any;
+      expect(data.ok).toBe(true);
+      expect(data.imported).toBe(1);
+      expect(data.skipped_too_large).toBe(1);
+      expect(db.entries.map((e: any) => e.id)).toEqual(["ok"]);
+      const skippedResult = data.results.find((r: any) => r.id === "too-big");
+      expect(skippedResult).toMatchObject({ id: "too-big", status: "skipped", reason: "too_large" });
+    });
+
+    it("accepts a record at exactly the limit", async () => {
+      const entries = [{ id: "at-limit", content: "a".repeat(131_072), created_at: 1000 }];
+      const res = await worker.fetch(req("POST", "/import", { body: { version: 2, entries } }), env, ctx);
+      const data = await res.json() as any;
+      expect(data.imported).toBe(1);
+      expect(data.skipped_too_large).toBe(0);
+    });
   });
 });

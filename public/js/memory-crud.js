@@ -5,11 +5,26 @@ function resetAppendSaveBtn() {
   btn.textContent = t('memories.appendSave')
 }
 
+function showAppendError(message) {
+  const el = document.getElementById('append-error')
+  if (!el) return
+  el.textContent = message
+  el.hidden = false
+}
+
+function clearAppendError() {
+  const el = document.getElementById('append-error')
+  if (!el) return
+  el.hidden = true
+  el.textContent = ''
+}
+
 function openAppend(id, preview) {
   pendingAppendId = id
   document.getElementById('append-context-preview').textContent = preview + '...'
   document.getElementById('append-textarea').value = ''
   resetAppendSaveBtn()
+  clearAppendError()
   document.getElementById('append-sheet').classList.add('open')
   setTimeout(() => document.getElementById('append-textarea').focus(), 100)
 }
@@ -29,11 +44,21 @@ function closeAppend() {
   document.getElementById('append-sheet').classList.remove('open')
   pendingAppendId = null
   resetAppendSaveBtn()
+  clearAppendError()
 }
+
+/** The MCP tool's own reply text (copy deck 6.8, English only - it is meant
+ * for an AI tool client, not this UI) names the same limit this sheet's
+ * dashboard-native inline message does; matching on it is how the dashboard
+ * tells the two apart from any other append failure without a structured
+ * error code over this transport. */
+const APPEND_TOO_LARGE_RE = /too long for one memory/i
+
 async function saveAppend() {
   const addition = document.getElementById('append-textarea').value.trim()
   if (!addition || !pendingAppendId) return
   const btn = document.getElementById('append-save-btn')
+  clearAppendError()
   btn.disabled = true
   btn.textContent = t('memories.saving')
   try {
@@ -54,7 +79,13 @@ async function saveAppend() {
       undoToast(t('undo.added'), appendedId, { onUndone: () => notifyMemoryRestored(appendedId) })
     }
   } catch (e) {
-    showToast(t('memories.appendFailed', { message: e.message }))
+    // Shown in place, text left in append-textarea exactly as typed - nothing
+    // here ever clears it on failure, so "your text is still here" holds.
+    if (APPEND_TOO_LARGE_RE.test(e.message || '')) {
+      showAppendError(t('home.tooLong'))
+    } else {
+      showToast(t('memories.appendFailed', { message: e.message }))
+    }
   } finally {
     resetAppendSaveBtn()
   }
@@ -84,6 +115,7 @@ function openEdit(id, content, tags) {
   const ta = document.getElementById('edit-textarea')
   ta.value = content
   resetEditSaveBtn()
+  clearEditError()
   document.getElementById('edit-sheet').classList.add('open')
   setTimeout(() => {
     ta.focus()
@@ -116,12 +148,28 @@ function closeEdit() {
   pendingEditId = null
   pendingEditTags = []
   resetEditSaveBtn()
+  clearEditError()
+}
+
+function showEditError(message) {
+  const el = document.getElementById('edit-error')
+  if (!el) return
+  el.textContent = message
+  el.hidden = false
+}
+
+function clearEditError() {
+  const el = document.getElementById('edit-error')
+  if (!el) return
+  el.hidden = true
+  el.textContent = ''
 }
 
 async function saveEdit() {
   const newContent = document.getElementById('edit-textarea').value.trim()
   if (!newContent || !pendingEditId) return
   const btn = document.getElementById('edit-save-btn')
+  clearEditError()
   btn.disabled = true
   btn.textContent = t('memories.saving')
   try {
@@ -132,7 +180,20 @@ async function saveEdit() {
       // src/tags/system.ts — so an edit cannot delete a conclusion the brain reached.
       body: JSON.stringify({ id: pendingEditId, content: newContent, tags: pendingEditTags }),
     })
-    if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
+    if (!res.ok) {
+      let data = {}
+      try {
+        data = await res.json()
+      } catch {}
+      // Shown in place, not as a toast, and the textarea is left exactly as
+      // typed - the composer's own promise ("your text is still here") holds
+      // here too, since nothing here ever clears edit-textarea on failure.
+      if (res.status === 413 && data.error === 'too_large') {
+        showEditError(t('home.tooLong'))
+        return
+      }
+      throw new Error(t('auth.serverError', { status: res.status }))
+    }
     const editedId = pendingEditId
     closeEdit()
     notifyMemoryResolved(editedId)
@@ -203,11 +264,11 @@ function notifyMemoryRestored(id) {
 }
 
 /**
- * Delete forever (T-0089.4.7): REST-only, `{id, permanent: true, confirm: id}`. Not offered to
- * agents (there is no MCP tool or parameter for it) — the confirm echo, not a hidden token, is
- * what keeps this from being one accidental tap away from Forget.
+ * Delete forever (T-0089.4.7): `{id, permanent: true, confirm: id, nonce}` on one trash row. The
+ * nonce is that row's own (from the trash list), so a stale view never deletes a different row
+ * under a reused id. Lives in the trash view only (Q11); not offered to agents.
  */
-function openDeleteForeverConfirm(id, cardElement, { onDone } = {}) {
+function openDeleteForeverConfirm(id, cardElement, { onDone, onConflict, nonce } = {}) {
   openDangerConfirm({
     title: t('memories.deleteForeverTitle'),
     body: t('memories.deleteForeverConfirm'),
@@ -222,10 +283,23 @@ function openDeleteForeverConfirm(id, cardElement, { onDone } = {}) {
         const res = await fetch(`${WORKER_URL}/forget`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-          body: JSON.stringify({ id, permanent: true, confirm: id }),
+          // Required, not optional: the merged /forget route 400s without it
+          // (src/routes/entries.ts) -- delete forever only ever acts on a
+          // trash row.
+          body: JSON.stringify({ id, permanent: true, confirm: id, nonce }),
         })
         const data = await res.json()
-        if (!res.ok || !data.ok) throw new Error(data.error || t('memories.deleteForeverFailed'))
+        if (!res.ok || !data.ok) {
+          // A stale nonce (the row moved under the reader, e.g. someone else
+          // already restored or deleted it) is the caller's to explain, not
+          // a generic failure toast - trash.js's onConflict refreshes its list.
+          if ((res.status === 404 || res.status === 409) && typeof onConflict === 'function') {
+            done()
+            onConflict()
+            return
+          }
+          throw new Error(data.error || t('memories.deleteForeverFailed'))
+        }
         done()
         if (cardElement) {
           cardElement.style.transition = 'none'

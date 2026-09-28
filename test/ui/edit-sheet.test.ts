@@ -194,3 +194,124 @@ describe("saving", () => {
     expect(btn.textContent).toBe("Update");
   });
 });
+
+/**
+ * The 128 KB size cap (Rahil's decision, T-0101.10). Any write can 413 with
+ * { ok:false, error:"too_large", limit_bytes, message } - edit is REST, so
+ * this is read straight off the response; append goes through the MCP tool,
+ * whose own reply is an English-only sentence (copy deck 6.8, meant for an
+ * AI client), so this matches on it rather than inventing a code that
+ * transport does not carry.
+ */
+describe("the 128 KB size cap", () => {
+  it("edit: shows the composer's size-cap line inline and keeps the text, in English", async () => {
+    const ctx = load();
+    ctx.fetch = async () => ({
+      ok: false,
+      status: 413,
+      json: async () => ({ ok: false, error: "too_large", limit_bytes: 131072, message: "Too long to save as one memory..." }),
+    });
+    ctx.openEdit("e1", "Content", []);
+    ctx.__els.get("edit-textarea").value = "x".repeat(200000);
+    await ctx.saveEdit();
+    expect(ctx.__els.get("edit-error").hidden).toBe(false);
+    expect(ctx.__els.get("edit-error").textContent).toBe(
+      "Too long to save as one memory (about 20,000 words at most). Your text is still here, so you can split it.",
+    );
+    expect(ctx.__els.get("edit-sheet").classList.contains("open")).toBe(true);
+    expect(ctx.__els.get("edit-textarea").value).toHaveLength(200000);
+    expect(ctx.__els.get("edit-save-btn").disabled).toBe(false);
+  });
+
+  it("edit: speaks Italian when the page does", async () => {
+    const ctx = load();
+    ctx.initI18n("it");
+    ctx.fetch = async () => ({ ok: false, status: 413, json: async () => ({ ok: false, error: "too_large" }) });
+    ctx.openEdit("e1", "Contenuto", []);
+    ctx.__els.get("edit-textarea").value = "x".repeat(200000);
+    await ctx.saveEdit();
+    expect(ctx.__els.get("edit-error").textContent).toBe(
+      "Troppo lungo per un solo ricordo (al massimo circa 20.000 parole). Il testo è ancora qui, così puoi dividerlo.",
+    );
+  });
+
+  it("edit: a normal failure still uses the toast and leaves the inline slot alone", async () => {
+    const ctx = load();
+    ctx.fetch = async () => ({ ok: false, status: 500 });
+    ctx.openEdit("e1", "Content", []);
+    ctx.__els.get("edit-textarea").value = "Rewritten content";
+    await ctx.saveEdit();
+    expect(ctx.__els.get("app-toast").innerHTML).toContain("Edit failed");
+    expect(ctx.__els.get("edit-error").hidden).not.toBe(false);
+  });
+
+  it("edit: reopening the sheet clears a previous size-cap message", async () => {
+    const ctx = load();
+    ctx.fetch = async () => ({ ok: false, status: 413, json: async () => ({ ok: false, error: "too_large" }) });
+    ctx.openEdit("e1", "Content", []);
+    ctx.__els.get("edit-textarea").value = "x".repeat(200000);
+    await ctx.saveEdit();
+    expect(ctx.__els.get("edit-error").hidden).toBe(false);
+    ctx.openEdit("e2", "Something else", []);
+    expect(ctx.__els.get("edit-error").hidden).toBe(true);
+  });
+
+  it("append: shows the composer's size-cap line inline and keeps the text, in English", async () => {
+    const ctx = load();
+    ctx.apiMcp = async () => {
+      throw new Error(
+        "Not saved: this is too long for one memory (the limit is about 20,000 words). Split it into smaller memories and save each one.",
+      );
+    };
+    ctx.openAppend("e1", "Preview");
+    ctx.__els.get("append-textarea").value = "x".repeat(200000);
+    await ctx.saveAppend();
+    expect(ctx.__els.get("append-error").hidden).toBe(false);
+    expect(ctx.__els.get("append-error").textContent).toBe(
+      "Too long to save as one memory (about 20,000 words at most). Your text is still here, so you can split it.",
+    );
+    expect(ctx.__els.get("append-sheet").classList.contains("open")).toBe(true);
+    expect(ctx.__els.get("append-textarea").value).toHaveLength(200000);
+  });
+
+  it("append: speaks Italian when the page does", async () => {
+    const ctx = load();
+    ctx.initI18n("it");
+    ctx.apiMcp = async () => {
+      throw new Error(
+        "Not saved: this is too long for one memory (the limit is about 20,000 words). Split it into smaller memories and save each one.",
+      );
+    };
+    ctx.openAppend("e1", "Preview");
+    ctx.__els.get("append-textarea").value = "x".repeat(200000);
+    await ctx.saveAppend();
+    expect(ctx.__els.get("append-error").textContent).toBe(
+      "Troppo lungo per un solo ricordo (al massimo circa 20.000 parole). Il testo è ancora qui, così puoi dividerlo.",
+    );
+  });
+
+  it("append: any other failure still uses the generic toast, not the size-cap line", async () => {
+    const ctx = load();
+    ctx.apiMcp = async () => {
+      throw new Error("Network unreachable");
+    };
+    ctx.openAppend("e1", "Preview");
+    ctx.__els.get("append-textarea").value = "Still true.";
+    await ctx.saveAppend();
+    expect(ctx.__els.get("app-toast").innerHTML).toContain("Network unreachable");
+    expect(ctx.__els.get("append-error").hidden).not.toBe(false);
+  });
+
+  it("append: reopening the sheet clears a previous size-cap message", async () => {
+    const ctx = load();
+    ctx.apiMcp = async () => {
+      throw new Error("this is too long for one memory, split it up");
+    };
+    ctx.openAppend("e1", "Preview");
+    ctx.__els.get("append-textarea").value = "x".repeat(200000);
+    await ctx.saveAppend();
+    expect(ctx.__els.get("append-error").hidden).toBe(false);
+    ctx.openAppend("e2", "Something else");
+    expect(ctx.__els.get("append-error").hidden).toBe(true);
+  });
+});

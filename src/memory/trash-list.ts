@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
-import { scopeWhere, layerOf } from "../lib/scope";
+import { scopeWorkspaces, layerOf } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import type { Config } from "../config";
 import { Params } from "./params";
@@ -19,6 +19,15 @@ export interface TrashListItem {
   layer: "personal" | "company" | "system";
   can_restore: boolean;
   can_delete_forever: boolean;
+  /**
+   * The trash row's own per-row identity (Track 1, adv-final MAJOR 1): a purge can free `id`
+   * and a fresh forget can reuse it, so restore and Delete forever pin their mutation to this,
+   * not to id alone. Surfaced here so a caller that lists the trash and then acts on a row
+   * moments later is acting on the exact physical row it saw, not whatever now answers to that
+   * id. `""` for a row trashed before this column existed — never treated as a match, only as
+   * a conflict, by the engine that consumes it.
+   */
+  nonce: string;
 }
 
 export interface ListTrashResult {
@@ -58,6 +67,7 @@ interface TrashRow {
   deleted_by: string;
   workspace_id: string;
   source: string | null;
+  nonce: string;
 }
 
 interface DeletedEventRow {
@@ -70,13 +80,18 @@ interface DeletedEventRow {
  * personal trash, or a company row where they are either the one who deleted
  * it or an admin. This is the same rule assertCanMutateEntry applies to a live
  * row; a parity test runs both over the same fixture matrix.
+ *
+ * Decomposed PER WORKSPACE (R5): once workspace_id is pinned to one exact
+ * value, "own personal, or admin, or actor is me" collapses to a single
+ * residual check (or none at all) that idx_entries_trash_workspace_deleted
+ * (db/schema.sql) can run inside that one workspace's index range, rather
+ * than an OR the query planner cannot push into a multi-value IN() scan.
  */
-function trashRestoreClause(identity: Identity): { clause: string; bindings: string[] } {
-  if (identity.role === "admin") return { clause: "1=1", bindings: [] };
-  return {
-    clause: "(t.workspace_id = ? OR t.actor_id = ?)",
-    bindings: [identity.personalWorkspaceId, identity.userId],
-  };
+function trashRestoreClauseFor(identity: Identity, workspaceId: string): { clause: string; bindings: string[] } {
+  if (identity.role === "admin" || workspaceId === identity.personalWorkspaceId) {
+    return { clause: "1=1", bindings: [] };
+  }
+  return { clause: "t.actor_id = ?", bindings: [identity.userId] };
 }
 
 /** 160 characters, whitespace collapsed, per contract 4.3. */
@@ -84,27 +99,17 @@ function collapsePreview(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 160);
 }
 
-/**
- * The shared trash listing (BE-1, T-0101.2.1): `GET /trash` and the MCP
- * `list_recent(in_trash: true)` tool both call this. At most 3 D1 statements —
- * the page itself, the deleting client/channel per id, and actor names, the
- * last two skipped when the page is empty or holds no company row.
- *
- * Honest limit: the only index on entries_trash is on deleted_at
- * (db/schema.sql), so this walks the whole brain's trash — bounded by
- * retention, never by brain size. No schema change in this spec.
- */
-export async function listTrash(
+/** One workspace's own indexed page: a plain seek on idx_entries_trash_workspace_deleted. */
+async function pageForWorkspace(
   env: Env,
   identity: Identity,
-  opts: ListTrashOptions,
-): Promise<ListTrashResult> {
-  const scope = scopeWhere(identity, opts.layer, "t.workspace_id");
-  const restore = trashRestoreClause(identity);
-  const cursor = opts.cursor ? decodeTrashCursor(opts.cursor) : null;
-
+  workspaceId: string,
+  cursor: { deletedAt: number; id: string } | null,
+  limit: number,
+): Promise<TrashRow[]> {
+  const restore = trashRestoreClauseFor(identity, workspaceId);
   const p = new Params();
-  const scopeSql = scope.bindings.map((b) => p.add(b)).join(", ");
+  const wsSql = p.add(workspaceId);
   const restoreBindings = [...restore.bindings];
   const restoreSql = restoreBindings.length
     ? restore.clause.replace(/\?/g, () => p.add(restoreBindings.shift()))
@@ -112,20 +117,61 @@ export async function listTrash(
   const cursorSql = cursor
     ? ` AND (t.deleted_at < ${p.add(cursor.deletedAt)} OR (t.deleted_at = ${p.add(cursor.deletedAt)} AND t.id < ${p.add(cursor.id)}))`
     : "";
-  const limitSql = p.add(opts.limit + 1);
+  const limitSql = p.add(limit);
 
   const { results } = await env.DB.prepare(
     `SELECT t.id, substr(t.content, 1, 400) AS preview, t.deleted_at, t.reason, t.deleted_by, t.workspace_id,
-            json_extract(t.row_json, '$.source') AS source
+            json_extract(t.row_json, '$.source') AS source, t.nonce
        FROM entries_trash t
-      WHERE t.workspace_id IN (${scopeSql}) AND ${restoreSql}${cursorSql}
+      WHERE t.workspace_id = ${wsSql} AND ${restoreSql}${cursorSql}
       ORDER BY t.deleted_at DESC, t.id DESC
       LIMIT ${limitSql}`,
   ).bind(...p.values()).all<TrashRow>();
+  return results ?? [];
+}
 
-  const rows = results ?? [];
-  const hasMore = rows.length > opts.limit;
-  const page = hasMore ? rows.slice(0, opts.limit) : rows;
+function compareTrashRows(a: TrashRow, b: TrashRow): number {
+  if (a.deleted_at !== b.deleted_at) return b.deleted_at - a.deleted_at;
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+
+/**
+ * The shared trash listing (BE-1, T-0101.2.1): `GET /trash` and the MCP
+ * `list_recent(in_trash: true)` tool both call this.
+ *
+ * R5 (budget audit, MINOR, 20-free-tier-ledger.md): one indexed query per
+ * readable workspace (idx_entries_trash_workspace_deleted, db/schema.sql),
+ * each already ordered and capped at `limit`, merged here — never a single
+ * scan across every workspace_id in the caller's IN() list. That combined
+ * shape was the original bug: with only deleted_at indexed, SQLite had to
+ * walk the whole table in deleted_at order filtering every row it visited for
+ * a workspace match (1,193 rows read for a 50-row page at 2,000 trash rows,
+ * 5% visible); adding a plain (workspace_id, deleted_at) index instead of
+ * restructuring the query made an ENTIRELY-visible brain regress instead
+ * (SQLite's planner merge-sorting several IN() branches read more than the
+ * old single deleted_at-ordered scan needed to). Per-workspace queries avoid
+ * both failure modes: statement count grows with workspace COUNT (typically
+ * 1 to 3: personal plus a company or two), never with trash size or
+ * visibility. D1 statements: workspace count, plus the deleting client/
+ * channel lookup and actor names, the latter two skipped when the page is
+ * empty or holds no company row.
+ */
+export async function listTrash(
+  env: Env,
+  identity: Identity,
+  opts: ListTrashOptions,
+): Promise<ListTrashResult> {
+  const workspaceIds = scopeWorkspaces(identity, opts.layer);
+  const cursor = opts.cursor ? decodeTrashCursor(opts.cursor) : null;
+  const perWorkspaceLimit = opts.limit + 1;
+
+  const perWorkspaceRows = await Promise.all(
+    workspaceIds.map((workspaceId) => pageForWorkspace(env, identity, workspaceId, cursor, perWorkspaceLimit)),
+  );
+  const merged = perWorkspaceRows.flat().sort(compareTrashRows);
+
+  const hasMore = merged.length > opts.limit;
+  const page = hasMore ? merged.slice(0, opts.limit) : merged;
   const nextCursor = hasMore ? encodeTrashCursor(page[page.length - 1].deleted_at, page[page.length - 1].id) : null;
 
   if (!page.length) return { items: [], nextCursor: null };
@@ -175,6 +221,7 @@ export async function listTrash(
       layer: layerOfRow(row),
       can_restore: true,
       can_delete_forever: true,
+      nonce: row.nonce,
     };
   });
 

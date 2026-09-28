@@ -103,15 +103,19 @@
   margin-bottom: 8px;
 }
 
+/* Two equal tracks at every width (the director's call: side by side always,
+ * never stacked). A lone button (the defensive Restore-only case; the real
+ * backend does not produce this today) lands in the first track by grid
+ * auto-placement, so it reads as half-width and left-aligned rather than
+ * stretching to fill the row - no separate rule needed for that case. */
 .trash-item-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
   gap: 8px;
 }
 
 .trash-btn {
-  flex: 1 1 130px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -167,6 +171,20 @@
   color: var(--danger);
 }
 
+/* ── Append / edit inline errors (size cap, T-0101.10) ────────────────────
+ * The 128 KB size cap's message shows in place rather than as a toast, so it
+ * survives as long as the sheet does and sits right next to the text it is
+ * talking about. */
+.inline-error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.inline-error[hidden] {
+  display: none;
+}
+
 /* main.css's .team-select-wrap has no :disabled rule (its only other user,
  * team.js, never disables a select), so a member's read-only selects fell
  * back to the browser default, which barely reads as disabled in most
@@ -183,13 +201,31 @@
 
 /* ── Brain-version what's-new line ────────────────────────────────────── */
 
+/* Normal flow, not a floating card: the gap above (chips to banner) is
+ * .home's own 8px bottom padding plus #recall-messages' 10px flex gap, so
+ * the 8px margin here plus that same 10px flex gap gives the same 18px
+ * below - no separate "band" of extra space at 1280.
+ *
+ * That symmetry needs one more fix, not on this element: board.css's
+ * .tiles (id #board-tiles, the very next sibling) carries its own
+ * margin-top: 26px, sized for when it follows .home directly with no
+ * banner between them. With the banner present that 26px stacks on top
+ * of the 18px above, which was the actual "band" - not this element's own
+ * spacing. Cancelling it only when a VISIBLE banner precedes #board-tiles
+ * keeps the no-banner (dismissed, or a 3.x brain) layout exactly as it
+ * was: board.css is not this lane's file, so the override lives here. */
+.whats-new-line:not([hidden]) + #board-tiles {
+  margin-top: 0;
+}
+
 .whats-new-line {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  grid-template-areas: "text see dismiss";
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 14px;
+  column-gap: 14px;
   padding: 12px 14px;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
   background: var(--accent-soft);
   border: 1px solid var(--border-card);
   border-radius: var(--r-card);
@@ -203,10 +239,12 @@
 }
 
 .whats-new-text {
-  flex: 1 1 240px;
+  grid-area: text;
+  min-width: 0;
 }
 
 .whats-new-see {
+  grid-area: see;
   background: none;
   border: none;
   padding: 0;
@@ -216,6 +254,7 @@
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+  justify-self: start;
 }
 
 .whats-new-see:hover {
@@ -223,6 +262,7 @@
 }
 
 .whats-new-dismiss {
+  grid-area: dismiss;
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -235,6 +275,90 @@
   justify-content: center;
 }
 
+/* Narrow: the x moves to the card's top-right corner (its own row with the
+ * text), and "Open the trash" drops to its own row, left-aligned under the
+ * text - it must never sit next to the dismiss control. */
+@media (max-width: 480px) {
+  .whats-new-line {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "text dismiss"
+      "see see";
+    row-gap: 8px;
+  }
+
+  .whats-new-dismiss {
+    align-self: start;
+  }
+}
+
 .whats-new-dismiss:hover {
   color: var(--text-primary);
+}
+
+/* ── Free-plan daily database limit banner ────────────────────────────── */
+
+/* Fixed and persistent across every screen (there is no per-screen slot
+ * for it, and the point is that it stays visible no matter which tab is
+ * open). --danger, not --accent-soft: this reads as a real, current
+ * blocker, not the softer "here's what's new" tone of the line above. */
+.daily-limit-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 45;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 14px;
+  padding: 10px 16px;
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--danger);
+  font-size: 13.5px;
+  color: var(--text-primary);
+  line-height: 1.4;
+  text-align: center;
+}
+
+.daily-limit-banner[hidden] {
+  display: none;
+}
+
+/* Owner/admin only (copy deck 6.7): a neutral fact, not a call to action, so
+ * the note itself is plain text - only the link it hands off to gets the
+ * danger-red link treatment. A member sees neither: this decision belongs to
+ * the account owner, and offering it to someone who cannot act on it read as
+ * an unclickable link before this. */
+.daily-limit-note {
+  white-space: nowrap;
+}
+
+.daily-limit-link {
+  color: var(--danger);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.daily-limit-link:hover {
+  text-decoration: underline;
+}
+
+/* The banner stays a fixed overlay (it has to survive every screen change),
+ * so it never pushes #app down on its own. #app's own height:100svh/100vh
+ * plus body's overflow:hidden means an unaccounted-for banner just overlaps
+ * whatever is under it instead of scrolling into view, so #app is shrunk by
+ * the banner's real (JS-measured, since wrapped text varies by width and
+ * locale) height whenever it's showing. See daily-limit-banner.js's
+ * updateDailyLimitOffset. */
+body.daily-limit-active #app {
+  margin-top: var(--daily-limit-height, 0px);
+  height: calc(100svh - var(--daily-limit-height, 0px));
+}
+
+@media (min-width: 768px) {
+  body.daily-limit-active #app {
+    height: calc(100vh - var(--daily-limit-height, 0px));
+  }
 }

@@ -12,6 +12,7 @@ import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { recallEntries } from "../recall/search";
 import { readProjectParam } from "./project-param";
 import { allowanceFor, snippetOf } from "../recall/snippet";
+import { editedCanonicalAt } from "../quarantine/tags";
 
 /** Add the caller's workspace predicate before ORDER BY and LIMIT. */
 function scopeEntryFilterQuery(
@@ -138,11 +139,21 @@ export async function handleRecallRoutes(
     // payload. Renderers that show the whole memory (the dashboard) pass full=1.
     const full = ["1", "true", "yes"].includes((url.searchParams.get("full") ?? "").toLowerCase());
 
+    // Off by default: `why` adds a structured trace to every result.
+    const explain = ["1", "true", "yes"].includes((url.searchParams.get("explain") ?? "").toLowerCase());
+
+    // Opt-out only: recallEntries already defaults synthesize to true (src/recall/search.ts), so
+    // omitting this or passing anything else keeps every existing caller byte-identical. Hooks
+    // that want recall without an LLM synthesis call (e.g. Cursor's per-prompt recall, R1 in
+    // 20-free-tier-ledger.md) pass synthesize=false or synthesize=0.
+    const synthesizeParam = url.searchParams.get("synthesize");
+    const synthesize = synthesizeParam === "false" || synthesizeParam === "0" ? false : undefined;
+
     const project = await readProjectParam(env, identity, url, { layer: workspace, teamId: team });
     if (project instanceof Response) return project;
 
     const cfg = await resolveConfig(env);
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops, project }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
 
     if (!matches.length) {
       return json({
@@ -183,6 +194,9 @@ export async function handleRecallRoutes(
           via_type: m.viaType ?? null,
           linked_at: m.viaLinkedAt ?? null,
           related_to: m.viaFrom ?? null,
+          similar: m.similar?.map(s => ({ id: s.id, created_at: s.createdAt })) ?? [],
+          edited_canonical_at: editedCanonicalAt(m.tags),
+          ...(explain ? { why: m.why ?? null } : {}),
         };
       }),
       insight: insight || null,
