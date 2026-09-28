@@ -56,8 +56,8 @@ const ACCOUNTED_FOR: { file: string; line: number; why: string }[] = [
     why: "appendToEntry's short branch: gated inline by `!heldTags && !alreadyHeld && !chunk` immediately above — a newly-held or already-held row never reaches this call. A retry that discovers the row became held after an earlier attempt's chunk landed here retires and forgets that chunk before re-checking the gate (Codex recheck, T-0089.4.2).",
   },
   {
-    file: "src/capture/share.ts", line: 129,
-    why: "restampVectorWorkspace re-stamps EXISTING vectors' metadata (workspace_id) fetched by getByIds — it embeds no new content and adds no vector. A held row has vector_ids = '[]', so its vectorIds list here is empty and the loop never runs for it.",
+    file: "src/capture/share.ts", line: 162,
+    why: "restampVectorWorkspace re-stamps EXISTING vectors' metadata (workspace_id) fetched by getByIds — it embeds no new content and adds no vector. Codex recheck (T-0089.4.2, class A): the earlier reasoning here (\"a held row has vector_ids = '[]' so the loop never runs\") assumed the vectorIds this fire-and-forget call re-stamps were read at the SAME moment as the check — they are read earlier by its caller, and a hold landing in that gap empties vector_ids in D1 and deletes its vectors separately, not atomically, so a stale-but-not-yet-deleted vector could still be named here. Fixed with a fresh isHeld re-check of each vector's owning row immediately before the upsert, proven by test/unit/restamp-held-race.test.ts — not by this comment alone.",
   },
 ];
 

@@ -73,28 +73,28 @@ function scanInventory(): Site[] {
 // combining rather than hand-reconciling two independently-tracked line sets, same reasoning as
 // every prior cross-track merge this table records — see the history further below.
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
-  // MOVED to real --inventory output (T-0089.4.2, Codex review classes A-D, and the too_long
-  // simplification that withdrew the chunked nightly rescan): the embed gate, the too_long hold
-  // redesign and R20's batchEmbeds fix all shifted, added or removed entries-write sites.
-  // Recomputed against the real scanner output.
+  // MOVED to real --inventory output (T-0089.4.2, Codex review classes A-D, the too_long
+  // simplification, R20's batchEmbeds fix, and Codex recheck classes E/A): the embed gate, the
+  // too_long hold redesign, the held-row model-prompt filters and the restamp race fix all
+  // shifted, added or removed entries-write sites. Recomputed against the real scanner output.
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 368, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 412, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 532, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 598, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 605, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 370, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 414, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 534, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 600, kind: 'exempt' },
   { file: 'src/capture/entry.ts', line: 607, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 642, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 659, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 609, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 644, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 661, kind: 'exempt' },
   { file: 'src/capture/lifecycle.ts', line: 158, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 235, kind: 'snapshot' },
-  { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
+  { file: 'src/capture/share.ts', line: 79, kind: 'exempt' },
   { file: 'src/capture/store.ts', line: 77, kind: 'exempt' },
   { file: 'src/capture/store.ts', line: 455, kind: 'snapshot' },
   { file: 'src/capture/store.ts', line: 704, kind: 'snapshot' },
   { file: 'src/capture/store.ts', line: 812, kind: 'snapshot' },
-  { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot' },
+  { file: 'src/compression/digest.ts', line: 103, kind: 'snapshot' },
   { file: 'src/entries/import.ts', line: 34, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 111, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 193, kind: 'snapshot' },
@@ -121,12 +121,12 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/validity.ts', line: 616, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 634, kind: 'snapshot' },
   { file: 'src/quarantine/hold.ts', line: 113, kind: 'snapshot' },
-  { file: 'src/recall/search.ts', line: 1287, kind: 'exempt' },
+  { file: 'src/recall/search.ts', line: 1292, kind: 'exempt' },
   { file: 'src/routes/admin.ts', line: 1563, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 87, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 97, kind: 'exempt' },
   { file: 'src/vectorize/pending.ts', line: 165, kind: 'exempt' },
-  { file: 'src/when/pass.ts', line: 368, kind: 'exempt' },
+  { file: 'src/when/pass.ts', line: 373, kind: 'exempt' },
 ];
 
 /**
@@ -137,14 +137,15 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
  */
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:87", "src/staleness/pass.ts:97",
-  "src/when/pass.ts:368",
+  // MOVED 368 -> 373 (T-0089.4.2, Codex review class E): the NOT_HELD_SQL comment above candidateSql.
+  "src/when/pass.ts:373",
   "src/capture/classify.ts:78", "src/routes/admin.ts:1563", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
-  // MOVED 540/601 -> 589/650 -> 591/652 -> 598/659 (T-0089.4.2, Lane W): W1's scoring code, the
-  // class D skipModelCall comment, then the merge-branch !decision.hold comment, shifted these
-  // down; same two sites throughout.
-  "src/capture/entry.ts:598", "src/capture/entry.ts:659",
+  // MOVED 540/601 -> 589/650 -> 591/652 -> 598/659 -> 600/661 (T-0089.4.2, Lane W): W1's scoring
+  // code, the class D skipModelCall comment, the merge-branch !decision.hold comment, then the
+  // class E skipModelCall comment, shifted these down; same two sites throughout.
+  "src/capture/entry.ts:600", "src/capture/entry.ts:661",
 ]);
 
 const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");

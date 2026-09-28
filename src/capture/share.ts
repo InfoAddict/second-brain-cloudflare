@@ -4,6 +4,7 @@ import { isCompanyWorkspace, scopeWhere, scopeWrite } from "../lib/scope";
 import { VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
 import type { ChangeContext } from "../lib/audit";
 import { changesOf } from "../memory/versions";
+import { isHeld } from "../quarantine/tags";
 
 /** Move entries between personal and company workspaces; sharing is not a copy. */
 
@@ -116,6 +117,17 @@ export async function moveEntry(
  */
 export async function restampVectorWorkspace(env: Env, vectorIds: string[], workspaceId: string): Promise<{ ok: boolean }> {
   let ok = true;
+  // Codex review class A (T-0089.4.2): this call is fire-and-forget, run after the D1 move
+  // already committed, against vectorIds this call's caller read earlier — a hold that landed on
+  // the row in that gap empties vector_ids in D1 and deletes its vectors separately, not
+  // atomically, so a vector named here can still exist in Vectorize a moment after its row became
+  // held. Re-stamping it would revive a held row's vector in the index, findable by a raw
+  // similarity query even though D1 no longer lists it. A fresh read of each vector's owning row,
+  // immediately before the upsert, is what upsertEntryVectors' own gate does for a new embed; this
+  // is the same check for a re-stamp of an existing one — ONE combined read for every parent id
+  // across every getByIds batch, not one per batch, so the #347 subrequest budget stays flat
+  // regardless of how many vectors a move touches.
+  const allVectors: VectorizeVector[] = [];
   for (let i = 0; i < vectorIds.length; i += VECTORIZE_GET_BY_IDS_BATCH) {
     const batch = vectorIds.slice(i, i + VECTORIZE_GET_BY_IDS_BATCH);
     if (!batch.length) continue;
@@ -125,9 +137,30 @@ export async function restampVectorWorkspace(env: Env, vectorIds: string[], work
       // them ok let a move claim "searchable in the new layer" for an entry
       // nothing in the index points at (#355). Missing is a failure, not a skip.
       if (vectors.length < batch.length) ok = false;
-      if (!vectors.length) continue;
+      allVectors.push(...vectors);
+    } catch (e) {
+      console.error("Vectorize workspace re-stamp failed (non-fatal):", e);
+      ok = false;
+    }
+  }
+  const parentIds = [...new Set(allVectors.map(v => String((v.metadata as any)?.parentId ?? "")).filter(Boolean))];
+  const heldParents = new Set<string>();
+  if (parentIds.length) {
+    // scope-exempt: by-id: re-checking rows this same request's own D1 move already authorized
+    const { results } = await env.DB.prepare(
+      `SELECT id, tags FROM entries WHERE id IN (${parentIds.map(() => "?").join(", ")})`
+    ).bind(...parentIds).all<{ id: string; tags: string }>();
+    for (const r of results ?? []) {
+      try { if (isHeld(JSON.parse(r.tags ?? "[]"))) heldParents.add(r.id); } catch { /* not held */ }
+    }
+  }
+  const restampable = allVectors.filter(v => !heldParents.has(String((v.metadata as any)?.parentId ?? "")));
+  if (restampable.length < allVectors.length) ok = false;
+  for (let i = 0; i < restampable.length; i += VECTORIZE_GET_BY_IDS_BATCH) {
+    const batch = restampable.slice(i, i + VECTORIZE_GET_BY_IDS_BATCH);
+    try {
       await env.VECTORIZE.upsert(
-        vectors.map(v => ({ ...v, metadata: { ...v.metadata, workspace_id: workspaceId } })),
+        batch.map(v => ({ ...v, metadata: { ...v.metadata, workspace_id: workspaceId } })),
       );
     } catch (e) {
       console.error("Vectorize workspace re-stamp failed (non-fatal):", e);

@@ -1471,7 +1471,9 @@ describe("the checker over the real source tree", () => {
     // MOVED 227/115 -> 228/116 -> 227/115 (T-0089.4.2, Lane W follow-up, then withdrawn): the
     // nightly quarantine-rescan pass's candidate SELECT briefly added +1 query/+1 documented
     // exception; the too_long simplification removed rescan.ts (and the query) entirely.
-    ).toEqual({ queries: 227, exempt: 115, checked: 29, outerJoin: 1 });
+    // MOVED 227/115 -> 228/116 (T-0089.4.2, Codex review class A): restampVectorWorkspace's fresh
+    // isHeld re-check (src/capture/share.ts) adds one by-id SELECT of the vectors' owning rows.
+    ).toEqual({ queries: 228, exempt: 116, checked: 29, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

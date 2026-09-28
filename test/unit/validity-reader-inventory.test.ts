@@ -107,15 +107,17 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // items+totals, now each marked directly; the standing-hydration read, now marked `any`) and
   // Track 9's dashboard aggregates shifted; recomputed against the real scanner output.
   "src/brief/compute.ts": [116, 124, 133, 148, 465, 468],
-  "src/compression/digest.ts": [145, 183, 257, 286, 296],
-  "src/insight/weekly.ts": [354],
+  // MOVED (T-0089.4.2, Codex review class E): each held-row exclusion added shifted these down.
+  "src/compression/digest.ts": [146, 184, 258, 287, 297],
+  "src/insight/weekly.ts": [359],
   // MOVED (merge 3e5961b7, release/v4 57583d10): admin.ts after line 900 +4, entries.ts +1; same queries.
   // REMOVED mcp/server.ts:489 (T-0089.2.1 fix round): the digest tool's read now carries its own
   // `validity: current` marker and predicate.
   "src/mcp/server.ts": [],
   // MOVED (merge of release/v4 d3b5b25c into v4/t7-c): Track 7's GET /loops direction/kind logic
   // added lines above several of these sites; recomputed against the real scanner output.
-  "src/routes/admin.ts": [610, 623, 635, 660, 733, 758, 807, 856, 861, 1000, 1007, 1123, 1129, 1453, 1544, 1574, 1686],
+  // MOVED +4 (T-0089.4.2, Codex review class E): the /insights/dry-run held-row exclusion.
+  "src/routes/admin.ts": [610, 623, 635, 660, 733, 758, 807, 856, 861, 1000, 1007, 1123, 1129, 1453, 1544, 1574, 1690],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };
