@@ -281,8 +281,9 @@ describe("decision rows in the due sheet (T7-E, Design 7.2)", () => {
     await ctx.loadDueQueue();
 
     const html = ctx.__els.get("due-list").innerHTML;
-    // The label's own text (exactly "How did it go?"), distinct from the note
-    // input's placeholder attribute, which appends "(optional)".
+    // The label's own text: round 3 gave the note input its own distinct
+    // placeholder ("Add details"), so "How did it go?" only ever appears
+    // here now, not doubled inside an attribute too.
     const labelMatch = html.match(/>How did it go\?</);
     expect(labelMatch).not.toBeNull();
     const buttonsAt = html.indexOf("resolveDecision('d1', 'right'");

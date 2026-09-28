@@ -113,7 +113,7 @@ const I18N_EN = {
     // T7-E, UX advisor round 2: the panel now shows both directions, so the
     // subtitle names both. Draft, not yet in 18-copy-deck.md: flagged for
     // the copywriter (board.loopsSub does not exist there yet).
-    loopsSub: "What you owe, and what's owed to you",
+    loopsSub: "What you owe and what you're owed",
     ledgerTitle: 'Decision log',
     ledgerSub: 'How often your calls come true',
     saved: 'Saved',
@@ -818,7 +818,7 @@ const I18N_EN = {
     // T7-E, UX advisor round 2: the Open tab's own empty line, so a brain
     // with resolved decisions but nothing currently open does not read the
     // "no decisions yet" onboarding line. Draft, flagged for the copywriter.
-    emptyOpen: 'No open decisions.',
+    emptyOpen: 'No decisions waiting for review.',
     loadFailed: 'Could not load the decision log.',
     tryAgain: 'Try again',
     reviewAround: 'Review around {date}',
@@ -840,7 +840,13 @@ const I18N_EN = {
     // reads identically on the Open and Resolved tabs (only the list below
     // changes). This says so, rather than the toggle looking like it does
     // nothing. Draft, flagged for the copywriter.
-    chartScopeNote: "This reflects every decision you've resolved, not just this tab.",
+    chartScopeNote: 'The chart shows every reviewed decision, on both the Open and Reviewed tabs.',
+    // T7-E round 3 (18-copy-deck.md section 8.6): the localized calibration
+    // rate sentence, built client-side once GET /decisions/calibration
+    // returns its structured numbers next to the English server line. The
+    // field names below (LEDGER_LINE_FIELDS, ledger.js) are placeholders
+    // pending T7-C's real ones; this key itself is final per the deck.
+    lineRate: "So far, when you were about {stated}% sure, you were right {hit}% of the time, based on {n} decisions.",
   },
   loops: {
     title: 'Open loops',
@@ -894,7 +900,7 @@ const I18N_EN = {
     mixed: 'Mixed',
     cantTellYet: 'Too early to tell',
     addNote: 'Add a note',
-    notePlaceholder: 'How did it go? (optional)',
+    notePlaceholder: 'Add details (optional)',
     // T7-E, UX advisor round 2: a static label above the four outcome
     // buttons (distinct from the note's own placeholder above, which asks
     // the same question for the optional free-text note). Draft, flagged
@@ -1205,7 +1211,7 @@ const I18N_IT = {
     topicsSub: 'I tag più usati',
     rereadSub: 'Vecchio, importante e collegato a ciò su cui stai lavorando ora',
     loopsTitle: 'Impegni aperti',
-    loopsSub: 'Cosa devi fare e cosa ti devono',
+    loopsSub: 'Cosa devi e cosa ti devono',
     ledgerTitle: 'Registro delle decisioni',
     ledgerSub: 'Quanto spesso le tue previsioni si avverano',
     saved: 'Salvato',
@@ -1883,7 +1889,7 @@ const I18N_IT = {
     },
     openLog: 'Apri il registro',
     empty: 'Ancora nessuna decisione. Racconta alla tua IA una scelta che hai fatto e con quale sicurezza: potrà registrarla qui.',
-    emptyOpen: 'Nessuna decisione aperta.',
+    emptyOpen: 'Nessuna decisione in attesa di valutazione.',
     loadFailed: 'Impossibile caricare il registro delle decisioni.',
     tryAgain: 'Riprova',
     reviewAround: 'Da rivedere intorno al {date}',
@@ -1901,7 +1907,8 @@ const I18N_IT = {
     tableColSplit: 'Dichiarate / stimate',
     tableCaption: 'La tua sicurezza dichiarata, accanto a quanto spesso le decisioni si sono avverate',
     caption: 'Punteggio di accuratezza: {brier}. Più basso è meglio: 0 è perfetto, e dire sempre 50% dà 0,25.',
-    chartScopeNote: 'Riflette tutte le decisioni che hai valutato, non solo questa scheda.',
+    chartScopeNote: 'Il grafico mostra tutte le decisioni valutate, sia in Aperte sia in Valutate.',
+    lineRate: 'Finora, quando eri sicuro al {stated}% circa, hai avuto ragione il {hit}% delle volte, su {n} decisioni.',
   },
   loops: {
     title: 'Impegni aperti',
@@ -1945,7 +1952,7 @@ const I18N_IT = {
     mixed: 'In parte',
     cantTellYet: 'Troppo presto per dirlo',
     addNote: 'Aggiungi una nota',
-    notePlaceholder: "Com'è andata? (facoltativo)",
+    notePlaceholder: 'Aggiungi dettagli (facoltativo)',
     outcomeLabel: "Com'è andata?",
     outcomeFailed: 'Impossibile registrare: {message}',
     outcomeToastRight: 'Registrata come scelta giusta',

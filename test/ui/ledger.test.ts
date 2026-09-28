@@ -45,6 +45,23 @@ const readyResult = () => ({
 const notReadyResult = () => ({ ready: false, n: 4, needed: 10, line: "You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 4 so far." });
 
 describe("ledger math (pure, no DOM)", () => {
+  it("round 3: calibrationSentence localizes once the structured fields are present", () => {
+    const { calibrationSentence } = load();
+
+    const withFields = calibrationSentence({ line: "So far, your 74% calls came true 52% of the time, based on 14 decisions.", line_stated_pct: 74, line_hit_pct: 52, line_n: 14 });
+
+    expect(withFields).toBe("So far, when you were about 74% sure, you were right 52% of the time, based on 14 decisions.");
+  });
+
+  it("round 3: calibrationSentence falls back to the server's own sentence when the structured fields are absent", () => {
+    const { calibrationSentence } = load();
+
+    const withoutFields = calibrationSentence({ line: "So far, your 74% calls came true 52% of the time, based on 14 decisions." });
+
+    expect(withoutFields).toBe("So far, your 74% calls came true 52% of the time, based on 14 decisions.");
+    expect(calibrationSentence(null)).toBe("");
+  });
+
   it("bucketRows maps calibration JSON to rows; n<5 rows carry no marks", () => {
     const { bucketRows } = load();
 
@@ -363,7 +380,7 @@ describe("the ledger sheet's filters (source, state)", () => {
     expect(fetchCalls.some((u) => u.includes("source=stated"))).toBe(true);
     // All three surfaces reflect the new fetch's data, not the previous one's.
     expect(els["ledger-sentence"].textContent).toBe("Stated-only line.");
-    expect(els["ledger-list"].innerHTML).toContain("No open decisions");
+    expect(els["ledger-list"].innerHTML).toContain("No decisions waiting for review");
   });
 
   it("switching state re-fetches and re-renders too, and a repeat of the same tab is a no-op", async () => {
@@ -380,14 +397,14 @@ describe("the ledger sheet's filters (source, state)", () => {
     expect(fetchCalls.some((u) => u.includes("state=resolved"))).toBe(true);
   });
 
-  it("UX advisor round 2: empty Open tab says 'No open decisions', not the onboarding line", async () => {
+  it("UX advisor round 2: empty Open tab has its own line, not the onboarding line", async () => {
     const { ctx, els, responses } = harness();
     responses.calibration = notReadyResult();
     responses.decisions = [];
 
     await ctx.openLedgerSheet();
 
-    expect(els["ledger-list"].innerHTML).toContain("No open decisions");
+    expect(els["ledger-list"].innerHTML).toContain("No decisions waiting for review");
     expect(els["ledger-list"].innerHTML).not.toContain("No decisions yet");
   });
 
@@ -466,7 +483,7 @@ describe("the ledger sheet's filters (source, state)", () => {
 
     await ctx.openLedgerSheet();
 
-    expect(scopeEl.textContent).toContain("not just this tab");
+    expect(scopeEl.textContent).toContain("on both the Open and Reviewed tabs");
   });
 
   it("UI reviewer round 2: the list's own error state offers a Try again button that retries", async () => {

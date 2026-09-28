@@ -288,9 +288,32 @@ function setLedgerState(state) {
   return loadLedger()
 }
 
+/**
+ * Placeholder field names for the calibration rate line's structured
+ * numbers (18-copy-deck.md section 8.6). GET /decisions/calibration does
+ * not return these yet; T7-C will report the real names once it does, and
+ * this is the one place to rename them.
+ */
+const LEDGER_LINE_FIELDS = { statedPct: 'line_stated_pct', hitPct: 'line_hit_pct', n: 'line_n' }
+
+/**
+ * The calibration sentence, localized when the structured fields above are
+ * present, or the server's own English sentence when they are not (an
+ * older Worker, or before T7-C ships them) — pure, so a test can cover both
+ * shapes without a fetch.
+ */
+function calibrationSentence(result) {
+  if (!result) return ''
+  const statedPct = result[LEDGER_LINE_FIELDS.statedPct]
+  const hitPct = result[LEDGER_LINE_FIELDS.hitPct]
+  const n = result[LEDGER_LINE_FIELDS.n]
+  if (statedPct == null || hitPct == null || n == null) return result.line || ''
+  return t('ledger.lineRate', { stated: statedPct, hit: hitPct, n })
+}
+
 function renderLedgerSentence(result) {
   const el = document.getElementById('ledger-sentence')
-  if (el) el.textContent = (result && result.line) || ''
+  if (el) el.textContent = calibrationSentence(result)
 }
 
 function renderLedgerTopicLine(result) {
