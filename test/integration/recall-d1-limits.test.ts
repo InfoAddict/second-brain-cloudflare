@@ -118,7 +118,9 @@ describe("recall stays inside D1's statement limits", () => {
 
   describe("the keyword clause, on an empty brain (#276)", () => {
     it("scopes both existing candidate reads to one explicit date", async () => {
-      const day = new Date(2026, 7, 17).getTime();
+      // parseTimePhrase anchors in the brain's TIMEZONE (UTC by default, T-0089.2.2),
+      // not the test runner's host zone.
+      const day = Date.UTC(2026, 7, 17);
       sqlite.seed({ id: "in-range", content: "quartz ledger record", createdAt: day + 1 });
       sqlite.seed({ id: "out-of-range", content: "quartz ledger record", createdAt: day + 86400000 + 1 });
       const env = envWith(undefined, {

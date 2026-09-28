@@ -470,7 +470,7 @@ export async function recallEntries(
 
   let semanticQuery = query;
   if (after === undefined && before === undefined) {
-    const parsed = parseTimePhrase(query, now);
+    const parsed = parseTimePhrase(query, now, cfg.TIMEZONE);
     after = parsed.after;
     before = parsed.before;
     semanticQuery = parsed.cleanQuery;
