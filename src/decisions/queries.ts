@@ -8,6 +8,7 @@ import type { Identity } from "../lib/identity";
 import type { ScopeClause } from "../lib/scope";
 import { CONFIDENCE_TAG_PREFIX, CONFIDENCE_SOURCE_TAG_PREFIX, LEDGER_DECISION_TAG, type ConfidenceSource } from "./capture";
 import type { DecisionOutcome, DecisionOutcomeRow } from "./calibration";
+import { REVIEW_REARMS_TAG_PREFIX } from "../tags/t7";
 
 // Same instr(lower(tags), ...) shape idx_entries_ledger is defined on (Task 6,
 // db/schema.sql / src/db/init.ts), so the read stays index-eligible once that
@@ -75,6 +76,57 @@ function parseTags(tagsJson: string): string[] {
   } catch {
     return [];
   }
+}
+
+export type DecisionState = "open" | "resolved" | "all";
+
+/**
+ * GET /decisions (Design 4.4): id, content (200), created_at, confidence, confidence_source,
+ * outcome, review_at, rearms, edited_since_recorded — the last an EXISTS on entry_versions for
+ * the row, inside this same statement, so listing decisions costs one D1 read regardless of
+ * page size. Scoped the same way as calibrationQuery (P7.7): personal or authored by the caller.
+ */
+export function decisionsListQuery(
+  scope: ScopeClause, actionable: ScopeClause, opts: { state: DecisionState; limit: number; offset: number },
+): SqlWithBindings {
+  const bounded = boundedScope(scope);
+  const stateFilter = opts.state === "open" ? `AND tags NOT LIKE '%"outcome:%'`
+    : opts.state === "resolved" ? `AND tags LIKE '%"outcome:%'`
+      : "";
+  // scope-exempt: by-id: correlated to entries.id, which the outer WHERE below already scopes —
+  // same shape as memory/versions.ts's NEWEST_SEQ.
+  const sql = `SELECT id, substr(content, 1, 200) AS content, created_at, tags, when_at,
+      EXISTS(SELECT 1 FROM entry_versions v WHERE v.entry_id = entries.id) AS edited_since_recorded,
+      COUNT(*) OVER() AS total
+    FROM entries
+    WHERE ${LEDGER_INDEXED} AND tags NOT LIKE '%"status:deprecated"%' ${stateFilter}
+      AND ${bounded.clause} AND ${actionable.clause}
+    ORDER BY created_at DESC, id DESC
+    LIMIT ? OFFSET ?`;
+  return { sql, bindings: [...bounded.bindings, ...actionable.bindings, opts.limit, opts.offset] };
+}
+
+export interface DecisionListRow {
+  id: string; content: string; created_at: number; confidence: number | null; confidence_source: ConfidenceSource | null;
+  outcome: DecisionOutcome | null; review_at: number | null; rearms: number; edited_since_recorded: boolean;
+}
+
+/** A decisionsListQuery row into the REST reply shape. */
+export function parseDecisionListRow(row: Record<string, unknown>): DecisionListRow {
+  const outcomeRow = parseDecisionOutcomeRow(row.tags as string);
+  const rearmsTag = outcomeRow.tags.find(t => t.startsWith(REVIEW_REARMS_TAG_PREFIX));
+  const rearms = rearmsTag ? Number(rearmsTag.slice(REVIEW_REARMS_TAG_PREFIX.length)) : 0;
+  return {
+    id: row.id as string,
+    content: row.content as string,
+    created_at: row.created_at as number,
+    confidence: outcomeRow.confidence,
+    confidence_source: outcomeRow.source,
+    outcome: outcomeRow.outcome,
+    review_at: (row.when_at as number | null) ?? null,
+    rearms: Number.isFinite(rearms) ? rearms : 0,
+    edited_since_recorded: !!row.edited_since_recorded,
+  };
 }
 
 /** A calibrationQuery row's tags column into calibrate()'s input shape. */
