@@ -133,6 +133,12 @@
   margin-top: 8px;
 }
 
+/* T-0101.6.1: the Replaced-by link in a replaced memory's status caption. */
+.status-caption a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+}
+
 /* The reason Append, Edit, Forget and Status are disabled, next to the
    control it explains rather than at the end of History. */
 .status-lock-note {

@@ -3498,18 +3498,6 @@
         font-family: var(--font-sans);
       }
 
-      /* T-0101.6.1: the Replaced-by link under a replaced memory's status row. */
-      .view-brain-row--validity {
-        justify-content: flex-start;
-        margin-top: -2px;
-      }
-
-      .view-brain-row--validity a {
-        color: var(--accent-ink);
-        font-size: 13px;
-        text-decoration: underline;
-      }
-
       /* Citation chips in an answer, and the card they point at. */
       .cite {
         display: inline-flex;

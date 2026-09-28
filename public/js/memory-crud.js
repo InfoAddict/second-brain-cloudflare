@@ -405,33 +405,35 @@ function viewStatusLabel(status) {
 }
 
 /**
- * T-0101.6.1 (spec 14 section 7.6, Task D3): the sheet's status row for a
- * replaced or ended memory, so it never reads a bare "Trusted" once it has a
- * validity window. `wrong` keeps its own label (viewStatusLabel handles it)
- * since being marked wrong is a stronger statement than a validity window
- * closing on its own.
+ * SH-5/T-0101.6.1 (spec 13 section SH-5, spec 14 section 7.6): the sheet's
+ * status line — `#view-status-caption`, ALWAYS shown (renderViewStatus
+ * defaults an untagged entry to "canonical"), not view-brain's optional
+ * Status row, which only appears when an explicit `status:` tag exists. A
+ * memory with no status tag is the common case, and it is exactly there
+ * that a validity story must still replace the generic "Confirmed. Search
+ * often prefers it…" caption — otherwise most replaced memories would keep
+ * reading as a bare "Trusted" regardless of this feature. `wrong` keeps its
+ * own caption (STATUS_HELP_KEYS.deprecated): being marked wrong is a
+ * stronger statement than a validity window closing on its own.
  */
-function validityStatusRowHtml(entry) {
+function validityStatusCaptionHtml(entry) {
   const state = entry.validity_state
-  if (!state || state === 'wrong') return null
   const shortDate = (ms) => formatDateUI(ms, { year: 'numeric', month: 'short', day: 'numeric' })
+  let html = null
   if (state === 'replaced' && entry.superseded_by) {
-    const from = shortDate(entry.valid_from)
-    const until = shortDate(entry.valid_until)
-    const label = t('validity.trueFromUntil', { from, until })
+    const label = t('validity.trueFromUntil', { from: shortDate(entry.valid_from), until: shortDate(entry.valid_until) })
     const link = `<a href="#" onclick="openValidityLink('${escAttr(entry.superseded_by.id)}'); return false;">${escHtml(t('validity.replacedBy', { preview: entry.superseded_by.preview }))}</a>`
-    return `<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(label)}</strong></div><div class="view-brain-row view-brain-row--validity">${link}</div>`
+    html = `${escHtml(label)}<br>${link}`
+  } else if (state === 'ended') {
+    html = escHtml(t('validity.ended', { until: shortDate(entry.valid_until) }))
+  } else if (state === 'current' && entry.valid_from_stated) {
+    html = escHtml(t('validity.trueSince', { from: shortDate(entry.valid_from) }))
   }
-  if (state === 'ended') {
-    const until = shortDate(entry.valid_until)
-    return `<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(t('validity.ended', { until }))}</strong></div>`
+  if (entry.retracted_source) {
+    const note = escHtml(t('validity.retractedSource'))
+    html = html ? `${html}<br>${note}` : note
   }
-  // state === 'current'
-  if (entry.valid_from_stated) {
-    const from = shortDate(entry.valid_from)
-    return `<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(t('validity.trueSince', { from }))}</strong></div>`
-  }
-  return null
+  return html
 }
 
 /**
@@ -561,11 +563,7 @@ function renderViewBrain(entry) {
     rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.kind'))}</span><strong>${escHtml(viewKindLabel(kind))}</strong></div>`)
   }
   if (status) {
-    const validityRow = status !== 'deprecated' ? validityStatusRowHtml(entry) : null
-    rows.push(validityRow || `<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(viewStatusLabel(status))}</strong></div>`)
-  }
-  if (entry.retracted_source) {
-    notes.push(t('validity.retractedSource'))
+    rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(viewStatusLabel(status))}</strong></div>`)
   }
   const volPair = volatility ? viewVolatility(volatility) : null
   if (volPair) {
@@ -809,8 +807,15 @@ function renderViewStatus(entry) {
     return
   }
   caption.style.display = ''
-  const editedLabel = canonicalEditLabel(entry)
-  caption.textContent = editedLabel ? t('status.editedBy', editedLabel) : t(STATUS_HELP_KEYS[status] || '')
+  // T-0101.6.1: a validity story (or a retracted-source note) outranks both the canonical-edit
+  // note and the plain status help line - it is the more specific, more current fact.
+  const validityCaption = status !== 'deprecated' ? validityStatusCaptionHtml(entry) : null
+  if (validityCaption) {
+    caption.innerHTML = validityCaption
+  } else {
+    const editedLabel = canonicalEditLabel(entry)
+    caption.textContent = editedLabel ? t('status.editedBy', editedLabel) : t(STATUS_HELP_KEYS[status] || '')
+  }
   renderViewStatusLockNote(entry)
 }
 

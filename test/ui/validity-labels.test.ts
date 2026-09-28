@@ -209,6 +209,13 @@ const STATUS_RESTORED_MANY = {
 
 const MEMORY_CRUD_FILES = ["public/utils.js", "public/js/state.js", "public/js/toast.js", "public/js/undo.js", "public/js/memory-crud.js"];
 
+// SH-5 (spec 13): the validity story lives in #view-status-caption, the ALWAYS-shown status
+// line (renderViewStatus defaults an untagged entry to "canonical") — not view-brain's optional
+// Status row, which only appears when an explicit status: tag exists. Most real memories carry
+// no status tag at all, so the caption is what "never a bare Trusted" actually depends on; a
+// real screenshot of a status:-tagless replaced memory (T-0101.6.1_sheet-replaced_after) is what
+// caught this the first time (view-brain rendered nothing, and the caption still read the plain
+// "Confirmed. Search often prefers it…" text).
 describe("a replaced memory shows True from … until …, Replaced by with a link, and never a bare Trusted", () => {
   function load() {
     const ctx = baseCtx();
@@ -216,22 +223,30 @@ describe("a replaced memory shows True from … until …, Replaced by with a li
     return ctx;
   }
 
-  it("status row reads True from … until …, plus a Replaced by link naming the replacement", () => {
+  it("status caption reads True from … until …, plus a Replaced by link naming the replacement — even with no status: tag at all", () => {
     const ctx = load();
-    ctx.renderViewBrain({ ...REPLACED_ENTRY, tags: ["status:canonical"] });
-    const html = el(ctx, "view-brain").innerHTML as string;
+    ctx.renderViewStatus({ ...REPLACED_ENTRY, tags: [] });
+    const html = el(ctx, "view-status-caption").innerHTML as string;
     expect(html).toContain("True from");
     expect(html).toContain("until");
-    expect(html).not.toContain(">Trusted<");
+    expect(html).not.toContain("Confirmed. Search");
     expect(html).toContain("Replaced by");
     expect(html).toContain("Lives in Austin");
     expect(html).toMatch(/<a[^>]*>[^<]*Replaced by[^<]*Lives in Austin[^<]*<\/a>/);
   });
 
+  it("the same holds with an explicit status:canonical tag", () => {
+    const ctx = load();
+    ctx.renderViewStatus({ ...REPLACED_ENTRY, tags: ["status:canonical"] });
+    const html = el(ctx, "view-status-caption").innerHTML as string;
+    expect(html).toContain("True from");
+    expect(html).toContain("Replaced by");
+  });
+
   it("the link opens the replacement's own sheet", () => {
     const ctx = load();
-    ctx.renderViewBrain({ ...REPLACED_ENTRY, tags: ["status:canonical"] });
-    const html = el(ctx, "view-brain").innerHTML as string;
+    ctx.renderViewStatus({ ...REPLACED_ENTRY, tags: [] });
+    const html = el(ctx, "view-status-caption").innerHTML as string;
     expect(html).toMatch(/onclick="openValidityLink\('austin-id'\)/);
     ctx.openValidityLink("austin-id");
     return new Promise((r) => setTimeout(r, 0)).then(() => {
@@ -241,33 +256,33 @@ describe("a replaced memory shows True from … until …, Replaced by with a li
 
   it("a current memory with a stated start shows True since, not a bare Trusted", () => {
     const ctx = load();
-    ctx.renderViewBrain({ ...CURRENT_STATED_ENTRY, tags: ["status:canonical"] });
-    const html = el(ctx, "view-brain").innerHTML as string;
+    ctx.renderViewStatus({ ...CURRENT_STATED_ENTRY, tags: [] });
+    const html = el(ctx, "view-status-caption").innerHTML as string;
     expect(html).toContain("True since");
-    expect(html).not.toContain(">Trusted<");
+    expect(html).not.toContain("Confirmed. Search");
   });
 
-  it("a plain current memory with no stated start still shows the ordinary status label", () => {
+  it("a plain current memory with no stated start still shows the ordinary status help line", () => {
     const ctx = load();
-    ctx.renderViewBrain({ id: "m1", content: "x", tags: ["status:canonical"], valid_from: 1000, valid_from_stated: false, valid_until: null, validity_state: "current", superseded_by: null, retracted_source: false });
-    expect(el(ctx, "view-brain").innerHTML).toContain("Trusted");
+    ctx.renderViewStatus({ id: "m1", content: "x", tags: [], valid_from: 1000, valid_from_stated: false, valid_until: null, validity_state: "current", superseded_by: null, retracted_source: false });
+    expect(el(ctx, "view-status-caption").textContent).toContain("Confirmed");
   });
 
-  it("Wrong keeps its own label, not a validity line", () => {
+  it("Wrong keeps its own caption, not a validity line", () => {
     const ctx = load();
-    ctx.renderViewBrain({ id: "m1", content: "x", tags: ["status:deprecated"], valid_from: 1000, valid_from_stated: false, valid_until: null, validity_state: "wrong", superseded_by: null, retracted_source: false });
-    expect(el(ctx, "view-brain").innerHTML).toContain("Wrong");
+    ctx.renderViewStatus({ id: "m1", content: "x", tags: ["status:deprecated"], valid_from: 1000, valid_from_stated: false, valid_until: null, validity_state: "wrong", superseded_by: null, retracted_source: false });
+    expect(el(ctx, "view-status-caption").textContent).not.toContain("True");
   });
 });
 
 describe("an ended memory shows No longer true since", () => {
-  it("status row reads No longer true since {date}", () => {
+  it("status caption reads No longer true since {date}, with no status: tag", () => {
     const ctx = baseCtx();
     run(ctx, MEMORY_CRUD_FILES);
-    ctx.renderViewBrain({ ...ENDED_ENTRY, tags: ["status:canonical"] });
-    const html = el(ctx, "view-brain").innerHTML as string;
+    ctx.renderViewStatus({ ...ENDED_ENTRY, tags: [] });
+    const html = el(ctx, "view-status-caption").innerHTML as string;
     expect(html).toContain("No longer true since");
-    expect(html).not.toContain(">Trusted<");
+    expect(html).not.toContain("Confirmed. Search");
   });
 });
 
@@ -275,8 +290,8 @@ describe("a retracted-source memory shows its label", () => {
   it("renders the retracted-source note regardless of validity state", () => {
     const ctx = baseCtx();
     run(ctx, MEMORY_CRUD_FILES);
-    ctx.renderViewBrain({ ...RETRACTED_SOURCE_ENTRY, tags: ["status:canonical"] });
-    const html = el(ctx, "view-brain").innerHTML as string;
+    ctx.renderViewStatus({ ...RETRACTED_SOURCE_ENTRY, tags: [] });
+    const html = el(ctx, "view-status-caption").innerHTML as string;
     expect(html).toContain("Built on a memory that was later retracted");
   });
 });
@@ -349,8 +364,8 @@ describe("both locales, no em dash", () => {
     const ctx = baseCtx();
     run(ctx, MEMORY_CRUD_FILES);
     ctx.initI18n("it");
-    ctx.renderViewBrain({ ...REPLACED_ENTRY, tags: ["status:canonical"] });
-    const html = el(ctx, "view-brain").innerHTML as string;
+    ctx.renderViewStatus({ ...REPLACED_ENTRY, tags: [] });
+    const html = el(ctx, "view-status-caption").innerHTML as string;
     expect(html).toContain("Valido dal");
     expect(html).toContain("Sostituito da");
     expect(ctx.validityRestoredToastMessage(STATUS_RESTORED_ONE.validity)).toBe(
@@ -533,8 +548,8 @@ describe("keyboard: the Replaced by link is reachable and named", () => {
   it("is a real <a href>, not a div with an onclick", () => {
     const ctx = baseCtx();
     run(ctx, MEMORY_CRUD_FILES);
-    ctx.renderViewBrain({ ...REPLACED_ENTRY, tags: ["status:canonical"] });
-    const html = el(ctx, "view-brain").innerHTML as string;
+    ctx.renderViewStatus({ ...REPLACED_ENTRY, tags: [] });
+    const html = el(ctx, "view-status-caption").innerHTML as string;
     expect(html).toMatch(/<a\s[^>]*href=/);
   });
 });
