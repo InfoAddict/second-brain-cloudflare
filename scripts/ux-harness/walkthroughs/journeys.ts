@@ -533,6 +533,7 @@ export const journeys: Journey[] = [
 
         // Gone after undo: undoing the MCP edit restores w23-mem's prior tags, which predate the label.
         await gotoMemory(ctx.page, ctx.baseUrl, "w23-mem");
+        await ctx.page.waitForSelector("#view-timeline .history-item[data-seq]", { timeout: 3000 }).catch(() => {});
         const undoBtn = await ctx.page.$('#view-timeline .history-item[data-seq] [data-action="undo"]');
         if (!undoBtn) throw new NotBuilt("UX-A.2: history row Undo action", 'no [data-action="undo"] on a #view-timeline history row');
         await undoBtn.click();
