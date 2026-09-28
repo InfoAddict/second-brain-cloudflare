@@ -4,13 +4,14 @@ import { initializeDatabase } from "../db/init";
 import { json } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
 import { assertCanMutateEntry, getReadableEntry, FORBIDDEN_MSG } from "../lib/entry-access";
-import { layerOf, scopeWhere, readTeamParam, readableWorkspaces } from "../lib/scope";
+import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
 import { readEntryTimeline } from "../memory/history";
 import { loadHistory } from "../memory/versions";
 import { buildEntryHistoryFromReads, readEntryVersion } from "../memory/history-view";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
+import { decodeTrashCursor, listTrash } from "../memory/trash-list";
 import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
 import { mirrorUndoError } from "../integrations/mirror";
 import { applyStatus } from "../capture/lifecycle";
@@ -172,7 +173,7 @@ export async function handleEntriesRoutes(
     // company layer: a restore is not a share, and the company layer is only
     // ever reached through POST /share ("move, not copy").
     const writeCtx = { workspaceId: auth.personalWorkspaceId, actorId: auth.userId };
-    const summary = await importExportPayload(env, parsed.payload, { limit, offset, edgeOffset, projectOffset, writeCtx, readableWorkspaceIds: readableWorkspaces(auth) });
+    const summary = await importExportPayload(env, parsed.payload, { limit, offset, edgeOffset, projectOffset, writeCtx });
     return json(summary);
   }
 
@@ -254,6 +255,39 @@ export async function handleEntriesRoutes(
       payload: { channel: "rest", edgesRestored: result.edgesRestored, trashedReason: result.trashedReason },
     });
     return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount });
+  }
+
+  // GET /trash (BE-2, T-0101.2.1, contract 4.3) — the dashboard trash view's page reader.
+  // Q10: listTrash already narrows to what the reader can restore.
+  if (url.pathname === "/trash" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limitParam = url.searchParams.get("limit");
+    let limit = 20;
+    if (limitParam !== null) {
+      const parsed = Number(limitParam);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) {
+        return json({ ok: false, error: "limit must be an integer between 1 and 50" }, 400);
+      }
+      limit = parsed;
+    }
+
+    const cursorParam = url.searchParams.get("cursor") ?? undefined;
+    if (cursorParam !== undefined && decodeTrashCursor(cursorParam) === null) {
+      return json({ ok: false, error: "cursor is invalid" }, 400);
+    }
+
+    const layerParam = url.searchParams.get("layer") ?? undefined;
+    if (layerParam !== undefined && layerParam !== "personal" && layerParam !== "company") {
+      return json({ ok: false, error: 'layer must be "personal" or "company"' }, 400);
+    }
+
+    const cfg = await resolveConfig(env);
+    const { items, nextCursor } = await listTrash(env, auth, {
+      limit, cursor: cursorParam, layer: layerParam as "personal" | "company" | undefined, config: cfg,
+    });
+    return json({ ok: true, retention_days: cfg.TRASH_RETENTION_DAYS, items, next_cursor: nextCursor });
   }
 
   // POST /undo — reverse the most recent change to a memory (or a specific earlier version, with

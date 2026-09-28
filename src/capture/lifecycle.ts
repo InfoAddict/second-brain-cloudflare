@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { getStatus, withStatus, type MemoryStatus } from "../memory/status";
-import { deleteVectorIds } from "../vectorize/batch";
-import { reembedOrDegrade } from "./store";
+import { deleteEntryVectors } from "../vectorize/batch";
+import { reembedOrDegrade, discardUpload } from "./store";
 import type { Config } from "../config";
 import type { ChangeContext } from "../lib/audit";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
@@ -49,7 +49,7 @@ export async function forgetEntry(
   if (changesOf(results[results.length - 1]) === 0) return { status: "not_found" };
 
   try {
-    if (vectorIds.length) await deleteVectorIds(env, vectorIds);
+    if (vectorIds.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds }]);
   } catch (e) {
     console.error("Vectorize delete failed (non-fatal):", e);
   }
@@ -112,7 +112,8 @@ export async function deprecateEntry(
   const tags: string[] = JSON.parse(row.tags ?? "[]");
   const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
   const deprecatedTags = withStatus(tags, "deprecated");
-  const casColumns = { workspace_id: pinnedWorkspaceId };
+  // vector_ids pinned too (round 6): the ids deleted below are exactly the ones this clear removed.
+  const casColumns = { workspace_id: pinnedWorkspaceId, vector_ids: row.vector_ids ?? null };
 
   const results = await env.DB.batch([
     snapshotStatement(env, {
@@ -131,7 +132,7 @@ export async function deprecateEntry(
   if (changesOf(results[1]) === 0) return false;
 
   try {
-    if (vectorIds.length) await deleteVectorIds(env, vectorIds);
+    if (vectorIds.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds }]);
   } catch (e) {
     console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e);
   }
@@ -158,8 +159,6 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
   if (!row) return { status: "not_found" };
   const currentTags: string[] = JSON.parse(row.tags ?? "[]");
   const nextTags = withStatus(currentTags, status);
-  const casColumns = { workspace_id: pinnedWorkspaceId };
-
   // BE-9 (T-0101.8.2): deprecateEntry empties vector_ids on the way INTO "deprecated" (recall
   // must not find it), so leaving deprecated for any other status re-embeds before the status
   // commits, or the row would sit un-deprecated with a stale empty index. reembedOrDegrade is the
@@ -181,6 +180,8 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
     indexed = stored !== null;
   }
 
+  // Replacing vector_ids pins the value read (round 6): the row decides which upload won.
+  const casColumns = { workspace_id: pinnedWorkspaceId, ...(newVectorIdsJson !== undefined ? { vector_ids: row.vector_ids ?? null } : {}) };
   // A status set to what the row already has (tags may merely reorder) writes no version.
   const p = new Params();
   const tagsIdx = p.add(JSON.stringify(nextTags));
@@ -195,5 +196,10 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
     env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}${vectorIdsSet} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values()),
     pruneStatement(env, id, config.VERSION_KEEP),
   ]);
-  return changesOf(results[1]) > 0 ? { status: "ok", indexed } : { status: "not_found" };
+  if (changesOf(results[1]) === 0) {
+    // This call's own upload never became the row's: delete it (its ids are this upload's alone).
+    if (newVectorIdsJson !== undefined) await discardUpload(env, id, JSON.parse(newVectorIdsJson) as string[]);
+    return { status: "not_found" };
+  }
+  return { status: "ok", indexed };
 }

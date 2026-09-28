@@ -188,10 +188,11 @@ describe("restore", () => {
     expect(results.filter((r) => r.status === "conflict" || r.status === "not_found")).toHaveLength(1);
     const live = await t.one<any>(`SELECT vector_ids FROM entries WHERE id = 'a'`);
     expect(live).not.toBeNull();
-    // MAJOR (adversary): vector ids are deterministic (the entry id, or id-chunk-i), so the loser's
-    // cleanup must not delete the SAME ids the winner just embedded.
-    expect(JSON.parse(live.vector_ids)).toEqual(["a"]);
-    expect(vz.store.has("a")).toBe(true);
+    // MAJOR (adversary): the loser's cleanup must not delete the winner's vectors. Per-upload ids
+    // (T-0089.1.1) make that structural: the row lists the winner's ids, and they are all there.
+    const ids = JSON.parse(live.vector_ids) as string[];
+    expect(ids).toHaveLength(1);
+    expect(vz.store.has(ids[0])).toBe(true);
   });
 
   it("MAJOR (adversary): a genuine double-submit — both restores read the trash row inside the embed's own latency window — must not delete the live row's vector", async () => {
@@ -208,8 +209,9 @@ describe("restore", () => {
     expect([r1.status, r2.status].filter((s) => s === 200)).toHaveLength(1);
     const live = await t.one<any>(`SELECT vector_ids FROM entries WHERE id = 'a'`);
     expect(live).not.toBeNull();
-    expect(JSON.parse(live.vector_ids)).toEqual(["a"]);
-    expect(vz.store.has("a")).toBe(true);
+    const ids = JSON.parse(live.vector_ids) as string[];
+    expect(ids).toHaveLength(1);
+    expect(vz.store.has(ids[0])).toBe(true);
   });
 
   it("MAJOR (adversary, sequential form): the loser of two restores, arriving after the winner committed, must not delete the live row's vector", async () => {
@@ -221,13 +223,15 @@ describe("restore", () => {
     const staleRead = await getTrashedEntry(t.env, undefined, "a"); // both requests read the trash row
     const win = await restoreEntry(t.env, staleRead!, { actorId: "u", channel: "rest" }, cfg);
     expect(win.status).toBe("restored");
-    expect(vz.store.has("a")).toBe(true);
+    const listed = () => t.one<any>(`SELECT vector_ids FROM entries WHERE id = 'a'`).then((r) => JSON.parse(r.vector_ids) as string[]);
+    const [winnerId] = await listed();
+    expect(vz.store.has(winnerId)).toBe(true);
     const lose = await restoreEntry(t.env, staleRead!, { actorId: "u", channel: "rest" }, cfg);
     // The upfront liveness check finds the winner's row and reports conflict before embedding at
     // all — the same outcome the spec asks for ("only if the id is not in entries"), reached earlier.
     expect(lose.status).toBe("conflict");
     expect(await t.one(`SELECT id FROM entries WHERE id = 'a'`)).not.toBeNull();
-    expect(vz.store.has("a")).toBe(true);
+    expect(vz.store.has(winnerId)).toBe(true);
   });
 
   it("is scoped like forget: a teammate's company row cannot be restored by the wrong caller", async () => {
@@ -329,12 +333,14 @@ describe("round 2 adversary: a slow losing restore (checklist 36g)", () => {
     expect((await restoreEntry(t.env, stale!, { actorId: "u", channel: "rest" }, cfg)).status).toBe("restored");
     const upd = await post("/update", { id: "a", content: "new text after restore" });
     expect(upd.status).toBe(200);
-    expect(vz.store.get("a")?.content).toBe("new text after restore");
     release();
     expect(["conflict", "not_found"]).toContain((await loser).status);
 
-    const live = await t.one<any>(`SELECT content FROM entries WHERE id = 'a'`);
+    // Every vector of the entry is one the row lists, describing its text: the loser's upload is gone.
+    const live = await t.one<any>(`SELECT content, vector_ids FROM entries WHERE id = 'a'`);
     expect(live.content).toBe("new text after restore");
-    expect(vz.store.get("a")?.content).toBe(live.content);
+    const ids = JSON.parse(live.vector_ids) as string[];
+    for (const id of ids) expect(vz.store.get(id)?.content).toBe(live.content);
+    expect([...vz.store.entries()].filter(([, m]: any) => m.parentId === "a").map(([k]) => k).sort()).toEqual([...ids].sort());
   });
 });

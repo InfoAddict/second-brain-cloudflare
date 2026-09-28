@@ -190,8 +190,9 @@ describe("adversary: Delete forever after a failed vector delete (ADV-trash-5)",
     // A long, non-mirrored memory: storeEntry would have chunked this into more than one vector.
     const long = "word ".repeat(20_000);
     t.seed("a", { content: long, source: "api", vector_ids: '["a-chunk-0","a-chunk-1"]' });
-    vz.store.set("a-chunk-0", { content: long.slice(0, 100) });
-    vz.store.set("a-chunk-1", { content: long.slice(100, 200) });
+    // Real vectors carry metadata.parentId; Delete forever deletes only those naming the entry (T-0089.1.1).
+    vz.store.set("a-chunk-0", { content: long.slice(0, 100), parentId: "a" });
+    vz.store.set("a-chunk-1", { content: long.slice(100, 200), parentId: "a" });
     // The forget's own vector delete fails (transient), same as the test above: the chunks survive
     // into the trash, so Delete forever is the only thing that can still remove them.
     const del = (vz.index as any).deleteByIds;
@@ -217,7 +218,8 @@ describe("round 2 adversary: Delete forever from the trash after a failed forget
     const append = await worker.fetch(new Request("http://localhost/append", { method: "POST", headers, body: JSON.stringify({ id, addition: "the private addition" }) }), t.env, ctx);
     expect(append.status).toBe(200);
     const ids = JSON.parse((await t.one<any>(`SELECT vector_ids FROM entries WHERE id = ?`, id))!.vector_ids) as string[];
-    expect(ids.some((v) => v.startsWith(`${id}-update-`))).toBe(true);
+    // The addition's own chunk, under a fresh per-upload id (T-0089.1.1).
+    expect(ids).toHaveLength(2);
 
     // Forget's Vectorize delete fails (non-fatal): every vector stays in the index, but the
     // trash row now carries this entry's real ids (round 2 fix), not just what content derives.

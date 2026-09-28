@@ -85,7 +85,13 @@ describe("system-write races", () => {
     console.log("workspace race:", result.status, old, vectors.get("old"));
     expect(result.status).not.toBe("merged");
     expect(old.content).toBe("Old digest");
-    expect(vectors.get("old")?.workspace_id).toBe("other-workspace");
+    // Per-upload vector ids (T-0089.1.1): the lost merge's own upload (stamped for the old workspace) is
+    // deleted, and the row lists none of it.
+    const oldRow = await env.DB.prepare("SELECT vector_ids FROM entries WHERE id = 'old'").first() as any;
+    const mergeUpload = [...vectors.entries()].filter(([, m]) => m.parentId === "old" && String(m.content).includes("new system text")).map(([k]) => k);
+    const deletedIds = (env.VECTORIZE.deleteByIds as any).mock.calls.flatMap((c: any) => c[0]);
+    for (const id of mergeUpload) expect(deletedIds).toContain(id);
+    expect((JSON.parse(oldRow.vector_ids) as string[]).some(id => mergeUpload.includes(id))).toBe(false);
     sqlite.close();
   });
   it("moving after scoped hydration but before merge snapshot must not cross workspaces", async () => {
@@ -154,7 +160,8 @@ describe("system-write races", () => {
     expect(old.contradiction_losses).toBe(0);
     expect(newcomer.contradiction_wins).toBe(0);
     expect(events).toHaveLength(0);
-    expect(vectors.get(result.id)?.tags).toEqual(JSON.parse(row.tags));
+    // Vector ids are per upload (T-0089.1.1): read the fallback draft's vector through its parentId.
+    expect([...vectors.values()].filter(m => m.parentId === result.id).pop()?.tags).toEqual(JSON.parse(row.tags));
     sqlite.close();
   });
 

@@ -159,7 +159,8 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // MOVED 72 -> 73 (T-0089.1.1 round 3): the pass's content read of the rows it chose.
     expect(L.calls.length).toBeLessThanOrEqual(73);
     // MOVED 22 -> 23: the pass resolves config (one KV read) only on a night with deferred rows.
-    expect(L.kv.length).toBe(23);
+    // MOVED 23 -> 24 (T-0089.1.1 round 5): plus the failure-count read, only on a night with deferred rows.
+    expect(L.kv.length).toBe(24);
     // The cron makes no external (non-Cloudflare) fetches at all, so it is nowhere near the
     // separate 50-external-fetch cap either.
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -176,7 +177,8 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // MOVED 49 -> 51 (T-0089.1.1 close-out): the nightly vectorize-pending read and write batch.
     // MOVED 51 -> 52 (T-0089.1.1 round 3): the pass plans from lengths, then reads only the chosen rows' content.
     expect(L.calls.length).toBe(52);
-    expect(L.kv.length).toBe(20);
+    // MOVED 20 -> 21 (T-0089.1.1 round 5): the vectorize-pending failure-count read.
+    expect(L.kv.length).toBe(21);
   });
 });
 
@@ -206,34 +208,35 @@ describe("R4-B3 (MINOR): a compare-and-set miss on a CONTENT race costs +4 per r
     return async (n: number) => { if (n <= times) await race.bind(text(n), "e1").run(); };
   };
 
-  it("updateEntryContent: one content miss then success costs 6, not 4", async () => {
+  it("updateEntryContent: one content miss then success costs 4", async () => {
     t = await makeTrashEnv();
     t.seed("e1");
     const { env, L } = counted(t.env, { beforeBatch: contentRace(t, (n) => `raced ${n}`, 1) });
     const r = await updateEntryContent(env, "e1", "new content", DEFAULTS, undefined, undefined, writeCtx(), change(), t.roots.ownerPersonalWorkspaceId);
     expect(r.status).toBe("updated");
-    // The retry's re-read, restoreRowVectors' own read + vector_ids UPDATE (store.ts:184, 210), then the batch.
-    expect(L.calls).toHaveLength(6);
+    // MOVED 6 -> 4 (T-0089.1.1 round 6): read + batch, then the retry's read + batch. A lost attempt now
+    // deletes its own upload (Vectorize only); restoreRowVectors' D1 read and write are gone.
+    expect(L.calls).toHaveLength(4);
   });
 
-  it("updateEntryContent: exhausting every attempt on content races costs 12, not 8", async () => {
+  it("updateEntryContent: exhausting every attempt on content races costs 2 per attempt", async () => {
     t = await makeTrashEnv();
     t.seed("e1");
     const { env, L } = counted(t.env, { beforeBatch: contentRace(t, (n) => `raced ${n}`) });
     const r = await updateEntryContent(env, "e1", "new content", DEFAULTS, undefined, undefined, writeCtx(), change(), t.roots.ownerPersonalWorkspaceId);
     expect(r.status).toBe("conflict");
-    // 2 + 4 + 4 + the final restoreRowVectors' 2.
-    expect(L.calls).toHaveLength(WRITE_CAS_ATTEMPTS * 2 + 6);
+    // MOVED 12 -> 6 (round 6): read + batch per attempt, nothing more.
+    expect(L.calls).toHaveLength(WRITE_CAS_ATTEMPTS * 2);
   });
 
-  it("appendToEntry's long branch (row past CHUNK_MAX_CHARS): exhausting every attempt costs 14, not 6", async () => {
+  it("appendToEntry's long branch (row past CHUNK_MAX_CHARS): exhausting every attempt costs 2 per attempt", async () => {
     t = await makeTrashEnv();
     t.seed("e1", { content: "x".repeat(1700) });
     const { env, L } = counted(t.env, { beforeBatch: contentRace(t, (n) => "y".repeat(1700) + n) });
     await expect(appendToEntry(env, "e1", "", "met Sam", [], "api", DEFAULTS, undefined, writeCtx(), change(), undefined, t.roots.ownerPersonalWorkspaceId))
       .rejects.toThrow("changed while saving");
-    // Every miss runs restoreRowVectors, and the last one runs it AGAIN, redundantly: 3 x (read + batch + restore 2), plus a second restore of 2.
-    expect(L.calls).toHaveLength(WRITE_CAS_ATTEMPTS * 2 + 8);
+    // MOVED 14 -> 6 (round 6): read + batch per attempt; each miss only deletes its own upload in Vectorize.
+    expect(L.calls).toHaveLength(WRITE_CAS_ATTEMPTS * 2);
   });
 });
 

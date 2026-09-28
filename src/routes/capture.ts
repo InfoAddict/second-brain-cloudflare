@@ -13,6 +13,7 @@ import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
 import { parseExplicitWhen } from "../when/input";
+import { contentByteLength, isOverContentLimit, tooLargeRestBody, MAX_CONTENT_BYTES } from "../lib/content-size";
 
 /** Validate route-only volatility input; MCP gets equivalent Zod validation. */
 /** Where this caller's writes land and who gets stamped on them. */
@@ -70,6 +71,9 @@ export async function handleCaptureRoutes(
     if (badProjectTag) return json({ ok: false, error: badProjectTag }, 400);
     if (typeof body.content === "string" && body.content.includes("\0")) return json({ ok: false, error: "NUL is not allowed" }, 400);
     if (!body.content?.trim()) return json({ ok: false, error: "content is required" }, 400);
+    // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note, so a very large paste cannot
+    // spend the Worker's 10 ms CPU budget on one write. Checked before anything is written.
+    if (isOverContentLimit(body.content)) return json(tooLargeRestBody(), 413);
     if (body.workspace !== undefined && body.workspace !== "personal" && body.workspace !== "company") {
       return json({ ok: false, error: 'workspace must be "personal" or "company"' }, 400);
     }
@@ -203,6 +207,13 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: mirrorEditError(source) }, 409);
     }
 
+    // Rahil's decision (18-copy-deck.md 6.8): checks the RESULTING total, not the addition
+    // alone — an append that would push an already-large memory over 128 KB is refused before
+    // anything is written, same as a fresh capture or a full replacement.
+    if (contentByteLength(existingContent) + contentByteLength(addition) > MAX_CONTENT_BYTES) {
+      return json(tooLargeRestBody(), 413);
+    }
+
     let indexed: boolean;
     try {
       const writeCtx = await writeContextFor(env, identity);
@@ -240,6 +251,8 @@ export async function handleCaptureRoutes(
     if (badProjectTag) return json({ ok: false, error: badProjectTag }, 400);
     if (typeof body.content === "string" && body.content.includes("\0")) return json({ ok: false, error: "NUL is not allowed" }, 400);
     if (!body.content?.trim()) return json({ ok: false, error: "content is required" }, 400);
+    // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note, checked before anything is written.
+    if (isOverContentLimit(body.content)) return json(tooLargeRestBody(), 413);
 
     const updateVol = readVolatility(body.volatility);
     if (updateVol.error) return json({ ok: false, error: updateVol.error }, 400);

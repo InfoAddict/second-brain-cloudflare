@@ -22,7 +22,9 @@ afterEach(async () => { await Promise.allSettled(pending); vi.restoreAllMocks();
 // row's current workspace instead means the clear lands wherever the row actually is, so a race
 // into another workspace now empties vector_ids there (self-healing via /vectorize-pending)
 // instead of leaving a reference to a vector this call just deleted.
-it("clears vectors in the row's current workspace, not the caller's stale one, after a lost system merge and embed failure", async () => {
+// Round 6 (per-upload vector ids): a lost merge deletes only its own upload; the row's listed vectors
+// are never touched, so there is no clear to pin and no dangling reference to create.
+it("a lost system merge into a row that moved leaves the row's own vectors listed and undeleted", async () => {
   resetDatabaseInit();
   const sqlite = makeSqliteD1();
   let restoreEmbedFails = false;
@@ -60,9 +62,8 @@ it("clears vectors in the row's current workspace, not the caller's stale one, a
   const target = sqlite.rows().find(r => r.id === "target")!;
   expect(raced).toBe(true);
   expect(target.workspace_id).toBe("other-private");
-  // R4-V3: the clear is pinned to the row's current workspace ("other-private", read before the
-  // embed failure), so it lands there and empties vector_ids — never a dangling reference to a
-  // vector this same call went on to delete.
-  expect(target.vector_ids).toBe("[]");
+  expect(target.vector_ids).toBe('["old-vector"]');
+  const deletedIds = (env.VECTORIZE.deleteByIds as any).mock.calls.flatMap((c: any) => c[0]);
+  expect(deletedIds).not.toContain("old-vector");
   sqlite.close();
 });

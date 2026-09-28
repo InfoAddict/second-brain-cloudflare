@@ -4,6 +4,12 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 ## [Unreleased]
 
+**Session hooks**
+
+- Session start no longer spends Workers AI allowance: hooks inject your ranked memories directly.
+- Session capture keeps only what you typed and the assistant's replies: instruction files, environment details and tool context are left out, and likely secrets are masked.
+- Cursor recall comes from session start; use the MCP recall tool for guaranteed recall.
+
 **Activity history**
 
 - A failed edit no longer shows up in a memory's history as an update. When the search re-index failed and the memory was left unchanged, the dashboard's edit still recorded an "updated" event; now only a saved edit does.

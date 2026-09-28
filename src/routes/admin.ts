@@ -1,11 +1,11 @@
 import { hasCapsuleTag } from "../tags/system";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from "../compression/eligibility";
 import { intParam, json } from "../lib/http";
-import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
+import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
 import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere, scopeWhereForIdRead } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
@@ -269,7 +269,7 @@ export async function handleAdminRoutes(
       });
       if (result.vectorIds.length) {
         try {
-          await deleteVectorIds(env, result.vectorIds);
+          await deleteEntryVectors(env, result.ownedVectors);
         } catch (e) {
           // The D1 rows and the audit row are already committed: the removal
           // succeeded. A failed index delete only leaves dead vectors behind,
@@ -943,11 +943,15 @@ export async function handleAdminRoutes(
     // written.
     const latchedAtRaw = await env.OAUTH_KV.get(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY).catch(() => null);
     const latchedAt = latchedAtRaw ? Number(latchedAtRaw) : null;
+    // T-0101.8.5: the KV marker set once history starts being recorded (T-0089.1.1),
+    // read here only — no D1 fallback. Omitted, not null, when it has never been set.
+    const historySinceRaw = await env.OAUTH_KV.get(VERSIONS_SINCE_KV_KEY).catch(() => null);
     return json({
       ok: vectorize.ok,
       version: SB_VERSION,
       vectorize: { ...vectorize, workspaceFilter: { supported, degradedQueries, latchedAt } },
       team,
+      ...(historySinceRaw ? { history_since: Number(historySinceRaw) } : {}),
     });
   }
 
@@ -1471,8 +1475,8 @@ export async function handleAdminRoutes(
       try {
         // cfg carries the configured embedding model; indexPendingRow stamps the ROW's own
         // workspace and author, never the admin's.
-        await indexPendingRow(env, row, cfg);
-        processed++;
+        // False: the row changed content or workspace mid-embed; it stays pending for the next call.
+        if (await indexPendingRow(env, row, cfg)) processed++; else failed++;
       } catch (e) {
         console.error("Re-embed failed for entry", row.id, e);
         failed++;

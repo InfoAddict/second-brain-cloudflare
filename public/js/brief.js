@@ -245,6 +245,14 @@ async function briefResolvePattern(id, action, btn) {
     // with the same paint the collapse happens in.
     const panelBody = card.closest('.panel-body')
     if (panelBody && typeof refitThread === 'function') refitThread(panelBody)
+    if (typeof undoToast === 'function') {
+      undoToast(action === 'confirm' ? t('undo.insightConfirmed') : t('undo.insightDismissed'), id, {
+        onUndone: () => {
+          if (typeof loadBrief === 'function') loadBrief()
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch {
     card.querySelectorAll('button').forEach((b) => (b.disabled = false))
     btn.classList.remove('digest-btn--loading')

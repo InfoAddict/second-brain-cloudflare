@@ -207,6 +207,20 @@ async function resolveSelectedPatterns(action, btn) {
     // A page emptied by a bulk action should refill rather than show a
     // "N more" button over nothing.
     if (!loadedPatterns.length && patternsTotal > 0) loadPatternQueue()
+
+    // The resolve itself is one request for the whole selection, but /undo is
+    // per entry, so undoing this toast calls undoMany rather than the usual
+    // single-id undoToast.
+    if (typeof showToast === 'function' && typeof undoMany === 'function') {
+      showToast(tPlural('undo.insightsUpdated', ids.length), {
+        action: t('history.undo'),
+        onAction: async () => {
+          await undoMany(ids)
+          if (typeof loadPatternQueue === 'function') loadPatternQueue()
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch {
     btn.classList.remove('digest-btn--loading')
     btn.innerHTML = `<i class="ti ti-alert-triangle"></i> ${escHtml(t('patterns.failed'))}`

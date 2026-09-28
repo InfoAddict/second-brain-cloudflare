@@ -52,7 +52,8 @@ describe("lost pinned deprecation", () => {
     expect(JSON.parse(mine.tags)).not.toContain("contradiction-resolved");
     expect(result.status).toBe("stored");
     expect(result.tags).not.toContain("contradiction-resolved");
-    expect(vectors.get(result.id)?.tags).toEqual(JSON.parse(mine.tags));
+    // Vector ids are per upload (T-0089.1.1): read the newcomer's vector through its parentId.
+    expect([...vectors.values()].filter((m: any) => m.parentId === result.id).pop()?.tags).toEqual(JSON.parse(mine.tags));
     sqlite.close();
   });
 });

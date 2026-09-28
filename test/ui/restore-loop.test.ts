@@ -146,4 +146,79 @@ describe("runImportLoop", () => {
     await expect(runImportLoop({ entries: new Array(100), edges: [] }, flaky))
       .rejects.toThrow(/500/);
   });
+
+  it("accumulates a Worker's too_large count across pages (128 KB size cap, T-0101.10)", async () => {
+    const runImportLoop = loadRunImportLoop();
+    let call = 0;
+    const post = async () => {
+      call += 1;
+      return call === 1
+        ? { imported: 40, skipped: 0, failed: 0, too_large: 2, edges_imported: 0, edges_skipped: 0, edges_failed: 0, next_offset: 40, remaining_entries: 10, remaining_edges: 0 }
+        : { imported: 10, skipped: 0, failed: 0, too_large: 1, edges_imported: 0, edges_skipped: 0, edges_failed: 0, next_offset: 50, remaining_entries: 0, remaining_edges: 0 };
+    };
+
+    const totals = await runImportLoop({ entries: new Array(50), edges: [] }, post);
+    expect(totals.too_large).toBe(3);
+  });
+});
+
+/** renderRestoreDone: the summary line shown once the walk above finishes. */
+describe("renderRestoreDone", () => {
+  function loadSettings() {
+    const els = new Map<string, any>();
+    const makeEl = () => ({
+      innerHTML: "",
+      hidden: false,
+      style: {} as Record<string, string>,
+    });
+    const ctx: any = {
+      console,
+      document: {
+        getElementById: (id: string) => {
+          if (!els.has(id)) els.set(id, makeEl());
+          return els.get(id);
+        },
+      },
+    };
+    ctx.globalThis = ctx;
+    ctx.window = ctx;
+    vm.createContext(ctx);
+    installI18n(ctx, "en");
+    for (const f of ["public/utils.js", "public/js/settings.js"]) {
+      vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
+    }
+    ctx.__els = els;
+    return ctx;
+  }
+
+  it("shows the copy deck's too-large import line (128 KB size cap, T-0101.10)", () => {
+    const ctx = loadSettings();
+    ctx.renderRestoreDone({ imported: 40, skipped: 0, failed: 0, too_large: 1, edges_imported: 0, edges_failed: 0 });
+    expect(ctx.__els.get("restore-section").innerHTML).toContain(
+      "1 memory was too long to import and was skipped.",
+    );
+  });
+
+  it("uses the plural form for more than one", () => {
+    const ctx = loadSettings();
+    ctx.renderRestoreDone({ imported: 40, skipped: 0, failed: 0, too_large: 3, edges_imported: 0, edges_failed: 0 });
+    expect(ctx.__els.get("restore-section").innerHTML).toContain(
+      "3 memories were too long to import and were skipped.",
+    );
+  });
+
+  it("says nothing about it when nothing was too large", () => {
+    const ctx = loadSettings();
+    ctx.renderRestoreDone({ imported: 40, skipped: 0, failed: 0, too_large: 0, edges_imported: 0, edges_failed: 0 });
+    expect(ctx.__els.get("restore-section").innerHTML).not.toContain("too long to import");
+  });
+
+  it("speaks Italian when the page does", () => {
+    const ctx = loadSettings();
+    ctx.initI18n("it");
+    ctx.renderRestoreDone({ imported: 40, skipped: 0, failed: 0, too_large: 1, edges_imported: 0, edges_failed: 0 });
+    expect(ctx.__els.get("restore-section").innerHTML).toContain(
+      "1 ricordo era troppo lungo per essere importato ed è stato saltato.",
+    );
+  });
 });

@@ -3,15 +3,43 @@ import { D1Mock } from "./d1-mock";
 import type { Env } from "../../src/env";
 
 export function makeVectorizeMock(overrides: Partial<VectorizeIndex> = {}): VectorizeIndex {
-  return {
+  const index: any = {
     query: vi.fn().mockResolvedValue({ matches: [] }),
     insert: vi.fn().mockResolvedValue({ mutationId: "m" }),
     deleteByIds: vi.fn().mockResolvedValue({ mutationId: "m" }),
     upsert: vi.fn().mockResolvedValue({ mutationId: "m" }),
-    getByIds: vi.fn().mockResolvedValue([]),
     describe: vi.fn().mockResolvedValue({}),
     ...overrides,
-  } as unknown as VectorizeIndex;
+  };
+  if (!overrides.getByIds) index.getByIds = indexedGetByIds(index);
+  return index as VectorizeIndex;
+}
+
+const callArgs = (fn: any): any[] => (fn?.mock?.calls ?? []).map((c: any[]) => c[0]);
+
+/**
+ * The default getByIds of a Vectorize double (T-0089.1.1: deleteEntryVectors reads each vector's
+ * metadata.parentId before deleting). It answers the way real data looks: a vector written through
+ * this double (upsert/insert spies) with its own metadata, else a vector for every id a row lists,
+ * owned by that row (makeTestEnv wires `__owners` from the test's D1); minus ids deleted through it.
+ * A test about aliasing or about reading vectors back supplies its own getByIds (or ownedBy()).
+ */
+function indexedGetByIds(index: any) {
+  // The spies as created: a test that later wraps index.upsert still calls through to these.
+  const spies = { upsert: index.upsert, insert: index.insert, deleteByIds: index.deleteByIds };
+  return vi.fn(async (ids: string[]) => {
+    const deleted = new Set(callArgs(spies.deleteByIds).flat());
+    const written = new Map<string, any>();
+    for (const batch of [...callArgs(spies.upsert), ...callArgs(spies.insert)]) for (const v of batch ?? []) written.set(v.id, v);
+    const listed: Map<string, string> = index.__owners ? await index.__owners() : new Map();
+    return ids.filter(id => !deleted.has(id) && (written.has(id) || listed.has(id)))
+      .map(id => written.get(id) ?? { id, values: [] as number[], metadata: { parentId: listed.get(id) } });
+  });
+}
+
+/** A getByIds double for vectors a test declares directly: `owners` maps vector id to its entry (parentId). */
+export function ownedBy(owners: Record<string, string>) {
+  return vi.fn(async (ids: string[]) => ids.filter(id => id in owners).map(id => ({ id, values: [] as number[], metadata: { parentId: owners[id] } })));
 }
 
 export function makeAIMock(): Ai {
@@ -64,7 +92,7 @@ export function makeMemoryKV(): KVNamespace {
 }
 
 export function makeTestEnv(db?: D1Mock, overrides: Partial<Env> = {}): Env {
-  return {
+  const env: Env = {
     DB: (db ?? new D1Mock()) as unknown as D1Database,
     VECTORIZE: makeVectorizeMock(),
     AI: makeAIMock(),
@@ -72,4 +100,13 @@ export function makeTestEnv(db?: D1Mock, overrides: Partial<Env> = {}): Env {
     OAUTH_KV: makeKVMock(),
     ...overrides,
   };
+  // Vectors a row lists exist and belong to it (see indexedGetByIds); a double with no getByIds gets it too.
+  const index = env.VECTORIZE as any;
+  if (index && typeof index.getByIds !== "function") index.getByIds = indexedGetByIds(index);
+  // The DB double remembers which row listed which vector id (D1Mock / the SQLite facade).
+  if (index && index.__owners === undefined) {
+    const db = env.DB as any;
+    index.__owners = async () => (typeof db?.__vectorOwners === "function" ? db.__vectorOwners() : new Map());
+  }
+  return env;
 }

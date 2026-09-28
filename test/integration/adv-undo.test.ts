@@ -230,7 +230,9 @@ describe("ADV-U6 (MINOR): a failed revert batch leaves the index describing text
   it("vectors match the live row after the batch throws", async () => {
     await seed("vf1", { content: "before" });
     await updateEntryContent(env, "vf1", "after", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
-    expect(store.get("vf1")?.metadata.content).toBe("after");
+    // Per-upload vector ids (T-0089.1.1): read the vector the row lists, not one named after the entry.
+    const listedVf1 = () => (JSON.parse(row("vf1").vector_ids) as string[])[0];
+    expect(store.get(listedVf1())?.metadata.content).toBe("after");
     const raw = env.DB as any;
     const failing = { ...env, DB: { ...raw, prepare: (s: string) => raw.prepare(s), batch: async (stmts: any[]) => {
       if (stmts.some(s => s.sourceSql?.().includes("json_extract(ov.meta, '$.nonce')"))) throw new Error("D1_ERROR: storage operation exceeded timeout");
@@ -238,7 +240,7 @@ describe("ADV-U6 (MINOR): a failed revert batch leaves the index describing text
     } } } as unknown as Env;
     await expect(revertEntry(failing, owner, "vf1", change(), DEFAULTS, undefined, owner.personalWorkspaceId)).rejects.toThrow();
     expect(row("vf1").content).toBe("after");
-    expect(store.get("vf1")?.metadata.content).toBe("after"); // actual: "before"
+    expect(store.get(listedVf1())?.metadata.content).toBe("after");
   });
 });
 

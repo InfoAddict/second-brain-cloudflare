@@ -326,6 +326,11 @@ describe("captureEntry()", () => {
     expect(JSON.parse(fresh.tags)).toContain("duplicate-candidate");
   });
 
+  // D2 (T-0089.4.6, 16-t3-t4-trust-spec.md Lane D) moved to
+  // test/unit/capture-entry-system-contradiction.test.ts: the third case (a
+  // system job deprecating its own row) exercises a compare-and-set UPDATE
+  // that D1Mock does not model, so all three need real SQLite.
+
   it("replace: deletes old vectors after re-embedding", async () => {
     db.entries.push({
       id: "existing", content: "I use VSCode", tags: "[]", source: "api",
@@ -344,7 +349,8 @@ describe("captureEntry()", () => {
     const { ctx } = makeCtx();
     await captureEntry("I switched to Cursor", [], "api", env, ctx);
     // Only the stale chunk is deleted; the reused "existing" vector survives.
-    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing-chunk-1"]);
+    // Per-upload vector ids (T-0089.1.1): the re-embed never reuses an old id, so every old one is retired.
+    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing", "existing-chunk-1"]);
   });
 
   it("replace: falls through to normal insert when target not found in DB", async () => {
@@ -428,7 +434,8 @@ describe("captureEntry()", () => {
     const { ctx } = makeCtx();
     await captureEntry("I like dark mode at night", [], "api", env, ctx);
     // Only the stale chunk is deleted; the reused "existing" vector survives.
-    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing-chunk-1"]);
+    // Per-upload vector ids (T-0089.1.1): the re-embed never reuses an old id, so every old one is retired.
+    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing", "existing-chunk-1"]);
   });
 
   // ── Smart merge: keep_both falls back to flagged (existing behaviour) ────────
@@ -675,6 +682,17 @@ describe("captureEntry()", () => {
     const added = db.entries.find(e => e.id === result.id);
     expect(added, "returned id must be a stored row").toBeDefined();
     expect(JSON.parse(added!.tags)).toContain("duplicate-candidate");
+  });
+
+  it("a codex-session transcript never replaces a memory of another source (same rule as claude-code)", async () => {
+    db.entries = [existingNote("claude")];
+    env = makeTestEnv(db, { VECTORIZE: nearMatch(), AI: makeContradictionAI('{"action":"replace","target_id":"existing"}') });
+    const { ctx } = makeCtx();
+    const result = await captureEntry("User: we decided on Vectorize.\n\nAssistant: noted.", ["proj"], "codex-session", env, ctx);
+    expect(result.status).toBe("flagged");
+    if (result.status !== "flagged") return;
+    expect(db.entries).toHaveLength(2);
+    expect(db.entries.find(e => e.id === "existing")!.content).toBe("We decided to use Vectorize for semantic search.");
   });
 
   it("a transcript may replace its own earlier capture (same source)", async () => {

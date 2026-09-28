@@ -295,7 +295,13 @@ A successful response looks like `{"ok":true,"id":"..."}`.
 - **Calendar and email:** Google, Outlook, iCloud, and Gmail integrations
 - **iPhone and iPad:** Voice, text, and share-sheet shortcuts in [`integrations/ios-shortcuts/`](integrations/ios-shortcuts/)
 - **Claude Code:** session hooks that recall project context on start and save the conversation on exit — [`integrations/claude-code-hooks/`](integrations/claude-code-hooks/)
+- **Codex CLI:** session-start recall plus session-end capture ([`integrations/codex-cli-hooks/`](integrations/codex-cli-hooks/))
+- **Cursor:** session-start recall plus session-end capture; pair it with the MCP `recall` tool for reliable recall ([`integrations/cursor-hooks/`](integrations/cursor-hooks/))
+- **VS Code Copilot (Local harness):** session-start recall ([`integrations/vscode-copilot-hooks/`](integrations/vscode-copilot-hooks/))
+- **Gemini CLI:** session-start recall ([`integrations/gemini-cli-hooks/`](integrations/gemini-cli-hooks/))
 - **Dashboard:** Capture, recall, browse, graph, share, back up, and restore from the built-in web interface
+
+Not yet supported, revisit later: **Windsurf** (no documented session-start context injection event, only a post-response hook); **OpenCode** and **Oh My Pi** (plugin/event-callback APIs, not stdin/stdout scripts, so they need their own integration model rather than an adapter like the ones above).
 
 See [Capture from Anywhere](https://github.com/rahilp/second-brain-cloudflare/wiki/Capture-from-Anywhere) for setup and usage instructions.
 

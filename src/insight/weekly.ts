@@ -15,7 +15,7 @@ import { initializeDatabase } from "../db/init";
 import { captureEntry } from "../capture/entry";
 import { reasonOverPair, restatesRecent } from "./reason";
 import { PENDING_INSIGHT_SQL, WRITTEN_INSIGHT_SQL } from "../memory/patterns";
-import { edgeInsertStatement, kindsAllowEdge } from "../graph/edges";
+import { edgeInsertStatement, kindsAllowEdge, sameWorkspaceEdge } from "../graph/edges";
 import { getKind } from "../memory/kind";
 import type { TypedRelationship } from "./reason";
 import { isEligiblePair, parseTags } from "./candidates";
@@ -375,7 +375,11 @@ export async function runWeeklyInsights(
     // rejected.map/used.map, immediately before env.DB.batch(statements),
     // keeps the whole batch's statements prepared together — which is what
     // lets it join the status updates as a single subrequest.
-    const drawnFromPairs: { insightId: string; targetId: string; workspaceId: string }[] = [];
+    // Keyed by insight id, not appended: a second replace of the same insight
+    // in this run overwrites the first replace's pair rather than adding to
+    // it, so the edges emitted below describe only the insight's CURRENT
+    // pair, the one the last replace actually drew it from (T-0089.3.3).
+    const drawnFromByInsight = new Map<string, { targetId: string; workspaceId: string }[]>();
     const replacedInsightIds: string[] = [];
     // Typed edges the reasoning produced. Collected rather than written in the
     // loop for the same reason drawnFromPairs is: one batch, one subrequest.
@@ -526,9 +530,13 @@ export async function runWeeklyInsights(
         // A replaced insight was redrawn from THIS pair, so the pair it was drawn from
         // before no longer describes it. A merge keeps its edges and adds these.
         if (captured.status === "replaced") replacedInsightIds.push(captured.id);
-        for (const targetId of [candidate.a_id, candidate.b_id]) {
-          drawnFromPairs.push({ insightId: captured.id, targetId, workspaceId: insightWorkspace });
-        }
+        // Overwrites, not appends: a second write to the SAME insight id later
+        // in this run (a second replace drawing it from a different pair) must
+        // leave only its own pair here, not both (T-0089.3.3).
+        drawnFromByInsight.set(captured.id, [
+          { targetId: candidate.a_id, workspaceId: insightWorkspace },
+          { targetId: candidate.b_id, workspaceId: insightWorkspace },
+        ]);
       }
     }
 
@@ -554,10 +562,10 @@ export async function runWeeklyInsights(
       ...[...new Set(replacedInsightIds)].map(id => env.DB.prepare(
         // scope-exempt: cron: by-id, an insight the system job just replaced in the workspace it was drawing from
         `DELETE FROM edges WHERE source_id = ? AND type = 'drawn_from' AND provenance = 'system'`).bind(id)),
-      ...drawnFromPairs
-        .map(({ insightId, targetId, workspaceId }) => edgeInsertStatement(
-          insightId, targetId, "drawn_from", { provenance: "system", weight: 1, workspaceId, readableWorkspaceIds: [workspaceId] }, env,
-        ))
+      ...[...drawnFromByInsight.entries()]
+        .flatMap(([insightId, pairs]) => pairs.map(({ targetId, workspaceId }) => edgeInsertStatement(
+          insightId, targetId, "drawn_from", { provenance: "system", weight: 1, ...sameWorkspaceEdge(workspaceId) }, env,
+        )))
         .filter((stmt): stmt is D1PreparedStatement => stmt !== null),
       ...typedEdges
         .flatMap(({ sourceId, targetId, type, workspaceId }) => [
@@ -567,7 +575,7 @@ export async function runWeeklyInsights(
           // is why the DELETE comes last rather than first.
           edgeInsertStatement(sourceId, targetId, type, {
             provenance: "system", weight: INSIGHT_EDGE_WEIGHT,
-            metadata: { via: "insight-reasoning" }, workspaceId, readableWorkspaceIds: [workspaceId],
+            metadata: { via: "insight-reasoning" }, ...sameWorkspaceEdge(workspaceId),
           }, env),
           // WEIGHTS ARE HIGH-WATER MARKS, and this step propagates that into
           // typed edges. `max(weight, excluded.weight)` on the upsert (which

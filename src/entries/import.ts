@@ -4,7 +4,10 @@ import { edgeEndpointsReadableSql, isSymmetric, isValidEdgeType } from "../graph
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
+// MAX_ENTRY_ID_BYTES: the one bound on a caller-chosen entry id, applied through boundedEntryId.
+import { boundedEntryId } from "../vectorize/ids";
 import { parseImportedProject, type ImportedProject } from "../projects/registry";
+import { isOverContentLimit } from "../lib/content-size";
 
 /**
  * Default page size: array positions examined per call, inserts and skips alike.
@@ -126,9 +129,6 @@ export interface ImportOptions {
    * that have a real Identity must pass one resolved at the edge.
    */
   writeCtx?: WriteContext;
-  /** Workspaces the importer can read (readableWorkspaces). An edge is written only between entries
-   * in them; any other endpoint is skipped like a missing one. Defaults to writeCtx's workspace. */
-  readableWorkspaceIds?: string[];
 }
 
 export interface ImportSummary {
@@ -137,6 +137,10 @@ export interface ImportSummary {
   skipped: number;
   /** Of `skipped`, ids in the importer's own trash: restore them instead of importing over them. */
   skipped_in_trash: number;
+  /** Rahil's decision (18-copy-deck.md 6.8): entries skipped for being over the 128 KB cap, a
+   * subset of `skipped` broken out so the dashboard's "{n} memory was too long to import"
+   * summary line has its own clear count. */
+  skipped_too_large: number;
   failed: number;
   edges_imported: number;
   edges_skipped: number;
@@ -170,6 +174,8 @@ const DEFAULT_EDGE_WEIGHT = 0.5;
 
 interface PendingInsert {
   id: string;
+  /** The export's own id, when it was over MAX_ENTRY_ID_BYTES and the row takes a minted one instead. */
+  originalId?: string;
   content: string;
   tags: string[];
   source: string;
@@ -300,7 +306,8 @@ function orphanVersionsDelete(env: Env, ids: string[]) {
 /** The id the insert actually wrote (RETURNING); a fresh one means the export's id was taken. */
 function importedResult(row: PendingInsert, res: { results?: unknown[] } | undefined): ImportEntryResult {
   const id = (res?.results?.[0] as { id?: string } | undefined)?.id ?? row.id;
-  return id === row.id ? { id, status: "imported" } : { id, status: "imported", original_id: row.id };
+  const original = row.originalId ?? (id === row.id ? undefined : row.id);
+  return original === undefined ? { id, status: "imported" } : { id, status: "imported", original_id: original };
 }
 
 async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<string>> {
@@ -623,11 +630,14 @@ export async function importExportPayload(
   const projects = body.projects ?? [];
   const projectOffset = Math.min(Math.max(opts.projectOffset ?? 0, 0), projects.length);
   const writeCtx = opts.writeCtx ?? OWNER_WRITE_CONTEXT;
-  const readable = opts.readableWorkspaceIds ?? [writeCtx.workspaceId];
+  // Import edges are automatic (round 5): both endpoints in the importer's own workspace, where the
+  // imported entries land and the edge is stamped. Anything else is skipped like a missing endpoint.
+  const readable = [writeCtx.workspaceId];
 
   const results: ImportResultItem[] = [];
   let imported = 0;
   let skipped = 0;
+  let skipped_too_large = 0;
   let failed = 0;
   let edges_imported = 0;
   let edges_skipped = 0;
@@ -641,7 +651,14 @@ export async function importExportPayload(
   // chunked query over exactly the ids that might insert.
   const parsedPage: ({ row: PendingInsert } | { failure: ImportEntryResult })[] = [];
   for (const entry of page) {
-    parsedPage.push(parseEntryRow(entry));
+    const parsed = parseEntryRow(entry);
+    // One rule for every caller-chosen id (T-0089.1.1): over MAX_ENTRY_ID_BYTES it would leave no room
+    // for the per-upload vector suffix under Vectorize's 64-byte limit, so the row takes a minted id.
+    if ("row" in parsed) {
+      const bounded = await boundedEntryId(parsed.row.id);
+      if (bounded !== parsed.row.id) parsed.row = { ...parsed.row, originalId: parsed.row.id, id: bounded };
+    }
+    parsedPage.push(parsed);
   }
 
   const pageIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
@@ -652,7 +669,15 @@ export async function importExportPayload(
   const batchCounters = { imported: 0, failed: 0 };
   for (const p of parsedPage) {
     if ("failure" in p) {
-      failed++;
+      // "skipped" (currently only the too_large case) is not a validation failure: the record
+      // is well-formed, it is simply over Rahil's 128 KB cap, and the whole import must not
+      // fail because of it — see the copy deck's own distinct import summary line for it.
+      if (p.failure.status === "skipped") {
+        skipped++;
+        skipped_too_large++;
+      } else {
+        failed++;
+      }
       results.push(p.failure);
       continue;
     }
@@ -701,7 +726,13 @@ export async function importExportPayload(
     type ParsedEdge = { edge: PendingEdge } | { failure: ImportEdgeResult };
     const parsedEdges: ParsedEdge[] = [];
     for (const edge of edgePage) {
-      parsedEdges.push(parseEdgeRow(edge));
+      const parsed = parseEdgeRow(edge);
+      // An endpoint over MAX_ENTRY_ID_BYTES was imported under its minted id: follow it there.
+      if ("edge" in parsed) {
+        const [source_id, target_id] = await Promise.all([boundedEntryId(parsed.edge.source_id), boundedEntryId(parsed.edge.target_id)]);
+        parsed.edge = { ...parsed.edge, source_id, target_id };
+      }
+      parsedEdges.push(parsed);
     }
 
     // Endpoints the importer can READ, in one chunked scoped query. existingIds is not enough: it
@@ -758,6 +789,7 @@ export async function importExportPayload(
     imported,
     skipped,
     skipped_in_trash,
+    skipped_too_large,
     failed,
     edges_imported,
     edges_skipped,
@@ -790,6 +822,10 @@ function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: 
 
   const contentParsed = parseRequiredString(entry.content, "missing_content", "invalid_content");
   if (!contentParsed.ok) return { failure: { id, status: "failed", reason: contentParsed.reason } };
+  // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note. A skip, not a failure — the whole
+  // import must not fail over one oversize record, and the copy deck's own import summary line
+  // needs a distinct, clear count separate from ordinary validation failures.
+  if (isOverContentLimit(contentParsed.value)) return { failure: { id, status: "skipped", reason: "too_large" } };
 
   const tagsParsed = parseTags(entry.tags);
   if (!tagsParsed.ok) return { failure: { id, status: "failed", reason: tagsParsed.reason } };
