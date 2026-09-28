@@ -26,7 +26,11 @@ export type EntryEventName =
   // explicit write moved it, or a retraction flagged a memory built on the retracted one.
   | "superseded"
   | "validity_changed"
-  | "flagged";
+  | "flagged"
+  // Track 4 (16-t3-t4-trust-spec.md 5.4, 5.6): a write's scorer quarantined it out of recall, or a
+  // person or agent released a hold via undo.
+  | "held"
+  | "released";
 
 /** Where a change came from. Recorded on every version and on the events the domain layer writes. */
 export type AuditChannel = "rest" | "mcp" | `system:${string}` | "unspecified";

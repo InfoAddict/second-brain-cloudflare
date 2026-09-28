@@ -1463,6 +1463,16 @@ describe("the checker over the real source tree", () => {
     // MOVED (T-0089.1.1, merge of release/v4 ebc8010d): recomputed from a real check:scope run on the merged
     // tree, not by adding two independently-tracked totals: Track 1's 196/102/17 plus release/v4's own queries
     // (Track 7's calibration and standing-cache reads, lanes Q/R/D, BE-2) land at 198/102/18/1.
+    // MOVED 202/103/19/1 + 221/114/28/1 -> real --inventory output (merge of release/v4 d3b5b25c into
+    // v4/t7-c): this branch's own Track 7 deltas and release/v4's own independently-tracked deltas
+    // (T5 recall_log + T2 validity/supersede/retraction work, see history above) are
+    // independently-tracked deltas from the same base — recomputed against the real scanner output
+    // after combining rather than hand-reconciling the two.
+    // MOVED 227/115 -> 228/116 -> 227/115 (T-0089.4.2, Lane W follow-up, then withdrawn): the
+    // nightly quarantine-rescan pass's candidate SELECT briefly added +1 query/+1 documented
+    // exception; the too_long simplification removed rescan.ts (and the query) entirely.
+    // MOVED 227/115 -> 228/116 (T-0089.4.2, Codex review class A): restampVectorWorkspace's fresh
+    // isHeld re-check (src/capture/share.ts) adds one by-id SELECT of the vectors' owning rows.
     // MOVED 218/114/27/1 -> real --inventory output (merge of release/v4 57583d10 into v4/t2-b): this
     // branch's own Task B1/B2 validity deltas and release/v4's own independently-tracked deltas
     // (BE-1's listTrash query, S1's changes query, and T-0089.2.1 lane A's supersede/retraction/
@@ -1490,7 +1500,11 @@ describe("the checker over the real source tree", () => {
     // hydration statement: it is now a ternary between the byte-identical (no-standing) SQL string
     // and the standing-arm SQL string, two template literals where there was one, each carrying its
     // own scope-checked/validity markers so neither span reads as unscoped on its own.
-    ).toEqual({ queries: 232, exempt: 115, checked: 32, outerJoin: 1 });
+    // MOVED (merge of release/v4 5a98da4a into v4/t7-d, lane W merged): v4/t34-w's own class E/A
+    // deltas (+1 query, +1 documented exception: restampVectorWorkspace's isHeld re-check) and lane
+    // D's own Task 11/12 deltas above are independently-tracked from the same base c870e5ac —
+    // recomputed against the real scanner output on the merged tree, not hand-combined.
+    ).toEqual({ queries: 233, exempt: 116, checked: 32, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

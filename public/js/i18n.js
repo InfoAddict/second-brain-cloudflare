@@ -353,6 +353,16 @@ const I18N_EN = {
     footerPruned: 'Only the last {n} changes are kept.',
     footerNotRecorded: 'Changes before {date} were not recorded.',
     footerSharedCut: 'Earlier changes are visible only to {name}.',
+    // Lane W (T-0089.4.2, copy deck 9): the too-long hold's history entry. Not yet wired into
+    // any dashboard UI -- see the copy deck section 9 for the UI spots this is meant for (lane S).
+    reasonHeldTooLong: 'Held: too long to check automatically',
+  },
+  // Lane W (T-0089.4.2, copy deck 9): the too-long hold state (a note over about 5,000 words,
+  // held until the owner releases it). Keys only -- no dashboard chip or banner reads these yet;
+  // see the copy deck section 9 for the UI spots this is meant for (lane S).
+  held: {
+    tooLongChip: 'Held: too long',
+    tooLongLine: "Held out of search and away from your AI tools, because it's too long to check automatically for hidden instructions. Read it, and release it if it's fine. Shorter memories aren't held.",
   },
   undo: {
     // SH-2's write-site toasts: one per action, action label "Undo" on all.
@@ -1601,6 +1611,11 @@ const I18N_IT = {
     footerPruned: 'Vengono conservate solo le ultime {n} modifiche.',
     footerNotRecorded: 'Le modifiche precedenti al {date} non sono state registrate.',
     footerSharedCut: 'Le modifiche precedenti sono visibili solo a {name}.',
+    reasonHeldTooLong: 'Trattenuto: troppo lungo per il controllo automatico',
+  },
+  held: {
+    tooLongChip: 'Trattenuto: troppo lungo',
+    tooLongLine: 'Tenuto fuori dalla ricerca e lontano dai tuoi strumenti di IA, perché è troppo lungo per controllarlo automaticamente in cerca di istruzioni nascoste. Leggilo e rilascialo se va bene. I ricordi più brevi non vengono trattenuti.',
   },
   undo: {
     trashed: 'Spostato nel cestino',

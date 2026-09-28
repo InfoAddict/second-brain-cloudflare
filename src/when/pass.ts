@@ -56,6 +56,7 @@ import { initializeDatabase } from "../db/init";
 import { zonedMidnightMs } from "./timezone";
 import { openLoopSql } from "../memory/loops";
 import type { ScopeClause } from "../lib/scope";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 
 /** Model calls spent per night, hard ceiling. */
 export const WHEN_EXTRACT_PER_NIGHT = 20;
@@ -139,9 +140,13 @@ function candidateSql(hasCursor: boolean, scopeClause: string | null, now: numbe
   const sliceClause = scopeClause ? `AND ${scopeClause}` : "";
   // validity: current: a replaced note is not a when-extraction candidate either (T-0089.2.1)
   // scope-exempt: cron: the nightly pass's own single-workspace slice is folded into `scope` by the caller, same exemption shape as the other nightly passes; a direct/manual caller with no slice walks the whole corpus, same as before v3. GET /extract/dry-run instead passes a real scopeWhere(auth), so that path IS scoped.
+  // Codex review class E (T-0089.4.2): a held row's content must never reach judgeCommitment's
+  // prompt — excludeHeld's own rule, enforced in SQL here since this candidate list is read-only
+  // ids-and-content, never post-processed in JS before the model call.
   return `SELECT id, content, created_at FROM entries
           WHERE when_at IS NULL AND when_source IS NULL
             AND (${openLoopSql(now)} OR tags LIKE '%"volatility:volatile"%')
+            AND ${NOT_HELD_SQL}
             ${cursorClause}
             ${sliceClause}
           ORDER BY created_at ASC, id ASC

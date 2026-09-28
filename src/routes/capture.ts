@@ -18,6 +18,11 @@ import { parseExplicitWhen } from "../when/input";
 import { contentByteLength, isOverContentLimit, tooLargeRestBody, MAX_CONTENT_BYTES } from "../lib/content-size";
 import { parseValidityInput, updateEntryValidity, VALIDITY_WITH_CONTENT_ERROR, type UpdateValidityResult } from "../memory/validity";
 
+// Copy deck 9.1 (T-0089.4.2): too_long's own REST message, ahead of any T7 reply text or the
+// generic held message — there is no nightly check to wait on any more, just a note over the
+// scorer's budget that only the owner can read and release.
+const TOO_LONG_MESSAGE = "Saved, but held out of search because it is too long to check automatically. Read it and release it if it's fine. Shorter memories (about 5,000 words or less) are not held.";
+
 /** Validate route-only volatility input; MCP gets equivalent Zod validation. */
 /** Where this caller's writes land and who gets stamped on them. */
 export async function writeContextFor(
@@ -185,6 +190,15 @@ export async function handleCaptureRoutes(
         event: result.status === "stored" || result.status === "flagged" ? "created" : "updated",
         payload: { captureStatus: result.status, channel: "rest" },
       });
+      // 5.4: the hold's own event, written alongside the write's own.
+      if ((result.status === "stored" || result.status === "flagged") && result.held) {
+        auditEvent(env, ctx, {
+          entryId: result.id,
+          actorId: identity.userId,
+          event: "held",
+          payload: { reasons: result.held.reasons, score: result.held.score, channel: "rest" },
+        });
+      }
     }
 
     if (result.status === "blocked") {
@@ -229,12 +243,17 @@ export async function handleCaptureRoutes(
         warning: "similar",
         matchId: result.matchId,
         score: parseFloat((result.score * 100).toFixed(1)),
-        message: message ?? "Stored but similar entry exists: tagged as duplicate-candidate",
+        held: result.held ? { reason: result.held.reasons[0] } : null,
+        message: result.held?.reasons[0] === "too_long" ? TOO_LONG_MESSAGE : (message ?? "Stored but similar entry exists: tagged as duplicate-candidate"),
       }, ignoredReservedTags, t7Notes));
     }
     // Additive: older clients ignore the extra field, and the dashboard uses it
     // to show what was filed under what.
-    return json(withReservedNote({ ok: true, id: result.id, tags: result.tags ?? [], message: await t7Message() }, ignoredReservedTags, t7Notes));
+    return json(withReservedNote({
+      ok: true, id: result.id, tags: result.tags ?? [],
+      held: result.held ? { reason: result.held.reasons[0] } : null,
+      message: result.held?.reasons[0] === "too_long" ? TOO_LONG_MESSAGE : await t7Message(),
+    }, ignoredReservedTags, t7Notes));
   }
 
   // POST /append
@@ -276,22 +295,36 @@ export async function handleCaptureRoutes(
     }
 
     const cfg = await resolveConfig(env);
-    let indexed: boolean;
+    let appendResult: Awaited<ReturnType<typeof appendToEntry>>;
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
+      appendResult = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
     } catch (e) {
       if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
       if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
+    const { indexed, held, wasCanonical } = appendResult;
 
-    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "rest" } });
+    auditEvent(env, ctx, {
+      entryId: id, actorId: identity.userId, event: "appended",
+      payload: { channel: "rest", ...(wasCanonical ? { was_canonical: true } : {}) },
+    });
+    if (held) {
+      auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "held", payload: { reasons: held.reasons, score: held.score, channel: "rest" } });
+    }
     // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
     // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
     // hand from appendToEntry above, so this adds no second KV read.
     ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
+
+    if (held) {
+      const message = held.reasons[0] === "too_long"
+        ? TOO_LONG_MESSAGE
+        : "Update appended, but held out of recall: it looks like an instruction to an AI. Release it once you're sure it's fine.";
+      return json({ ok: true, id, held: { reason: held.reasons[0] }, message });
+    }
 
     return json({
       ok: true,
@@ -406,13 +439,35 @@ export async function handleCaptureRoutes(
     }
 
     // Only a write that happened is audited.
-    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "rest" } });
+    auditEvent(env, ctx, {
+      entryId: id, actorId: identity.userId, event: "updated",
+      payload: {
+        channel: "rest",
+        ...(result.wasCanonical ? { was_canonical: true } : {}),
+        ...(result.capsuleChanged ? { capsule_changed: true } : {}),
+      },
+    });
+    if (result.held) {
+      auditEvent(env, ctx, {
+        entryId: id, actorId: identity.userId, event: "held",
+        payload: { reasons: result.held.reasons, score: result.held.score, channel: "rest" },
+      });
+    }
     // New content plus an end date: the text first, then the window, each its own version.
     const endFields = hasValidity ? validityBody(await setValidity(row.workspace_id as string)).body : {};
     // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
     // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
     // hand from updateEntryContent above, so this adds no second KV read.
     ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
+
+    if (result.held) {
+      const message = result.held.reasons[0] === "too_long"
+        ? TOO_LONG_MESSAGE
+        : "Updated, but held out of recall: it looks like an instruction to an AI. Release it once you're sure it's fine.";
+      return json(withReservedNote({
+        ...endFields, ok: true, id, held: { reason: result.held.reasons[0] }, message,
+      }, ignoredReservedTags));
+    }
 
     if (!result.vectorIds) {
       return json(withReservedNote({
