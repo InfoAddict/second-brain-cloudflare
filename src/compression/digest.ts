@@ -11,6 +11,8 @@ import {
   compressionEligibilitySql,
   isTopicTag,
 } from "./eligibility";
+import type { ChangeContext } from "../lib/audit";
+import { guardedSnapshotManyStatement, pruneManyStatement, Params } from "../memory/versions";
 
 export async function synthesizeDigest(
   tag: string,
@@ -50,23 +52,78 @@ State of ${stateOf}:`;
   return digest.trim();
 }
 
-/** Mark digest sources and retry individually if the batch fails. */
-async function markSourcesRolledUp(env: Env, ids: string[], digestId: string, workspaceId: string): Promise<void> {
-  if (!ids.length) return;
+/**
+ * Mark digest sources and retry individually if the batch fails. Versioned: a rollup can be undone.
+ *
+ * Both the mark's WHERE and the snapshot's guard are built from the same per-source identity check
+ * (P3: a snapshot of a CAS-guarded write carries the same guard), so they cannot drift. A source
+ * that moved workspace mid-run, or whose text changed mid-run, misses the mark AND the version — a
+ * phantom rollup version, stamped with the wrong workspace or over text the digest never saw, would
+ * give it a 0.4x recall penalty and bar it from every future digest.
+ *
+ * The guard is (workspace_id, rowVersion, byte length of content) — read at the same moment the
+ * digest read the content, not the content itself: at the nightly cron's own worst case (50
+ * sources, its own `LIMIT 50`, up to 1 MB each), binding full content twice per source (the
+ * snapshot guard and the mark's WHERE, each its own statement) measured ~100 MB in one batch on
+ * real workerd D1 — the cron's whole subrequest budget for a single tag (COMPRESSION_MAX_TAGS_PER_RUN's
+ * own "about six" estimate, off by more than 15x at that size). `rowVersion` is
+ * COALESCE(updated_at, created_at) (entries.updated_at is NULL until first edit — see
+ * updated-at-coalesced.test.ts), computed once at read time; this narrows, rather than closes, the
+ * race an exact-content guard would catch: an edit landing in the same millisecond and producing
+ * text of the identical byte length would still slip through. The tuple list travels as one JSON
+ * parameter regardless of source count, so the whole batch is 3 statements, not 2N+1 — the D1
+ * bound-parameter cap (100 per statement) is also why: an OR-chain of per-source scalar guards
+ * would need 2 placeholders per source and blow that cap on its own past ~50 sources.
+ *
+ * The mark itself bumps updated_at (below) for exactly this reason: every writer of
+ * entries.content has to, or rowVersion stops tracking "last touched" for whoever reads it next,
+ * and a same-length edit could then slip past this guard at any time, not only within the same
+ * millisecond the narrowing above accepts. Audited elsewhere (mirror.ts's CAS update, store.ts's
+ * updateEntryContent/appendToEntry, capture/entry.ts's contradiction-resolution writes) — all
+ * already do; this was the one that did not, inherited unchanged from #278 through both adversary
+ * rounds until now.
+ */
+export async function markSourcesRolledUp(env: Env, sources: { id: string; content: string; rowVersion: number }[], digestId: string, workspaceId: string, config: Readonly<Config>): Promise<void> {
+  if (!sources.length) return;
   const note = `\n\n[Digest: ${digestId}]`;
-  const mark = (id: string) => env.DB.prepare(
-    `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ? AND workspace_id = ?`
-  ).bind(note, id, workspaceId);
+  const change: ChangeContext = { actorId: "", channel: "system:digest" };
+  const now = Date.now();
+
+  const batchFor = (batch: typeof sources) => {
+    const ids = batch.map(s => s.id);
+    const entries = batch.map(s => ({ id: s.id, rowVersion: s.rowVersion, contentBytes: new TextEncoder().encode(s.content).length }));
+    const p = new Params();
+    const notep = p.add(note);
+    const nowp = p.add(now);
+    const ws = p.add(workspaceId);
+    const tuples = p.add(JSON.stringify(entries.map(e => [e.id, e.rowVersion, e.contentBytes])));
+    // versioning: snapshot
+    const mark = env.DB.prepare(
+      `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ${notep}, updated_at = ${nowp}
+       WHERE workspace_id = ${ws}
+         AND EXISTS (
+           SELECT 1 FROM json_each(${tuples}) t
+           WHERE json_extract(t.value, '$[0]') = entries.id
+             AND json_extract(t.value, '$[1]') = COALESCE(entries.updated_at, entries.created_at)
+             AND json_extract(t.value, '$[2]') = length(CAST(entries.content AS BLOB))
+         )`,
+    ).bind(...p.values());
+    return [
+      guardedSnapshotManyStatement(env, { entries, workspaceId, reason: "rollup", content: { kind: "suffix" }, change, meta: { digestId }, now }),
+      mark,
+      pruneManyStatement(env, ids, config.VERSION_KEEP),
+    ];
+  };
 
   try {
-    await env.DB.batch(ids.map(mark));
+    await env.DB.batch(batchFor(sources));
   } catch (e) {
     console.error("Batched rolled-up mark failed; retrying per row (non-fatal):", e);
-    for (const id of ids) {
+    for (const source of sources) {
       try {
-        await mark(id).run();
+        await env.DB.batch(batchFor([source]));
       } catch (err) {
-        console.error(`Failed to update source entry ${id} (non-fatal):`, err);
+        console.error(`Failed to update source entry ${source.id} (non-fatal):`, err);
       }
     }
   }
@@ -254,7 +311,7 @@ export async function compressTag(
       ? projectFilterSql(workspaceRows)
       : { clause: `tags LIKE ? ${TAG_LIKE_ESCAPE}`, bindings: [tagLikePattern(tag)] };
     const { results: rawEntries } = await env.DB.prepare(`
-      SELECT id, content FROM entries
+      SELECT id, content, COALESCE(updated_at, created_at) AS row_version FROM entries
       WHERE ${member.clause}
         AND tags NOT LIKE '%"synthesized"%'
         AND tags NOT LIKE '%"auto-pattern"%'
@@ -278,7 +335,7 @@ export async function compressTag(
       continue;
     }
 
-    const rows = rawEntries.map(r => ({ id: r.id as string, content: r.content as string }));
+    const rows = rawEntries.map(r => ({ id: r.id as string, content: r.content as string, rowVersion: r.row_version as number }));
     const label = workspaceRows?.[0].name;
     const digestText = await synthesizeDigest(tag, rows, env, cfg, label);
     if (!digestText) continue;
@@ -303,7 +360,7 @@ export async function compressTag(
       continue;
     }
 
-    await markSourcesRolledUp(env, rows.map(r => r.id), result.id, workspaceId);
+    await markSourcesRolledUp(env, rows, result.id, workspaceId, cfg);
 
     // First successful digest defines the returned text/id; counts accumulate across
     // workspaces so a caller still learns how much was compressed tonight.

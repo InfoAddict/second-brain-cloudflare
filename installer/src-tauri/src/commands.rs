@@ -1179,6 +1179,27 @@ pub async fn open_details_window(app: AppHandle) {
 pub struct WorkerUpdateInfo {
     pub deployed_version: Option<String>,
     pub available_version: String,
+    /// This update crosses a major version boundary (e.g. 3.7 -> 4.0), which is
+    /// when a "what's new" block is worth showing.
+    pub crosses_major: bool,
+    /// This computer's identity is the brain's OWNER, not merely permitted to
+    /// run the update (`update_prompt_is_offerable`'s legacy-Worker exception
+    /// also returns true for a member on a pre-`owner`-key Worker). "What's
+    /// new in 4.0" names what changed for the brain the person owns, so it is
+    /// owner-only, strictly narrower than who may click the update button.
+    pub is_owner: bool,
+}
+
+/// Whether this computer's identity is the brain's owner. A solo install has
+/// no one else on it, so its holder is the owner by definition and no request
+/// is made. A team brain asks `/team/me` via the same probe the update-offer
+/// gate uses, but reads only `owner`, not the offer gate's broader
+/// "owner or legacy" allowance.
+async fn is_worker_update_owner(worker_url: &str, auth_token: &str) -> bool {
+    if !secure_store::is_team_mode() {
+        return true;
+    }
+    fetch_connection_role(worker_url, auth_token).await.owner
 }
 
 /// What the one authenticated request the app makes at launch found out.
@@ -1231,9 +1252,13 @@ async fn launch_check(dry_run: bool) -> LaunchCheck {
     }
     let bundled = worker_bundle::manifest().worker_version.clone();
     if crate::version::is_behind(deployed.as_deref(), &bundled) {
+        let crosses_major = crate::version::crosses_major(deployed.as_deref(), &bundled);
+        let is_owner = is_worker_update_owner(&info.worker_url, &info.auth_token).await;
         LaunchCheck::Update(WorkerUpdateInfo {
             deployed_version: deployed,
             available_version: bundled,
+            crosses_major,
+            is_owner,
         })
     } else {
         LaunchCheck::Nothing
@@ -1255,6 +1280,32 @@ pub async fn worker_update_available(
     session: State<'_, SetupSession>,
 ) -> Result<Option<WorkerUpdateInfo>, String> {
     Ok(compute_worker_update(session.dry_run).await)
+}
+
+/// The just-updated brain's actual trash retention, for the Done screen's
+/// major-version line (UX-D.1). `None` on any failure - the caller falls back
+/// to the shipped default rather than leaving the sentence half-true. Uses
+/// `settings_target`, so it reads the local demo brain in dry-run the same
+/// way the Advanced Settings window does.
+#[tauri::command]
+pub async fn worker_update_trash_retention_days(app: AppHandle) -> Option<i64> {
+    let (url, token, _locale) = settings_target(&app).ok()?;
+    let resp = reqwest::Client::new()
+        .get(format!("{}/config", url.trim_end_matches('/')))
+        .bearer_auth(&token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct Wrapper {
+        config: std::collections::HashMap<String, serde_json::Value>,
+    }
+    let body: Wrapper = resp.json().await.ok()?;
+    body.config.get("TRASH_RETENTION_DAYS")?.as_i64()
 }
 
 /// Whether the Worker-update prompt is this user's to see.

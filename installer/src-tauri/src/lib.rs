@@ -224,6 +224,7 @@ pub fn run() {
             commands::logout,
             commands::set_locale,
             commands::worker_update_available,
+            commands::worker_update_trash_retention_days,
             commands::begin_worker_update,
             commands::start_worker_update,
             commands::get_brain_settings,

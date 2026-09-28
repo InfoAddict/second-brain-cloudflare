@@ -108,6 +108,37 @@ pub static CONTROLS: &[Control] = &[
             lvl!("aggressive", "COMPRESSION_IMPORTANCE_THRESHOLD" => 5, "COMPRESSION_MIN_RECALL" => 4, "COMPRESSION_MIN_AGE_MS" => 30i64 * 86_400_000),
         ],
     },
+    // ── History and trash (4.0, UX-D.2) ────────────────────────────────────
+    //
+    // Two independent single-key controls, not one tiered control like
+    // `recency`: retention days and versions kept carry no invariant against
+    // each other, so there is nothing for a combined level to protect.
+    //
+    // A search-log toggle (RECALL_LOG) joins this pair once T-0089.5.5 lands
+    // the config key on the Worker side. It has no Control here yet — there
+    // is nothing to validate a level against until `src/config.ts` defines
+    // it — and `settings.ts` renders this section without it in the meantime.
+    Control {
+        id: "trash",
+        keys: &["TRASH_RETENTION_DAYS"],
+        forward_only: false,
+        levels: &[
+            lvl!("short", "TRASH_RETENTION_DAYS" => 7),
+            lvl!("standard", "TRASH_RETENTION_DAYS" => 14),
+            lvl!("long", "TRASH_RETENTION_DAYS" => 30),
+            lvl!("extended", "TRASH_RETENTION_DAYS" => 90),
+        ],
+    },
+    Control {
+        id: "versions",
+        keys: &["VERSION_KEEP"],
+        forward_only: false,
+        levels: &[
+            lvl!("brief", "VERSION_KEEP" => 10),
+            lvl!("standard", "VERSION_KEEP" => 20),
+            lvl!("extended", "VERSION_KEEP" => 50),
+        ],
+    },
 ];
 
 /// The level each control shows for a fresh install. Must equal the Worker's
@@ -119,6 +150,8 @@ pub const DEFAULT_LEVELS: &[(&str, &str)] = &[
     ("detail", "standard"),
     ("duplicates", "standard"),
     ("compression", "standard"),
+    ("trash", "standard"),
+    ("versions", "standard"),
 ];
 
 pub fn control(id: &str) -> Option<&'static Control> {
@@ -585,7 +618,7 @@ mod tests {
                 let (status, payload) = match (method.as_str(), url.as_str()) {
                     ("GET", "/config") => (
                         200,
-                        r#"{"ok":true,"config":{"MMR_LAMBDA":0.7,"RECENCY_FLOOR":0.6,"RECENCY_FLOOR_DURABLE":0.9,"RECENCY_FLOOR_VOLATILE":0.15,"DEFAULT_HOPS":0,"GRAPH_HOP_DECAY":0.6,"RECALL_OUTPUT_BUDGET":12000,"SNIPPET_MAX_CHARS":400,"RECALL_FULL_MATCHES":2,"DUPLICATE_BLOCK_THRESHOLD":0.95,"DUPLICATE_FLAG_THRESHOLD":0.85,"COMPRESSION_IMPORTANCE_THRESHOLD":4,"COMPRESSION_MIN_RECALL":2,"COMPRESSION_MIN_AGE_MS":5184000000,"LLM_MODEL":"@cf/meta/llama-4-scout-17b-16e-instruct","INSIGHT_LLM_MODEL":"@cf/openai/gpt-oss-120b"},"overrides":{},"defaults":{}}"#.to_string(),
+                        r#"{"ok":true,"config":{"MMR_LAMBDA":0.7,"RECENCY_FLOOR":0.6,"RECENCY_FLOOR_DURABLE":0.9,"RECENCY_FLOOR_VOLATILE":0.15,"DEFAULT_HOPS":0,"GRAPH_HOP_DECAY":0.6,"RECALL_OUTPUT_BUDGET":12000,"SNIPPET_MAX_CHARS":400,"RECALL_FULL_MATCHES":2,"DUPLICATE_BLOCK_THRESHOLD":0.95,"DUPLICATE_FLAG_THRESHOLD":0.85,"COMPRESSION_IMPORTANCE_THRESHOLD":4,"COMPRESSION_MIN_RECALL":2,"COMPRESSION_MIN_AGE_MS":5184000000,"TRASH_RETENTION_DAYS":14,"VERSION_KEEP":20,"LLM_MODEL":"@cf/meta/llama-4-scout-17b-16e-instruct","INSIGHT_LLM_MODEL":"@cf/openai/gpt-oss-120b"},"overrides":{},"defaults":{}}"#.to_string(),
                     ),
                     ("PATCH", "/config") if body.contains("\"BAD\"") => (
                         400,
@@ -947,10 +980,66 @@ mod tests {
     }
 
     #[test]
-    fn ships_eight_controls_counting_both_model_dropdowns() {
-        // Six level controls here; the other two (LLM_MODEL and
+    fn ships_ten_controls_counting_both_model_dropdowns() {
+        // Eight level controls here; the other two (LLM_MODEL and
         // INSIGHT_LLM_MODEL) are dropdowns and are deliberately not modelled as
         // levels.
-        assert_eq!(CONTROLS.len(), 6);
+        assert_eq!(CONTROLS.len(), 8);
+    }
+
+    // ── History and trash range parity (4.0, UX-D.2) ───────────────────────
+    //
+    // `default_level_matches_the_workers_shipped_defaults` above already
+    // checks that "standard" writes 14/20, matching src/config.ts's DEFAULTS.
+    // This checks the other half: every level offered here stays inside the
+    // Worker's own validated range for that key, so a level cannot be picked
+    // in the app and then rejected by the Worker, and so tightening a RULES
+    // range in src/config.ts without revisiting these levels fails a test
+    // instead of shipping a broken preset. Mirrors
+    // test/unit/config-parity.test.ts's check of the same two keys' shipped
+    // ranges, from the Worker side.
+    fn worker_rule_range(key: &str) -> (i64, i64) {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../src/config.ts");
+        let src = std::fs::read_to_string(path).expect("read src/config.ts");
+        let start = src.find("export const RULES").expect("RULES block");
+        let line = src[start..]
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{key}:")))
+            .unwrap_or_else(|| panic!("{key} not found in RULES"));
+        let min = line
+            .split("min:")
+            .nth(1)
+            .and_then(|rest| rest.split(',').next())
+            .and_then(|n| n.trim().parse::<i64>().ok())
+            .unwrap_or_else(|| panic!("could not parse min for {key} from: {line}"));
+        let max = line
+            .split("max:")
+            .nth(1)
+            .and_then(|rest| rest.split(',').next())
+            .and_then(|n| n.trim().parse::<i64>().ok())
+            .unwrap_or_else(|| panic!("could not parse max for {key} from: {line}"));
+        (min, max)
+    }
+
+    #[test]
+    fn trash_and_version_levels_stay_within_the_workers_config_rules() {
+        let (trash_min, trash_max) = worker_rule_range("TRASH_RETENTION_DAYS");
+        for l in control("trash").unwrap().levels {
+            let days = patch_for("trash", l.id).unwrap()["TRASH_RETENTION_DAYS"].as_i64().unwrap();
+            assert!(
+                days >= trash_min && days <= trash_max,
+                "trash/{} sets {days} days, outside the Worker's {trash_min}-{trash_max} range",
+                l.id,
+            );
+        }
+        let (versions_min, versions_max) = worker_rule_range("VERSION_KEEP");
+        for l in control("versions").unwrap().levels {
+            let n = patch_for("versions", l.id).unwrap()["VERSION_KEEP"].as_i64().unwrap();
+            assert!(
+                n >= versions_min && n <= versions_max,
+                "versions/{} sets {n}, outside the Worker's {versions_min}-{versions_max} range",
+                l.id,
+            );
+        }
     }
 }

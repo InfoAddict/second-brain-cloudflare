@@ -369,8 +369,8 @@ describe("follows edges", () => {
       sqlite.seed({ id: "one", content: "first", createdAt: NOW - 1000, tags: EPISODIC });
       sqlite.seed({ id: "two", content: "second", createdAt: NOW, tags: EPISODIC });
 
-      await createEdge("two", "one", "follows", { weight: 0.9, provenance: "explicit", workspaceId: "" }, env);
-      await createEdge("two", "one", "follows", { weight: 0.75, provenance: "system", workspaceId: "" }, env);
+      await createEdge("two", "one", "follows", { weight: 0.9, provenance: "explicit", workspaceId: "", readableWorkspaceIds: [""] }, env);
+      await createEdge("two", "one", "follows", { weight: 0.75, provenance: "system", workspaceId: "", readableWorkspaceIds: [""] }, env);
 
       const rows = await edges();
       expect(rows).toHaveLength(1);
@@ -434,7 +434,7 @@ describe("follows edges", () => {
   describe("a pair that already carries a typed edge", () => {
     it("does not lay a generic edge beside it", async () => {
       seedPair({ neighbors: [{ id: "earlier", agoMs: 5 * 60_000 }] });
-      await createEdge("new", "earlier", "follows", { weight: 0.85, provenance: "inferred", workspaceId: "" }, env);
+      await createEdge("new", "earlier", "follows", { weight: 0.85, provenance: "inferred", workspaceId: "", readableWorkspaceIds: [""] }, env);
 
       // An edit re-runs inference with no kind, so `follows` cannot be re-emitted
       // and the pair falls to the generic branch.
@@ -462,7 +462,7 @@ describe("follows edges", () => {
           { id: "unrelated", agoMs: 3 * 60 * 60_000 },
         ],
       });
-      await createEdge("new", "earlier", "follows", { weight: 0.85, provenance: "inferred", workspaceId: "" }, env);
+      await createEdge("new", "earlier", "follows", { weight: 0.85, provenance: "inferred", workspaceId: "", readableWorkspaceIds: [""] }, env);
 
       await inferEdgesOnWrite("new", [
         { id: "earlier", score: 0.9 },

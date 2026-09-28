@@ -732,13 +732,19 @@ async function disconnectIntegration(provider, btn) {
       btn.disabled = true
       btn.textContent = t('integrations.disconnecting')
       try {
-        const res = await fetch(`${WORKER_URL}/integrations/${provider}/disconnect`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-          body: JSON.stringify({ purge }),
-        })
-        const data = await res.json()
-        if (!res.ok || !data.ok) throw new Error(data.error || t('integrations.disconnectFailed'))
+        // A purge runs in pages: 202 with done:false hands back next_cursor to continue from.
+        let cursor
+        for (;;) {
+          const res = await fetch(`${WORKER_URL}/integrations/${provider}/disconnect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+            body: JSON.stringify(cursor === undefined ? { purge } : { purge, cursor }),
+          })
+          const data = await res.json()
+          if (!res.ok || !data.ok) throw new Error(data.error || t('integrations.disconnectFailed'))
+          if (data.done !== false) break
+          cursor = data.next_cursor
+        }
         await loadIntegrations()
         if (purge) refreshAll()
       } catch (e) {

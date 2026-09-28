@@ -89,3 +89,20 @@ export function stripReservedTrustTags(tags: readonly string[]): string[] {
     return !lower.startsWith(QUARANTINE_TAG_PREFIX) && !lower.startsWith(EDITED_CANONICAL_TAG_PREFIX);
   });
 }
+
+/**
+ * The one plain-English phrase per hold reason, shared by every agent-facing
+ * reply (5.5). A row is held by ANY `quarantine:` tag, whatever the reason —
+ * `heldReason` returns null for one it does not recognize, and that row is
+ * still held: pass null through here for the generic phrase rather than
+ * treating an unrecognized reason as "not held".
+ */
+export function holdReasonPhrase(reason: HoldReason | null): string {
+  switch (reason) {
+    case "instruction": return "it looks like an instruction to an AI";
+    case "hidden": return "it contains hidden text";
+    case "burst": return "many memories were written in a short time";
+    case "capsule": return "it changes what your AI tools always see";
+    case null: return "it was held automatically";
+  }
+}

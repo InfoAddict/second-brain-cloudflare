@@ -1,3 +1,4 @@
+import { parentIdOfVectorId } from "../../../src/vectorize/ids";
 import { describe, expect, it, vi } from "vitest";
 import type { storeEntry } from "../../../src/capture/store";
 import { FTS_READY_KV_KEY } from "../../../src/constants";
@@ -48,7 +49,7 @@ describe("loadCorpus (sqlite backend)", () => {
       expect(await corpus.env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1");
       // The long entry is multi-chunk, exactly as storeEntry writes it.
       const ids = (await corpus.vectorize.query(new Array(384).fill(0.01), { topK: 50, returnMetadata: "all" })).matches.map(m => m.id);
-      expect(ids.filter(id => id.startsWith("d-chunk-")).length).toBeGreaterThan(1);
+      expect(ids.filter(id => parentIdOfVectorId(id) === "d").length).toBeGreaterThan(1);
       const stored = await corpus.env.DB.prepare(`SELECT vector_ids FROM entries WHERE id = 'd'`).first<{ vector_ids: string }>();
       expect(JSON.parse(stored!.vector_ids).length).toBeGreaterThan(1);
       expect(corpus.workspaceOf.get("c")).toBe(WORKSPACES.company);
@@ -63,7 +64,7 @@ describe("loadCorpus (sqlite backend)", () => {
     const corpus = await loadCorpus({ spec, backend: "sqlite", replay: dry(), embeddingModel: MODEL });
     try {
       const scoped = await corpus.vectorize.query(new Array(384).fill(0.01), { topK: 50, returnMetadata: "all", filter: { workspace_id: { $in: [WORKSPACES.company] } } });
-      expect(scoped.matches.map(m => m.id)).toEqual(["c"]);
+      expect(scoped.matches.map(m => parentIdOfVectorId(m.id))).toEqual(["c"]);
     } finally {
       await corpus.close();
     }
@@ -215,7 +216,9 @@ describe("loadCorpus safety nets", () => {
       };
       const corpus = await load(many, { concurrency, index: { id: "tracked", storeEntry: tracked }, onProgress: (done, total) => progress.push(done * 1000 + total) });
       try {
-        const rows = await rowsOf(corpus, "SELECT id, vector_ids FROM entries ORDER BY id");
+        // Vector ids are minted per upload (T-0089.1.1): compare how many each row lists, not the ids.
+        const rows = (await rowsOf(corpus, "SELECT id, vector_ids FROM entries ORDER BY id") as { id: string; vector_ids: string }[])
+          .map(r => ({ id: r.id, vectors: (JSON.parse(r.vector_ids) as string[]).length }));
         return { peak, progress, rows, size: corpus.vectorize.size };
       } finally {
         await corpus.close();

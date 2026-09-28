@@ -5,6 +5,7 @@
  * wider window and collapse it here.
  */
 import { WRITE_PATH_TOPK } from "../constants";
+import { vectorSortKey } from "./ids";
 
 export { WRITE_PATH_TOPK };
 
@@ -20,5 +21,5 @@ export function nearestParents<T extends Scored>(matches: readonly T[], limit = 
     const cur = best.get(pid);
     if (!cur || m.score > cur.score) best.set(pid, m);
   }
-  return [...best.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, limit);
+  return [...best.values()].sort((a, b) => b.score - a.score || vectorSortKey(a.id).localeCompare(vectorSortKey(b.id))).slice(0, limit);
 }

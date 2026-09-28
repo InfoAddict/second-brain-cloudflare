@@ -5,6 +5,10 @@ import { makeTestEnv, makeTestDb } from "../helpers/make-env";
 import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
 
+/** The endpoints these unit tests link, seeded live in the legacy '' workspace the actor can read. */
+const R = [""];
+const seedEndpoints = (db: D1Mock) => { for (const id of ["a", "b", "alpha", "zeta", "new", "old"]) db.entries.push({ id, content: id, tags: "[]", workspace_id: "" }); };
+
 function edge(source_id: string, target_id: string, weight = 0.5, type = "relates_to") {
   return { id: `${source_id}-${target_id}`, source_id, target_id, type, weight, provenance: "inferred", metadata: "{}", created_at: 1, updated_at: 1 };
 }
@@ -35,58 +39,59 @@ describe("createEdge", () => {
   beforeEach(() => {
     db = makeTestDb();
     env = makeTestEnv(db);
+    seedEndpoints(db);
   });
 
   it("rejects a self-link and writes nothing", async () => {
-    const result = await createEdge("a", "a", "relates_to", {}, env);
+    const result = await createEdge("a", "a", "relates_to", { readableWorkspaceIds: R }, env);
     expect(result).toBeNull();
     expect(db.edges).toHaveLength(0);
   });
 
   it("rejects an unknown edge type and writes nothing", async () => {
-    const result = await createEdge("a", "b", "bogus", {}, env);
+    const result = await createEdge("a", "b", "bogus", { readableWorkspaceIds: R }, env);
     expect(result).toBeNull();
     expect(db.edges).toHaveLength(0);
   });
 
   it("orders symmetric edges smaller-id-first so A→B and B→A collapse to one row", async () => {
-    await createEdge("zeta", "alpha", "relates_to", {}, env);
+    await createEdge("zeta", "alpha", "relates_to", { readableWorkspaceIds: R }, env);
     expect(db.edges).toHaveLength(1);
     expect(db.edges[0].source_id).toBe("alpha");
     expect(db.edges[0].target_id).toBe("zeta");
 
     // Reverse direction is the same logical edge — must not create a second row.
-    await createEdge("alpha", "zeta", "relates_to", {}, env);
+    await createEdge("alpha", "zeta", "relates_to", { readableWorkspaceIds: R }, env);
     expect(db.edges).toHaveLength(1);
   });
 
   it("preserves direction for directed edge types", async () => {
-    await createEdge("new", "old", "supersedes", {}, env);
+    await createEdge("new", "old", "supersedes", { readableWorkspaceIds: R }, env);
     expect(db.edges).toHaveLength(1);
     expect(db.edges[0].source_id).toBe("new");
     expect(db.edges[0].target_id).toBe("old");
   });
 
   it("is idempotent and keeps the higher weight on re-link", async () => {
-    await createEdge("a", "b", "relates_to", { weight: 0.4 }, env);
-    await createEdge("a", "b", "relates_to", { weight: 0.9 }, env);
+    await createEdge("a", "b", "relates_to", { readableWorkspaceIds: R, weight: 0.4 }, env);
+    await createEdge("a", "b", "relates_to", { readableWorkspaceIds: R, weight: 0.9 }, env);
     expect(db.edges).toHaveLength(1);
     expect(db.edges[0].weight).toBe(0.9);
 
     // A weaker re-link must not lower the stored weight.
-    await createEdge("a", "b", "relates_to", { weight: 0.2 }, env);
+    await createEdge("a", "b", "relates_to", { readableWorkspaceIds: R, weight: 0.2 }, env);
     expect(db.edges).toHaveLength(1);
     expect(db.edges[0].weight).toBe(0.9);
   });
 
   it("stores provenance and metadata", async () => {
-    await createEdge("a", "b", "relates_to", { provenance: "explicit", metadata: { note: "hi" } }, env);
+    await createEdge("a", "b", "relates_to", { readableWorkspaceIds: R, provenance: "explicit", metadata: { note: "hi" } }, env);
     expect(db.edges[0].provenance).toBe("explicit");
     expect(JSON.parse(db.edges[0].metadata)).toEqual({ note: "hi" });
   });
 
   it("preserves a custom created_at on insert", async () => {
-    await createEdge("a", "b", "relates_to", { created_at: 42_000 }, env);
+    await createEdge("a", "b", "relates_to", { readableWorkspaceIds: R, created_at: 42_000 }, env);
     expect(db.edges[0].created_at).toBe(42_000);
   });
 });
@@ -98,22 +103,23 @@ describe("edgeInsertStatement()", () => {
   beforeEach(() => {
     db = makeTestDb();
     env = makeTestEnv(db);
+    seedEndpoints(db);
   });
 
   it("returns a statement instead of running it", () => {
-    const stmt = edgeInsertStatement("a", "b", "drawn_from", { provenance: "system" }, env);
+    const stmt = edgeInsertStatement("a", "b", "drawn_from", { readableWorkspaceIds: R, provenance: "system" }, env);
     expect(stmt).not.toBeNull();
     // Nothing written until the caller runs or batches it.
     expect(db.edges).toHaveLength(0);
   });
 
   it("refuses an unknown type and a self-edge, exactly as createEdge does", () => {
-    expect(edgeInsertStatement("a", "b", "not_a_type", {}, env)).toBeNull();
-    expect(edgeInsertStatement("a", "a", "drawn_from", {}, env)).toBeNull();
+    expect(edgeInsertStatement("a", "b", "not_a_type", { readableWorkspaceIds: R }, env)).toBeNull();
+    expect(edgeInsertStatement("a", "a", "drawn_from", { readableWorkspaceIds: R }, env)).toBeNull();
   });
 
   it("reorders a symmetric type smaller-id-first, same as createEdge", async () => {
-    const stmt = edgeInsertStatement("zeta", "alpha", "relates_to", {}, env);
+    const stmt = edgeInsertStatement("zeta", "alpha", "relates_to", { readableWorkspaceIds: R }, env);
     expect(stmt).not.toBeNull();
     await stmt!.run();
     expect(db.edges[0].source_id).toBe("alpha");
@@ -121,13 +127,13 @@ describe("edgeInsertStatement()", () => {
   });
 
   it("clamps the weight to [0, 1], same as createEdge", async () => {
-    const stmt = edgeInsertStatement("a", "b", "relates_to", { weight: 5 }, env);
+    const stmt = edgeInsertStatement("a", "b", "relates_to", { readableWorkspaceIds: R, weight: 5 }, env);
     await stmt!.run();
     expect(db.edges[0].weight).toBe(1);
   });
 
   it("when run, writes the same row createEdge would", async () => {
-    const stmt = edgeInsertStatement("a", "b", "drawn_from", { provenance: "system", weight: 0.9 }, env);
+    const stmt = edgeInsertStatement("a", "b", "drawn_from", { readableWorkspaceIds: R, provenance: "system", weight: 0.9 }, env);
     await stmt!.run();
     expect(db.edges).toHaveLength(1);
     expect(db.edges[0]).toMatchObject({ source_id: "a", target_id: "b", type: "drawn_from", weight: 0.9, provenance: "system" });

@@ -34,6 +34,7 @@ const EXPECTED_TOOLS = [
   "update",
   "set_status",
   "forget",
+  "undo",
   "share",
   "link",
   "unlink",
@@ -421,11 +422,43 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
       }
     });
 
-    it("forget is still explicit about permanent deletion", async () => {
+    it("forget stays explicit about deleting, and says where a deleted entry goes", async () => {
       const forget = (await descriptions()).forget;
-      expect(forget).toMatch(/permanently delete/i);
       expect(forget).toMatch(/only call when the user explicitly asks/i);
-      expect(forget).toMatch(/cannot be undone/i);
+      // T-0089.1.2: forget moves to the trash, so it no longer claims to be permanent or unrecoverable.
+      expect(forget).not.toMatch(/cannot be undone|permanently/i);
+      expect(forget).toMatch(/trash/i);
+      expect(forget).toMatch(/retention period \(14 days/i);
+      expect(forget).toMatch(/undo brings it back/i);
+    });
+  });
+
+  describe("undo", () => {
+    it("matches the approved description word for word (T-0089.6.6)", async () => {
+      const undo = (await descriptions()).undo;
+      expect(undo).toBe(
+        "Reverse the most recent change to a memory, or restore a memory from the trash. Call when the user says a change was wrong or asks to put something back. Every undo can itself be undone.",
+      );
+    });
+
+    it("has no parameter that can delete permanently", async () => {
+      const schema = await schemaFor("undo");
+      expect(schema).not.toHaveProperty("permanent");
+      expect(schema).not.toHaveProperty("confirm");
+      expect(Object.keys(schema).sort()).toEqual(["id", "to_version"]);
+    });
+
+    it("is honest that a hard delete is irreversible and history beyond the cap is gone", async () => {
+      const undo = (await descriptions()).undo;
+      // The top-level description only promises "the most recent change" or "from the trash" — it
+      // never claims universal reversibility, so a tier-3 hard delete (no trash row at all) and a
+      // pruned older version are already outside what it offers.
+      expect(undo).not.toMatch(/undo (any|every) (change|deletion)/i);
+      expect(undo).not.toMatch(/always (restore|recover)/i);
+      // to_version is the one parameter that could be read as reaching arbitrarily far back; its
+      // own description says plainly that pruned history is out of reach.
+      const schema = await schemaFor("undo");
+      expect(schema.to_version.description).toMatch(/age out|no longer (kept|available|reachable)/i);
     });
   });
 

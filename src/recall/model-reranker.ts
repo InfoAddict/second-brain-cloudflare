@@ -4,6 +4,7 @@ import type { Env } from "../env";
 import type { VectorizeMatch } from "./math";
 import { queryRelevantWindow } from "./snippet";
 import type { RerankRoute, RerankTuning } from "./types";
+import { vectorSortKey } from "../vectorize/ids";
 
 /** Workers AI's documented bge-reranker-base output: `id` indexes the submitted contexts; `score` is a logit (local ONNX) or a sigmoid probability (Workers AI may return either; only ranks and the probe's margin read it, and the probe handles both). */
 export type RerankerResponse = { response: { id: number; score: number }[] };
@@ -107,7 +108,7 @@ export function blendRerankerScores<T extends VectorizeMatch>(
       scored.push({ ...match, score: base * Math.max(floor, 1 + weight * (2 * p - 1)) });
     }
   }
-  const byScore = (a: T, b: T) => b.score - a.score || a.id.localeCompare(b.id);
+  const byScore = (a: T, b: T) => b.score - a.score || vectorSortKey(a.id).localeCompare(vectorSortKey(b.id));
   scored.sort(byScore);
   unscored.sort(byScore);
   if (scored.length && unscored.length) {

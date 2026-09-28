@@ -61,6 +61,10 @@ const LEGACY_SHAPES: Record<string, string> = {
   projects: `CREATE TABLE projects (id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', aliases TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER, PRIMARY KEY (workspace_id, id))`,
   // Web Push subscriptions. Never widened since it shipped.
   push_subscriptions: `CREATE TABLE push_subscriptions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', endpoint_hash TEXT NOT NULL, subscription_json TEXT NOT NULL, content_free INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_ok_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0, UNIQUE(endpoint_hash))`,
+  // Content history (4.0). Gained prior_length_utf16 a release later (T-0089.1.1, ADV-10).
+  entry_versions: `CREATE TABLE entry_versions (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT '', seq INTEGER NOT NULL, content TEXT, prior_length INTEGER, tags TEXT NOT NULL, state TEXT NOT NULL DEFAULT '{}', actor_id TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', valid_from INTEGER, created_at INTEGER NOT NULL, CHECK ((content IS NULL) <> (prior_length IS NULL)))`,
+  // Soft delete (4.0). Never widened since it shipped.
+  entries_trash: `CREATE TABLE entries_trash (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', actor_id TEXT NOT NULL DEFAULT '', content TEXT NOT NULL, row_json TEXT NOT NULL, edges_json TEXT NOT NULL DEFAULT '[]', vector_ids TEXT NOT NULL DEFAULT '[]', deleted_at INTEGER NOT NULL, deleted_by TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT 'forget')`,
 };
 
 /** `-- …` line comments, without mistaking a "--" inside a string literal for one. */
@@ -122,6 +126,13 @@ const DECLARED = declaredTables(readFileSync(resolve(import.meta.dirname, "../..
 /** A value SQLite will accept for a column of this declared type. */
 const sampleFor = (type: string, index: number): string | number =>
   type.startsWith("INT") ? index : type.startsWith("REAL") ? 0.5 : `v${index}`;
+/**
+ * entry_versions carries two CHECKs: (content IS NULL) <> (prior_length IS NULL), so a full copy
+ * leaves prior_length NULL; and prior_length_utf16 IS NULL OR prior_length IS NOT NULL, so it must
+ * stay NULL right alongside it.
+ */
+const sampleForColumn = (table: string, column: string, type: string, index: number): string | number | null =>
+  table === "entry_versions" && (column === "prior_length" || column === "prior_length_utf16") ? null : sampleFor(type, index);
 
 describe("an existing database gains every column db/schema.sql declares", () => {
   let d1: SqliteD1;
@@ -150,7 +161,7 @@ describe("an existing database gains every column db/schema.sql declares", () =>
       await d1.db.exec(legacyDdl);
       // One row written by the release that shipped this shape. It must survive,
       // and it must be readable through the columns the table gains.
-      const legacyValues = legacyColumns.map((c, i) => sampleFor(declared[c], i + 1));
+      const legacyValues = legacyColumns.map((c, i) => sampleForColumn(table, c, declared[c], i + 1));
       await d1.db
         .prepare(`INSERT INTO ${table} (${legacyColumns.join(", ")}) VALUES (${legacyColumns.map(() => "?").join(", ")})`)
         .bind(...legacyValues)
@@ -186,7 +197,7 @@ describe("an existing database gains every column db/schema.sql declares", () =>
       await expect(
         d1.db
           .prepare(`INSERT OR REPLACE INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
-          .bind(...columns.map((c, i) => (table === "maintenance_cursor" && c === "id" ? 1 : sampleFor(declared[c], i + 100))))
+          .bind(...columns.map((c, i) => (table === "maintenance_cursor" && c === "id" ? 1 : sampleForColumn(table, c, declared[c], i + 100))))
           .run(),
       ).resolves.toMatchObject({ success: true });
     });

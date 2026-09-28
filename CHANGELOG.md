@@ -4,6 +4,12 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 ## [Unreleased]
 
+**Session hooks**
+
+- Session start no longer spends Workers AI allowance: hooks inject your ranked memories directly.
+- Session capture keeps only what you typed and the assistant's replies: instruction files, environment details and tool context are left out, and likely secrets are masked.
+- Cursor recall comes from session start; use the MCP recall tool for guaranteed recall.
+
 **Activity history**
 
 - A failed edit no longer shows up in a memory's history as an update. When the search re-index failed and the memory was left unchanged, the dashboard's edit still recorded an "updated" event; now only a saved edit does.
@@ -28,6 +34,12 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Agents can read the latest existing project or tag digest without starting a new summary or model call.
 - Agents can inspect who changed a memory, through which channel, and its supersedes links.
 - The session-start brief reads only the rows of its own queues, so it stays cheap on a large brain, and it lists only items you can act on. History for a shared memory starts at the moment it was shared unless you wrote it.
+
+**Desktop app**
+
+- The Worker update screen now shows what changed for a major version. For 4.0: "Every edit to a memory is now kept, so any change can be undone, by you or by asking your AI. Forgotten memories wait in the trash for 14 days before they are removed for good. Edits made before this update were not recorded, so undo starts from today." Shown to the brain's owner only, and the Done screen adds a line reading the brain's actual trash retention once the update has finished.
+- Advanced Settings has a new "History and trash" section: how long forgotten memories wait in the trash (7, 14, 30 or 90 days) and how many changes are kept per memory (10, 20 or 50). Owners and admins can change these; members see them read-only, with a line saying who can change them.
+- The app's self-update dialog now says plainly that 4.0's features depend on the brain being updated, not the app alone. English: "New in 4.0 once your Second Brain is updated: every change to a memory is now kept, so you can undo it, yourself or by asking your AI. Forgotten memories wait in the trash for 14 days by default before they're removed for good. This app update alone doesn't bring those. Ask whoever owns your Second Brain whether it's been updated yet." Italian: "Novità della versione 4.0, una volta aggiornato il tuo Second Brain: ogni modifica a un ricordo viene ora conservata, così puoi annullarla, da te o chiedendolo alla tua IA. I ricordi dimenticati restano nel cestino per 14 giorni per impostazione predefinita prima di essere eliminati per sempre. Questo aggiornamento dell'app da solo non porta queste novità. Chiedi al proprietario del tuo Second Brain se lo ha già aggiornato."
 
 ## [3.7.0] — Search that puts the right answer first
 

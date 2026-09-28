@@ -42,8 +42,10 @@ devharness/
 # accident via `git add -A` and never noticed.
 #
 # db/schema.sql is the shipped schema, not a dump, and stays tracked.
+# test/fixtures/schema-3.7.0.sql is a frozen historical schema fixture (Task 11), not a dump either.
 *.sql
 !db/schema.sql
+!test/fixtures/schema-3.7.0.sql
 *.sqlite
 *.sqlite3
 *.db

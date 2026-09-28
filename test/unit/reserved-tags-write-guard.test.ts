@@ -32,6 +32,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { captureEntry } from "../../src/capture/entry";
 import { updateEntryContent } from "../../src/capture/store";
+import { OWNER_WRITE_CONTEXT } from "../../src/lib/scope";
 import { makeTestDb, makeTestEnv } from "../helpers/make-env";
 import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
@@ -81,7 +82,7 @@ describe("a caller cannot forge a reserved tag through updateEntryContent (repla
     const created = await captureEntry("Original", ["work"], "api", env, ctx);
     if (created.status !== "stored") throw new Error("setup failed");
 
-    const result = await updateEntryContent(env, created.id, "Updated content", undefined, undefined, [...FORGED_TAGS, "new-topic"]);
+    const result = await updateEntryContent(env, created.id, "Updated content", undefined, undefined, [...FORGED_TAGS, "new-topic"], OWNER_WRITE_CONTEXT, { actorId: "", channel: "rest" }, "");
     expect(result.status).toBe("updated");
     const row = db.entries.find(e => e.id === created.id)!;
     const stored = JSON.parse(row.tags);
@@ -101,7 +102,7 @@ describe("a caller cannot forge a reserved tag through updateEntryContent (repla
     if (created.status !== "stored") throw new Error("setup failed");
     expect(JSON.parse(db.entries[0].tags)).not.toContain(`${QUARANTINE_TAG_PREFIX}instruction`);
 
-    await updateEntryContent(env, created.id, "Edited", undefined, undefined, ["work"]);
+    await updateEntryContent(env, created.id, "Edited", undefined, undefined, ["work"], OWNER_WRITE_CONTEXT, { actorId: "", channel: "rest" }, "");
     const row = db.entries.find(e => e.id === created.id)!;
     expect(JSON.parse(row.tags)).toEqual(["work"]);
   });

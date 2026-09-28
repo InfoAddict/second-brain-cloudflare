@@ -129,7 +129,7 @@ describe("pushDueItems", () => {
     expect(encryptSpy).toHaveBeenCalledTimes(1);
     const plaintext = new TextDecoder().decode(encryptSpy.mock.calls[0][0].plaintext);
     const payload = JSON.parse(plaintext);
-    expect(payload.title).toBe("1 thing due - tap to view");
+    expect(payload.title).toBe("Something is due. Tap to see it.");
     expect(payload.body).toBeUndefined();
     expect(payload.entry_id).toBeUndefined();
   });
@@ -158,8 +158,8 @@ describe("pushDueItems", () => {
 
       const plaintext = new TextDecoder().decode(encryptSpy.mock.calls[0][0].plaintext);
       const payload = JSON.parse(plaintext);
-      expect(payload.body).toContain("2020-09-22");
-      expect(payload.body).not.toContain("2020-09-21");
+      expect(payload.body).toContain("Sep 22, 2020");
+      expect(payload.body).not.toContain("Sep 21");
     } finally {
       process.env.TZ = originalTz;
     }
@@ -184,7 +184,7 @@ describe("pushDueItems", () => {
 
     const plaintext = new TextDecoder().decode(encryptSpy.mock.calls[0][0].plaintext);
     const payload = JSON.parse(plaintext);
-    expect(payload.body).toContain("2020-09-23");
+    expect(payload.body).toContain("Sep 23, 2020");
   });
 
   it("does not re-notify for the same when_at once pushed", async () => {

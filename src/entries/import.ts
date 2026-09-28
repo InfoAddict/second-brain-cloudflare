@@ -1,10 +1,13 @@
 import type { Env } from "../env";
 import { D1_MAX_BOUND_PARAMS } from "../constants";
-import { isSymmetric, isValidEdgeType } from "../graph/edges";
+import { edgeEndpointsReadableSql, isSymmetric, isValidEdgeType } from "../graph/edges";
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
+// MAX_ENTRY_ID_BYTES: the one bound on a caller-chosen entry id, applied through boundedEntryId.
+import { boundedEntryId } from "../vectorize/ids";
 import { parseImportedProject, type ImportedProject } from "../projects/registry";
+import { isOverContentLimit } from "../lib/content-size";
 
 /**
  * Default page size: array positions examined per call, inserts and skips alike.
@@ -21,8 +24,16 @@ export const IMPORT_D1_BATCH_SIZE = 50;
 /** Edge endpoint lookups bind each id twice (source IN + target IN). */
 export const EDGE_ENDPOINT_QUERY_BATCH = Math.floor(D1_MAX_BOUND_PARAMS / 2);
 
+// Ids are unique across entries and entries_trash (T-0089.1.1): the pre-read skips ids it saw, and
+// an id that turns up in either table after that read gets a fresh one here, checked in this same
+// statement, so an import never lands on top of a live or trashed row. RETURNING says which id won.
+// versioning: exempt: creation — an imported row has no prior state to keep
+// scope-exempt: by-id existence probes across every workspace: an id is unique deployment-wide
 const ENTRY_INSERT_SQL_TEMPLATE =
-  `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses, workspace_id, actor_id)
+   SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM entries WHERE id = ?1) AND NOT EXISTS (SELECT 1 FROM entries_trash WHERE id = ?1) THEN ?1 ELSE lower(hex(randomblob(16))) END,
+          ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+   RETURNING id`;
 
 function parseInsertColumns(sql: string): readonly string[] {
   const match = sql.match(/INSERT INTO entries \(([^)]+)\)/i);
@@ -41,6 +52,8 @@ export interface ImportEntryResult {
   status: ImportEntryStatus;
   reason?: string;
   detail?: string;
+  /** Set when the export's id was taken by the time of the insert: the row was imported as `id`. */
+  original_id?: string;
 }
 
 export interface ImportEdgeResult {
@@ -122,6 +135,12 @@ export interface ImportSummary {
   ok: true;
   imported: number;
   skipped: number;
+  /** Of `skipped`, ids in the importer's own trash: restore them instead of importing over them. */
+  skipped_in_trash: number;
+  /** Rahil's decision (18-copy-deck.md 6.8): entries skipped for being over the 128 KB cap, a
+   * subset of `skipped` broken out so the dashboard's "{n} memory was too long to import"
+   * summary line has its own clear count. */
+  skipped_too_large: number;
   failed: number;
   edges_imported: number;
   edges_skipped: number;
@@ -155,6 +174,8 @@ const DEFAULT_EDGE_WEIGHT = 0.5;
 
 interface PendingInsert {
   id: string;
+  /** The export's own id, when it was over MAX_ENTRY_ID_BYTES and the row takes a minted one instead. */
+  originalId?: string;
   content: string;
   tags: string[];
   source: string;
@@ -248,9 +269,11 @@ export function parseImportLimit(raw: string | null): number {
   return Math.min(n, IMPORT_MAX_LIMIT);
 }
 
-async function loadExistingIds(env: Env, ids: string[]): Promise<Set<string>> {
-  const found = new Set<string>();
-  if (!ids.length) return found;
+/** Ids already present, split into live entries and trashed ones (a trashed id is restored, never overwritten). */
+async function loadExistingIds(env: Env, ids: string[], withTrash = true): Promise<{ live: Set<string>; trashed: Map<string, string> }> {
+  const live = new Set<string>();
+  /** id -> the trash row's workspace, so a skip only names the trash for the importer's own rows. */
+  const trashed = new Map<string, string>();
   for (let i = 0; i < ids.length; i += D1_MAX_BOUND_PARAMS) {
     const batch = ids.slice(i, i + D1_MAX_BOUND_PARAMS);
     const placeholders = batch.map(() => "?").join(", ");
@@ -258,9 +281,33 @@ async function loadExistingIds(env: Env, ids: string[]): Promise<Set<string>> {
       // scope-exempt: by-id: primary-key existence check for dedupe; a collision is skipped, never read
       `SELECT id FROM entries WHERE id IN (${placeholders})`,
     ).bind(...batch).all() as { results: { id: string }[] };
-    for (const row of results) found.add(row.id);
+    for (const row of results) live.add(row.id);
+    if (!withTrash) continue;
+    const { results: inTrash } = await env.DB.prepare(
+      // scope-exempt: by-id: primary-key existence check for dedupe; a trashed id is skipped, never read
+      `SELECT id, workspace_id FROM entries_trash WHERE id IN (${placeholders})`,
+    ).bind(...batch).all() as { results: { id: string; workspace_id: string }[] };
+    for (const row of inTrash) trashed.set(row.id, row.workspace_id);
   }
-  return found;
+  return { live, trashed };
+}
+
+/** Versions left behind by an earlier life of an id are dropped in the same batch that inserts it,
+ * unless the id is live or trashed now (then the insert takes a fresh id and this history is theirs). */
+function orphanVersionsDelete(env: Env, ids: string[]) {
+  return env.DB.prepare(
+    // scope-exempt: by-id: history of ids this batch inserts fresh; an imported row starts with none
+    `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(?1))
+       AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.id = entry_versions.entry_id)
+       AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id)`,
+  ).bind(JSON.stringify(ids));
+}
+
+/** The id the insert actually wrote (RETURNING); a fresh one means the export's id was taken. */
+function importedResult(row: PendingInsert, res: { results?: unknown[] } | undefined): ImportEntryResult {
+  const id = (res?.results?.[0] as { id?: string } | undefined)?.id ?? row.id;
+  const original = row.originalId ?? (id === row.id ? undefined : row.id);
+  return original === undefined ? { id, status: "imported" } : { id, status: "imported", original_id: original };
 }
 
 async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<string>> {
@@ -339,21 +386,21 @@ async function flushInsertBatch(
 ): Promise<void> {
   if (!batch.length) return;
 
-  const stmts = batch.map(row => bindInsert(env, row, writeCtx));
+  const stmts = [orphanVersionsDelete(env, batch.map(row => row.id)), ...batch.map(row => bindInsert(env, row, writeCtx))];
   try {
-    await env.DB.batch(stmts);
-    for (const row of batch) {
+    const written = await env.DB.batch(stmts);
+    batch.forEach((row, i) => {
       existingIds.add(row.id);
       counters.imported++;
-      results.push({ id: row.id, status: "imported" });
-    }
+      results.push(importedResult(row, written[i + 1]));
+    });
   } catch {
     for (const row of batch) {
       try {
-        await bindInsert(env, row, writeCtx).run();
+        const written = await env.DB.batch([orphanVersionsDelete(env, [row.id]), bindInsert(env, row, writeCtx)]);
         existingIds.add(row.id);
         counters.imported++;
-        results.push({ id: row.id, status: "imported" });
+        results.push(importedResult(row, written[1]));
       } catch (e) {
         counters.failed++;
         results.push({
@@ -367,20 +414,38 @@ async function flushInsertBatch(
   }
 }
 
-function bindEdgeInsert(env: Env, edge: PendingEdge, writeCtx: WriteContext) {
+/** Endpoint ids the importer can read: an id outside its workspaces reads exactly like a missing one. */
+async function loadReadableIds(env: Env, ids: string[], readable: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  const step = D1_MAX_BOUND_PARAMS - 1;
+  for (let i = 0; i < ids.length; i += step) {
+    const batch = ids.slice(i, i + step);
+    const { results } = await env.DB.prepare(
+      // scope-checked: workspace_id IN the importer's readable workspaces, bound as one JSON array
+      `SELECT id FROM entries WHERE id IN (${batch.map(() => "?").join(", ")}) AND workspace_id IN (SELECT value FROM json_each(?))`,
+    ).bind(...batch, JSON.stringify(readable)).all() as { results: { id: string }[] };
+    for (const row of results) found.add(row.id);
+  }
+  return found;
+}
+
+function bindEdgeInsert(env: Env, edge: PendingEdge, writeCtx: WriteContext, readable: string[]) {
   let source = edge.source_id;
   let target = edge.target_id;
   if (isValidEdgeType(edge.type) && isSymmetric(edge.type) && source > target) {
     [source, target] = [target, source];
   }
   const now = Date.now();
+  const readableJson = JSON.stringify(readable);
   return env.DB.prepare(
+    // scope-exempt: by-id: the guard reads only this edge's endpoints, scoped by the importer's readable workspaces
     `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+     WHERE ${edgeEndpointsReadableSql("?", "?", "?")}
      ON CONFLICT(source_id, target_id, type) DO UPDATE SET weight = max(weight, excluded.weight), updated_at = excluded.updated_at`,
   ).bind(
     crypto.randomUUID(), source, target, edge.type, edge.weight, edge.provenance, "{}", edge.created_at, now,
-    writeCtx.workspaceId,
+    writeCtx.workspaceId, source, readableJson, target, readableJson,
   );
 }
 
@@ -389,17 +454,20 @@ async function flushEdgeBatch(
   batch: PendingEdge[],
   existingEdgeKeys: Set<string>,
   results: ImportResultItem[],
-  counters: { imported: number; failed: number },
+  counters: { imported: number; failed: number; skipped: number },
   writeCtx: WriteContext,
+  readable: string[],
 ): Promise<void> {
   if (!batch.length) return;
 
-  const stmts = batch.map(row => bindEdgeInsert(env, row, writeCtx));
+  const stmts = batch.map(row => bindEdgeInsert(env, row, writeCtx, readable));
   try {
-    await env.DB.batch(stmts);
-    for (const row of batch) {
+    const written = await env.DB.batch(stmts);
+    for (const [i, row] of batch.entries()) {
       const key = normalizedEdgeKey(row.source_id, row.target_id, row.type);
       existingEdgeKeys.add(key);
+      // The guard refused it (an endpoint left the importer's reach since the pre-read): a plain skip.
+      if ((written[i]?.meta?.changes ?? 1) === 0) { counters.skipped++; continue; }
       counters.imported++;
       results.push({
         source_id: row.source_id,
@@ -411,9 +479,10 @@ async function flushEdgeBatch(
   } catch {
     for (const row of batch) {
       try {
-        await bindEdgeInsert(env, row, writeCtx).run();
+        const res = await bindEdgeInsert(env, row, writeCtx, readable).run();
         const key = normalizedEdgeKey(row.source_id, row.target_id, row.type);
         existingEdgeKeys.add(key);
+        if ((res?.meta?.changes ?? 1) === 0) { counters.skipped++; continue; }
         counters.imported++;
         results.push({
           source_id: row.source_id,
@@ -561,10 +630,14 @@ export async function importExportPayload(
   const projects = body.projects ?? [];
   const projectOffset = Math.min(Math.max(opts.projectOffset ?? 0, 0), projects.length);
   const writeCtx = opts.writeCtx ?? OWNER_WRITE_CONTEXT;
+  // Import edges are automatic (round 5): both endpoints in the importer's own workspace, where the
+  // imported entries land and the edge is stamped. Anything else is skipped like a missing endpoint.
+  const readable = [writeCtx.workspaceId];
 
   const results: ImportResultItem[] = [];
   let imported = 0;
   let skipped = 0;
+  let skipped_too_large = 0;
   let failed = 0;
   let edges_imported = 0;
   let edges_skipped = 0;
@@ -578,18 +651,44 @@ export async function importExportPayload(
   // chunked query over exactly the ids that might insert.
   const parsedPage: ({ row: PendingInsert } | { failure: ImportEntryResult })[] = [];
   for (const entry of page) {
-    parsedPage.push(parseEntryRow(entry));
+    const parsed = parseEntryRow(entry);
+    // One rule for every caller-chosen id (T-0089.1.1): over MAX_ENTRY_ID_BYTES it would leave no room
+    // for the per-upload vector suffix under Vectorize's 64-byte limit, so the row takes a minted id.
+    if ("row" in parsed) {
+      const bounded = await boundedEntryId(parsed.row.id);
+      if (bounded !== parsed.row.id) parsed.row = { ...parsed.row, originalId: parsed.row.id, id: bounded };
+    }
+    parsedPage.push(parsed);
   }
 
   const pageIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
-  const existingIds = await loadExistingIds(env, pageIds);
+  const { live: existingIds, trashed: trashedIds } = await loadExistingIds(env, pageIds);
+  let skipped_in_trash = 0;
 
   const pendingBatch: PendingInsert[] = [];
   const batchCounters = { imported: 0, failed: 0 };
   for (const p of parsedPage) {
     if ("failure" in p) {
-      failed++;
+      // "skipped" (currently only the too_large case) is not a validation failure: the record
+      // is well-formed, it is simply over Rahil's 128 KB cap, and the whole import must not
+      // fail because of it — see the copy deck's own distinct import summary line for it.
+      if (p.failure.status === "skipped") {
+        skipped++;
+        skipped_too_large++;
+      } else {
+        failed++;
+      }
       results.push(p.failure);
+      continue;
+    }
+    if (trashedIds.has(p.row.id)) {
+      skipped++;
+      // Only the importer's own trash is named (restore it instead); another workspace's trash row
+      // is a plain skip, the same as a live id elsewhere, so the reply never says where an id lives.
+      if (trashedIds.get(p.row.id) === writeCtx.workspaceId) {
+        skipped_in_trash++;
+        results.push({ id: p.row.id, status: "skipped", reason: "in_trash" });
+      }
       continue;
     }
     if (existingIds.has(p.row.id)) {
@@ -627,20 +726,26 @@ export async function importExportPayload(
     type ParsedEdge = { edge: PendingEdge } | { failure: ImportEdgeResult };
     const parsedEdges: ParsedEdge[] = [];
     for (const edge of edgePage) {
-      parsedEdges.push(parseEdgeRow(edge));
+      const parsed = parseEdgeRow(edge);
+      // An endpoint over MAX_ENTRY_ID_BYTES was imported under its minted id: follow it there.
+      if ("edge" in parsed) {
+        const [source_id, target_id] = await Promise.all([boundedEntryId(parsed.edge.source_id), boundedEntryId(parsed.edge.target_id)]);
+        parsed.edge = { ...parsed.edge, source_id, target_id };
+      }
+      parsedEdges.push(parsed);
     }
 
-    // Endpoints this call has not already proven to exist (entries imported above
-    // are in existingIds), resolved in one chunked query.
+    // Endpoints the importer can READ, in one chunked scoped query. existingIds is not enough: it
+    // also holds ids that exist in other workspaces (the entries page skips those), and an edge to
+    // one would put a private id in this importer's export.
     const endpoints = [
       ...new Set(parsedEdges.flatMap(p => ("edge" in p ? [p.edge.source_id, p.edge.target_id] : []))),
     ];
-    const unknown = endpoints.filter(id => !existingIds.has(id));
-    for (const id of await loadExistingIds(env, unknown)) existingIds.add(id);
+    const readableIds = await loadReadableIds(env, endpoints, readable);
     const existingEdgeKeys = await loadExistingEdgeKeys(env, endpoints);
 
     const pendingEdgeBatch: PendingEdge[] = [];
-    const edgeBatchCounters = { imported: 0, failed: 0 };
+    const edgeBatchCounters = { imported: 0, failed: 0, skipped: 0 };
     for (const p of parsedEdges) {
       if ("failure" in p) {
         edges_failed++;
@@ -648,9 +753,9 @@ export async function importExportPayload(
         continue;
       }
       const { source_id, target_id, type } = p.edge;
-      if (!existingIds.has(source_id) || !existingIds.has(target_id)) {
-        edges_failed++;
-        results.push({ source_id, target_id, type, status: "failed", reason: "missing_endpoint" });
+      // Missing or not readable: the same plain skip, so the reply never says an id exists elsewhere.
+      if (!readableIds.has(source_id) || !readableIds.has(target_id)) {
+        edges_skipped++;
         continue;
       }
       const edgeKey = normalizedEdgeKey(source_id, target_id, type);
@@ -662,14 +767,15 @@ export async function importExportPayload(
       pendingEdgeBatch.push(p.edge);
 
       if (pendingEdgeBatch.length >= IMPORT_D1_BATCH_SIZE) {
-        await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters, writeCtx);
+        await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters, writeCtx, readable);
       }
     }
     if (pendingEdgeBatch.length) {
-      await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters, writeCtx);
+      await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters, writeCtx, readable);
     }
     edges_imported += edgeBatchCounters.imported;
     edges_failed += edgeBatchCounters.failed;
+    edges_skipped += edgeBatchCounters.skipped;
 
     // Projects ride the same call as the edges page, on their own cursor, so a client
     // that only knows entries and edges still restores the first page of them.
@@ -682,6 +788,8 @@ export async function importExportPayload(
     ok: true,
     imported,
     skipped,
+    skipped_in_trash,
+    skipped_too_large,
     failed,
     edges_imported,
     edges_skipped,
@@ -714,6 +822,10 @@ function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: 
 
   const contentParsed = parseRequiredString(entry.content, "missing_content", "invalid_content");
   if (!contentParsed.ok) return { failure: { id, status: "failed", reason: contentParsed.reason } };
+  // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note. A skip, not a failure — the whole
+  // import must not fail over one oversize record, and the copy deck's own import summary line
+  // needs a distinct, clear count separate from ordinary validation failures.
+  if (isOverContentLimit(contentParsed.value)) return { failure: { id, status: "skipped", reason: "too_large" } };
 
   const tagsParsed = parseTags(entry.tags);
   if (!tagsParsed.ok) return { failure: { id, status: "failed", reason: tagsParsed.reason } };
@@ -733,10 +845,17 @@ function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: 
   // Absent in exports taken before /export carried the field; created_at is what the
   // column would have coalesced to anyway. A restore must not launder a bad value into
   // a "recently touched" ranking signal, so a malformed one fails the row instead.
-  const updatedAt = entry.updated_at ?? created_at;
-  if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) {
+  const rawUpdatedAt = entry.updated_at ?? created_at;
+  if (typeof rawUpdatedAt !== "number" || !Number.isFinite(rawUpdatedAt)) {
     return { failure: { id, status: "failed", reason: "invalid_updated_at" } };
   }
+  // Cap at now (R4-U1/U2/U3): every writer clamps updated_at to MAX(now, prev + 1) to keep it
+  // strictly increasing, but that clamp is a no-op once prev is already >= now (a future date or
+  // a huge exported value) — the next edit's own clamp can never move it, the digest guard then
+  // treats every later edit as unseen, and entry_versions.created_at/valid_from (themselves
+  // clamped against this column) inherit the poisoned value forever. An uncapped import launders
+  // exactly the bad value the check above already refuses to accept unbounded.
+  const updatedAt = Math.min(rawUpdatedAt, Date.now());
 
   const recallCountParsed = parseOptionalNumber(entry.recall_count, "invalid_recall_count");
   if (!recallCountParsed.ok) return { failure: { id, status: "failed", reason: recallCountParsed.reason } };
