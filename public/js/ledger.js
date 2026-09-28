@@ -290,19 +290,24 @@ function setLedgerState(state) {
 
 /**
  * The calibration sentence, localized from GET /decisions/calibration's
- * structured fields (18-copy-deck.md section 8.6, T7-C's real contract:
- * `kind` is "rate", "in_line" or "no_range"; `stated`/`hit` are percentages,
- * set only when kind is "rate"), or the server's own English sentence when
- * `kind` is absent (an older Worker) - pure, so a test can cover every shape
- * without a fetch.
+ * structured fields (18-copy-deck.md section 8.6, T7-C's real contract):
+ * not-ready gets its own localized line; the ready line is `kind`'s template
+ * ("rate", "in_line" or "no_range"; `stated`/`hit` are percentages, set only
+ * when kind is "rate"), with an inferred-count tail appended when nInferred
+ * is above zero; the server's own English sentence when `kind` is absent (an
+ * older Worker) - pure, so a test can cover every shape without a fetch.
  */
 function calibrationSentence(result) {
   if (!result) return ''
-  const { kind, stated, hit, n } = result
-  if (kind === 'rate' && stated != null && hit != null && n != null) return t('ledger.lineRate', { stated, hit, n })
-  if (kind === 'in_line' && n != null) return t('ledger.lineInLine', { n })
-  if (kind === 'no_range' && n != null) return t('ledger.lineNoRange', { n })
-  return result.line || ''
+  if (result.ready === false) return t('ledger.lineNotReady', { needed: result.needed, n: result.n })
+  const { kind, stated, hit, n, nInferred } = result
+  let line
+  if (kind === 'rate' && stated != null && hit != null && n != null) line = t('ledger.lineRate', { stated, hit, n })
+  else if (kind === 'in_line' && n != null) line = t('ledger.lineInLine', { n })
+  else if (kind === 'no_range' && n != null) line = t('ledger.lineNoRange', { n })
+  else return result.line || ''
+  if (nInferred > 0) line += ' ' + tPlural('ledger.lineEstimated', nInferred, { k: nInferred })
+  return line
 }
 
 function renderLedgerSentence(result) {
@@ -310,10 +315,24 @@ function renderLedgerSentence(result) {
   if (el) el.textContent = calibrationSentence(result)
 }
 
+/**
+ * The topic-specific line (18-copy-deck.md 8.6's topicLineOf), localized from
+ * `result.topic`'s structured fields when its direction is "over" or "under" -
+ * the server's own English topicLine otherwise (an older Worker, or a topic
+ * whose direction is "in_line", which has no dedicated template).
+ */
+function topicLineOf(result) {
+  if (!result || !result.ready || !result.topic) return ''
+  const { name, n, direction } = result.topic
+  if (direction === 'over') return t('ledger.topicOver', { topic: name, n })
+  if (direction === 'under') return t('ledger.topicUnder', { topic: name, n })
+  return result.topicLine || ''
+}
+
 function renderLedgerTopicLine(result) {
   const el = document.getElementById('ledger-topic')
   if (!el) return
-  const line = (result && result.ready && result.topicLine) || ''
+  const line = topicLineOf(result)
   el.hidden = !line
   el.textContent = line
 }

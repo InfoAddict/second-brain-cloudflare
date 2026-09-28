@@ -78,6 +78,51 @@ describe("ledger math (pure, no DOM)", () => {
     expect(calibrationSentence(null)).toBe("");
   });
 
+  it("round 5 (deck 8.6): calibrationSentence localizes the not-ready line", () => {
+    const { calibrationSentence } = load();
+
+    const line = calibrationSentence(notReadyResult());
+
+    expect(line).toBe("You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 4 so far.");
+  });
+
+  it("round 5: calibrationSentence appends the inferred-count tail when nInferred is above zero", () => {
+    const { calibrationSentence } = load();
+
+    const line = calibrationSentence({ kind: "rate", stated: 74, hit: 52, n: 14, nInferred: 3 });
+
+    expect(line).toBe("So far, when you were about 74% sure, you were right 52% of the time, based on 14 decisions. For 3 of them, that figure was estimated from your wording.");
+  });
+
+  it("round 5: calibrationSentence omits the inferred-count tail when nInferred is zero", () => {
+    const { calibrationSentence } = load();
+
+    const line = calibrationSentence({ kind: "rate", stated: 74, hit: 52, n: 14, nInferred: 0 });
+
+    expect(line).toBe("So far, when you were about 74% sure, you were right 52% of the time, based on 14 decisions.");
+  });
+
+  it("round 5: topicLineOf localizes the over and under directions", () => {
+    const { topicLineOf } = load();
+
+    const over = topicLineOf({ ready: true, topic: { name: "hiring", n: 6, gap: 0.1, direction: "over" } });
+    const under = topicLineOf({ ready: true, topic: { name: "hiring", n: 6, gap: 0.1, direction: "under" } });
+
+    expect(over).toBe("On hiring, you've been right less often than you expected so far, based on 6 decisions.");
+    expect(under).toBe("On hiring, you've been right more often than you expected so far, based on 6 decisions.");
+  });
+
+  it("round 5: topicLineOf falls back to the server's topicLine for an in_line direction, and is blank with no topic", () => {
+    const { topicLineOf } = load();
+
+    const inLine = topicLineOf({ ready: true, topic: { name: "hiring", n: 6, gap: 0.01, direction: "in_line" }, topicLine: "server sentence" });
+    expect(inLine).toBe("server sentence");
+
+    expect(topicLineOf({ ready: true, topic: null })).toBe("");
+    expect(topicLineOf({ ready: false })).toBe("");
+    expect(topicLineOf(null)).toBe("");
+  });
+
   it("bucketRows maps calibration JSON to rows; n<5 rows carry no marks", () => {
     const { bucketRows } = load();
 

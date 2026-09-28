@@ -988,7 +988,16 @@ const I18N_EN = {
     // field ("rate", "in_line" or "no_range") next to the English server line.
     lineRate: "So far, when you were about {stated}% sure, you were right {hit}% of the time, based on {n} decisions.",
     lineInLine: 'So far, how sure you were roughly matches how things turned out, based on {n} decisions.',
+    // The "5" here is CALIBRATION_MIN_BUCKET_N (src/config.ts) typed in, since
+    // the client has no field to read it from; keep the two in step by hand.
     lineNoRange: "You'll see how often you're right once 5 decisions share a similar confidence. You have {n} so far.",
+    lineEstimated: {
+      one: 'For {k} of them, that figure was estimated from your wording.',
+      other: 'For {k} of them, that figure was estimated from your wording.',
+    },
+    topicOver: "On {topic}, you've been right less often than you expected so far, based on {n} decisions.",
+    topicUnder: "On {topic}, you've been right more often than you expected so far, based on {n} decisions.",
+    lineNotReady: "You'll see how your confidence compares with what happened after {needed} reviewed decisions. You have {n} so far.",
   },
   loops: {
     title: 'Open loops',
@@ -2191,6 +2200,13 @@ const I18N_IT = {
     lineRate: 'Finora, le scelte che davi al {stated}% circa si sono rivelate giuste il {hit}% delle volte, su {n} decisioni.',
     lineInLine: 'Finora la tua sicurezza corrisponde più o meno a come sono andate le cose, su {n} decisioni.',
     lineNoRange: 'Vedrai quanto spesso hai ragione quando 5 decisioni avranno una sicurezza simile. Finora ne hai {n}.',
+    lineEstimated: {
+      one: 'Per {k} di queste, la percentuale è stata stimata dalle tue parole.',
+      other: 'Per {k} di queste, la percentuale è stata stimata dalle tue parole.',
+    },
+    topicOver: 'Su {topic}, finora hai avuto ragione meno spesso di quanto ti aspettassi, su {n} decisioni.',
+    topicUnder: 'Su {topic}, finora hai avuto ragione più spesso di quanto ti aspettassi, su {n} decisioni.',
+    lineNotReady: "Vedrai come la tua sicurezza si confronta con com'è andata dopo {needed} decisioni valutate. Finora ne hai {n}.",
   },
   loops: {
     title: 'Impegni aperti',
