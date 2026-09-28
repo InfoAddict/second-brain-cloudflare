@@ -600,6 +600,77 @@ function renderViewStatusLockNote(entry) {
   el.textContent = t('memories.authorLocked', { name: entry.actor_name })
 }
 
+/**
+ * T7-E Task 14 (15-t7-wow-spec.md 7.3): the standing line and its Stop
+ * button, hidden entirely on a memory that is not currently standing. Shares
+ * this row with the status control below it (T-0101.8, `renderViewStatus`).
+ */
+/**
+ * The one memory a Stop click just turned ordinary, for the CURRENT sheet
+ * session only - not a permanent "not standing" label on every ordinary
+ * memory (that would be a badge on every row, i.e. no badge at all). Cleared
+ * whenever a sheet opens fresh, and by Undo's own restore.
+ */
+let justStoppedStandingId = null
+
+function renderViewStanding(entry) {
+  const block = document.getElementById('view-standing')
+  const line = document.getElementById('view-standing-line')
+  const btn = document.getElementById('view-standing-stop')
+  if (!block || !line || !btn) return
+  const tags = entry.tags || []
+  const isStanding = tags.some((tag) => String(tag).toLowerCase() === 'standing:active')
+  if (isStanding) {
+    block.style.display = ''
+    line.textContent = t('standing.sheetLine')
+    btn.style.display = ''
+    btn.onclick = () => stopStanding(entry, btn)
+    return
+  }
+  // UI reviewer: Stop must read as done the moment it succeeds, not only once
+  // the toast says so - this is the in-place confirmation, kept up until the
+  // sheet moves on to something else. No way to set it again here: spec 2.2
+  // says turning an ordinary memory into a standing one is not offered in
+  // 4.0, so Undo (from the toast) is the only way back.
+  if (entry.id != null && entry.id === justStoppedStandingId) {
+    block.style.display = ''
+    line.textContent = t('standing.notStanding')
+    btn.style.display = 'none'
+    return
+  }
+  block.style.display = 'none'
+}
+
+/** Stop is a resolve action (POST /standing/stop): removes standing:active only, versioned and undoable. */
+async function stopStanding(entry, btn) {
+  if (btn) btn.disabled = true
+  try {
+    const res = await fetch(`${WORKER_URL}/standing/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: entry.id }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || '')
+    // Updates the sheet immediately, before the round trip below: the toast
+    // already says it happened, and the sheet should agree at once rather
+    // than a moment later.
+    justStoppedStandingId = entry.id
+    renderViewStanding({ ...entry, tags: (entry.tags || []).filter((tag) => String(tag).toLowerCase() !== 'standing:active') })
+    undoToast(t('standing.stopped'), entry.id, {
+      onUndone: () => {
+        if (justStoppedStandingId === entry.id) justStoppedStandingId = null
+        if (typeof hydrateView === 'function') hydrateView(entry.id)
+      },
+    })
+    if (typeof hydrateView === 'function') hydrateView(entry.id)
+  } catch (e) {
+    showToast(t('standing.stopFailed', { message: e.message || '' }))
+  } finally {
+    if (btn) btn.disabled = false
+  }
+}
+
 function renderViewStatus(entry) {
   const group = document.getElementById('view-status')
   const caption = document.getElementById('view-status-caption')
@@ -634,6 +705,7 @@ async function hydrateView(id) {
     renderViewMeta(data.entry)
     renderViewAutoSaveNote(data.entry)
     renderViewBrain(data.entry)
+    renderViewStanding(data.entry)
     renderViewStatus(data.entry)
     renderViewTimeline(data.entry)
     // openView rendered from whatever the caller happened to hold; /entry is
@@ -729,6 +801,7 @@ function renderViewTimeline(entry) {
 function applyAuthorLock(entry) {
   lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
   lockAuthoredControls(entry, Array.from(document.querySelectorAll('#view-status .status-option')), 'status-option--locked')
+  lockAuthoredControls(entry, [document.getElementById('view-standing-stop')], 'card-action-btn--locked')
 }
 
 /**
@@ -779,10 +852,15 @@ let viewOpenId = null
 
 function openView(entry, cardElement) {
   viewOpenId = entry.id || null
+  // A fresh sheet, even on the same memory reopened: the "just stopped"
+  // acknowledgment belongs to the session that clicked Stop, not to every
+  // later visit.
+  justStoppedStandingId = null
   document.getElementById('view-content-text').textContent = normalizeForDisplay(entry.content)
   renderViewMeta(entry)
   renderViewAutoSaveNote(entry)
   renderViewBrain(entry)
+  renderViewStanding(entry)
   renderViewStatus(entry)
   if (entry.id) hydrateView(entry.id)
   const tagsContainer = document.getElementById('view-tags-container')

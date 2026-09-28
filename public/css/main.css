@@ -784,6 +784,42 @@
         overflow-wrap: anywhere;
       }
 
+      /* T7-E Task 14 (15-t7-wow-spec.md 7.3): a standing instruction that
+         fired, above the results it fired for. Accent-bordered so it reads
+         as a different KIND of thing from the answer card below it, not
+         another candidate to weigh. */
+      .standing-card {
+        max-width: 92%;
+        padding: 12px 15px;
+        background: var(--bg-card);
+        border: 1px solid var(--accent-ink);
+        border-radius: var(--r-card);
+        margin-bottom: 10px;
+        animation: bubble-in 0.36s var(--ease) both;
+      }
+
+      .standing-card-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12.5px;
+        font-weight: 600;
+        color: var(--accent-ink);
+        margin-bottom: 6px;
+      }
+
+      .standing-card-text {
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--text-primary);
+        margin-bottom: 10px;
+      }
+
+      .standing-card-actions {
+        display: flex;
+        gap: 8px;
+      }
+
       /* The assistant's answer: paper, a hairline border and the system's
          answer-card shadow, DM Sans rather than the earlier literary serif
          voice reserved for headings and numerals now. */
@@ -1152,6 +1188,13 @@
         border-color: var(--accent-ink);
       }
 
+      /* T7-E Task 14: same accent-ink treatment as the shared chip, since
+         both say "this row behaves differently" rather than naming a topic. */
+      .tag-chip--standing {
+        color: var(--accent-ink);
+        border-color: var(--accent-ink);
+      }
+
       .tag-chip--hop {
         background: var(--accent-soft);
         color: var(--accent-ink);
@@ -1228,6 +1271,58 @@
         display: flex;
         flex-direction: column;
         gap: 10px;
+      }
+
+      /* T7-E Task 14: the "Standing instructions" filter's own rows -
+         content and firing state side by side, one row per item, so the
+         state is never ambiguous about which instruction it describes. */
+      .standing-filter-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--r-card);
+        margin-bottom: 10px;
+        cursor: pointer;
+      }
+
+      .standing-filter-content {
+        font-size: 14px;
+        line-height: 1.4;
+        color: var(--text-primary);
+        min-width: 0;
+      }
+
+      .standing-filter-state {
+        flex-shrink: 0;
+        font-size: 12px;
+        color: var(--text-secondary);
+        white-space: nowrap;
+      }
+
+      .standing-filter-state--active {
+        color: var(--accent-ink);
+        font-weight: 500;
+      }
+
+      /* A long state phrase (Italian's translations run longer than English's)
+         squeezed the content column so narrow it wrapped to many lines, with
+         the vertically-centered state label landing mid-way through them
+         rather than beside a single line. Below content instead, never
+         beside it, once a row is narrow enough for that to happen. */
+      @media (max-width: 480px) {
+        .standing-filter-row {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 6px;
+        }
+
+        .standing-filter-state {
+          white-space: normal;
+        }
       }
 
       #recent-list .card-content,

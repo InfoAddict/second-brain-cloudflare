@@ -702,6 +702,13 @@
           <div class="view-content" id="view-content-text"></div>
           <div class="view-tags" id="view-tags-container"></div>
           <div class="view-brain" id="view-brain" style="display: none"></div>
+          <!-- T7-E Task 14 (15-t7-wow-spec.md 7.3): shares this row with the
+               status control below it (T-0101.8); hidden entirely on a
+               non-standing memory. -->
+          <div class="view-standing" id="view-standing" style="display: none">
+            <span class="view-standing-line" id="view-standing-line"></span>
+            <button type="button" class="card-action-btn" id="view-standing-stop"><i class="ti ti-pin-off"></i> <span data-i18n="standing.stop">Stop</span></button>
+          </div>
           <div class="view-status" id="view-status-block">
             <div class="view-status-title" data-i18n="status.label">Status</div>
             <div id="view-status" class="status-control" role="radiogroup" aria-label="Status">

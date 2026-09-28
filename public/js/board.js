@@ -353,7 +353,7 @@ function renderResurfacePanel(board, brief) {
     </div>
     <p class="reread-text">${escHtml(titleLine(m.content, 180))}</p>
     <div class="memory-card-foot">
-      ${tags}
+      ${standingBadgeHtml(m.tags)}${tags}
       <button class="digest-btn" type="button" onclick="openAppend('${escAttr(m.id)}', '${escAttr((m.content || '').slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
       <button class="digest-btn" type="button" data-resurface-dismiss onclick="dismissResurface('${escAttr(m.id)}', this)">${escHtml(t('brief.dismiss'))}</button>
     </div>`

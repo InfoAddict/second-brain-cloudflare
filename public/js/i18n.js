@@ -1009,6 +1009,47 @@ const I18N_EN = {
     topicUnder: "On {topic}, you've been right more often than you expected so far, based on {n} decisions.",
     lineNotReady: "You'll see how your confidence compares with what happened after {needed} reviewed decisions. You have {n} so far.",
   },
+  // T7-E Task 14. Copywriter final (18-copy-deck.md section 10):
+  // stateActive, stateOverLimit, stateNotIndexed, statePendingRefresh,
+  // stopped, recallCardTitleBy, and recallCardTitle (confirmed as-is: never
+  // "you set", authorship is unverifiable). Still draft pending the
+  // copywriter (1aa406a6): badge, filterLabel, filterLoadFailed, tryAgain,
+  // stop, stopFailed, recallOpen, recallStop. badgeTitle, filterEmpty and
+  // sheetLine are exact strings from 15-t7-wow-spec.md 7.3 and the
+  // director's decisions.
+  standing: {
+    badge: 'Standing',
+    badgeTitle: 'Shown to your AI tools when a question closely matches it.',
+    filterLabel: 'Standing instructions',
+    filterEmpty: 'No standing instructions yet. Ask your AI to remind you of something whenever a topic comes up.',
+    filterLoadFailed: 'Could not load standing instructions.',
+    tryAgain: 'Try again',
+    stateActive: 'In use',
+    // {max} is the workspace's configured STANDING_MAX, never a typed-in
+    // number - see standingStateLabel (recent.js) for the backend gap this
+    // depends on (GET /standing does not return the limit yet).
+    stateOverLimit: 'Not in use: only {max} can be active',
+    stateNotIndexed: 'Not in use yet: still being indexed',
+    stateHeld: 'Held',
+    statePendingRefresh: 'Not in use yet: updating',
+    sheetLine: 'Standing instruction · comes up when this topic does',
+    stop: 'Stop',
+    stopped: 'Stopped. The memory stays.',
+    stopFailed: 'Could not stop this: {message}',
+    recallCardTitle: 'Standing instruction',
+    // {date} from formatDateUI, matching the rest of the dashboard's date rendering.
+    recallCardTitleBy: 'Standing instruction (set by {name}, {date})',
+    recallOpen: 'Open',
+    recallStop: 'Stop',
+    // Copywriter final (18-copy-deck.md section 10): the sheet's immediate,
+    // in-place confirmation once Stop succeeds, shown only for the memory a
+    // Stop click just turned ordinary (justStoppedStandingId, memory-crud.js)
+    // - never for a memory that was never standing, which shows no line at
+    // all. No re-arm control: spec 2.2 says turning an ordinary memory into
+    // a standing one is not offered in 4.0 - only Undo, from the toast,
+    // brings it back.
+    notStanding: 'No longer a standing instruction',
+  },
   loops: {
     title: 'Open loops',
     empty: 'Nothing open.',
@@ -2222,6 +2263,29 @@ const I18N_IT = {
     topicOver: 'Su {topic}, finora hai avuto ragione meno spesso di quanto ti aspettassi, su {n} decisioni.',
     topicUnder: 'Su {topic}, finora hai avuto ragione più spesso di quanto ti aspettassi, su {n} decisioni.',
     lineNotReady: "Vedrai come la tua sicurezza si confronta con com'è andata dopo {needed} decisioni valutate. Finora ne hai {n}.",
+  },
+  // See the English catalog's note for what is copywriter-final vs draft.
+  standing: {
+    badge: 'Permanente',
+    badgeTitle: 'Mostrato ai tuoi strumenti di IA quando una domanda vi corrisponde da vicino.',
+    filterLabel: 'Istruzioni permanenti',
+    filterEmpty: 'Ancora nessuna istruzione permanente. Chiedi alla tua IA di ricordarti qualcosa ogni volta che un argomento ricorre.',
+    filterLoadFailed: 'Impossibile caricare le istruzioni permanenti.',
+    tryAgain: 'Riprova',
+    stateActive: 'In uso',
+    stateOverLimit: 'Non in uso: possono essere attive solo {max}',
+    stateNotIndexed: 'Non ancora in uso: indicizzazione in corso',
+    stateHeld: 'Trattenuta',
+    statePendingRefresh: 'Non ancora in uso: aggiornamento in corso',
+    sheetLine: "Istruzione permanente · si attiva quando l'argomento ricorre",
+    stop: 'Disattiva',
+    stopped: 'Disattivata. Il ricordo resta.',
+    stopFailed: 'Impossibile disattivarla: {message}',
+    recallCardTitle: 'Istruzione permanente',
+    recallCardTitleBy: 'Istruzione permanente (impostata da {name} il {date})',
+    recallOpen: 'Apri',
+    recallStop: 'Disattiva',
+    notStanding: 'Non è più un\'istruzione permanente',
   },
   loops: {
     title: 'Impegni aperti',
