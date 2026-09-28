@@ -15,11 +15,15 @@ import type { ProjectRow } from "../projects/registry";
 import { rememberTags } from "../tags/vocabulary";
 import { CONFLICT_HELD_TAG, isCapsuleTag, stripNewReservedTags, SYSTEM_JOB_TAGS, USER_EDITED_TAG, withUserEditMarker } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
-import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES, VERSION_ROW_BUDGET_BYTES } from "../constants";
+import { STANDING_MAX_CHARS, SYSTEM_SOURCE, TRANSCRIPT_SOURCES, VERSION_ROW_BUDGET_BYTES } from "../constants";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
-import { planSupersede, statedWindow, supersededBySql, supersedeStatements, windowClosedSql, type SupersedePlan, type Window } from "../memory/validity";
+import { currentValidityAt, planSupersede, statedWindow, supersededBySql, supersedeStatements, windowClosedSql, type SupersedePlan, type Window } from "../memory/validity";
 import type { WhenKind, WhenSource } from "../when/input";
 import { extractUnambiguousDate } from "../when/heuristic";
+import { STANDING_TAG } from "../tags/t7";
+import { standingTouched, type StandingCacheConfig } from "../standing/cache";
+import { buildDecisionCapture } from "../decisions/capture";
+import { buildCommitmentTags, validateT7Capture, type T7CaptureInput, type T7ReplyInfo } from "./t7-capture";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -73,7 +77,7 @@ export function buildEntryFilterQuery(params: {
   return { sql, bindings };
 }
 
-export type CaptureResult =
+export type CaptureResult = (
   | { status: "blocked"; matchId: string; score: number }
   | { status: "stored"; id: string; tags: string[] }
   | { status: "flagged"; id: string; matchId: string; score: number }
@@ -84,7 +88,11 @@ export type CaptureResult =
   }
   | { status: "contradiction_protected"; id: string; canonicalId: string; entryStatus: MemoryStatus | null; reason?: string }
   | { status: "merged"; id: string }
-  | { status: "replaced"; id: string };
+  | { status: "replaced"; id: string }
+  // A standing/decision/commitment request that failed its own cross-validation
+  // (Design 2.1 point 1, 4.1, 5.1). Nothing is written on this path.
+  | { status: "t7_refused"; error: string }
+) & { t7?: T7ReplyInfo };
 
 /**
  * Content and tags exactly as captureEntry stores them: trimmed, hashtags lifted into tags,
@@ -125,6 +133,9 @@ export interface CaptureOptions {
   validity?: { from?: number | null; until?: number | null };
   /** Test seam: the byte budget a merge's version row may use before it drops the incoming text. */
   versionRowBudgetBytes?: number;
+  /** Track 7 (T-0089.7.1/.2/.3): standing, decision or commitment parameters. Absent for an
+   * ordinary capture. Never set alongside systemWrite — system jobs never carry these. */
+  t7?: T7CaptureInput;
 }
 
 export type SystemJob = keyof typeof SYSTEM_JOB_TAGS;
@@ -168,6 +179,61 @@ export async function captureEntry(
   const change: ChangeContext = { actorId: writeCtx.actorId, channel: opts.channel ?? "unspecified" };
   const { content: c, tags: t } = normalizeCaptureInput(rawContent, tags);
 
+  // Track 7 (Design 2.1 point 1, 4.1, 5.1): cross-validate before any duplicate check or
+  // write, and fold in whichever mode's own tags into this capture's tag list. At most one
+  // of standing/decision/commitment ever applies (validateT7Capture refuses the rest).
+  let t7Reply: T7ReplyInfo | undefined;
+  let t7When: { at: number; kind: "due"; source: "explicit"; label: string } | undefined;
+  if (opts.t7) {
+    const validation = validateT7Capture(opts.t7);
+    if (validation) return { status: "t7_refused", error: validation.error };
+
+    if (opts.t7.decision) {
+      const decisionResult = buildDecisionCapture(opts.t7, c, Date.now(), { reviewDefaultDays: cfg.DECISION_REVIEW_DEFAULT_DAYS, timezone: cfg.TIMEZONE });
+      if ("error" in decisionResult) return { status: "t7_refused", error: decisionResult.error };
+      t.push(...decisionResult.tags);
+      t7When = { at: decisionResult.when_at, kind: decisionResult.when_kind, source: decisionResult.when_source, label: decisionResult.when_label };
+      t7Reply = { kind: "decision", when_at: decisionResult.when_at, confidence: decisionResult.confidence };
+    } else if (opts.t7.owed_by !== undefined || opts.t7.owed_to !== undefined) {
+      const commitment = buildCommitmentTags(opts.t7);
+      t.push(...commitment.tags);
+      t7Reply = {
+        kind: "commitment", direction: commitment.direction,
+        ...(commitment.counterpartyLabel ? { counterpartyLabel: commitment.counterpartyLabel } : {}),
+        ...(commitment.slugDropped ? { slugDropped: true as const } : {}),
+      };
+    } else if (opts.t7.standing) {
+      if (c.length > STANDING_MAX_CHARS) {
+        t7Reply = { kind: "standing", applied: false, reason: "too_long" };
+      } else {
+        // One statement, only for a standing request (Design 2.1 point 3). A concurrent
+        // standing write can overshoot by the race width; the cache build (Design 2.4)
+        // enforces the cap regardless, so a stale count here never breaks correctness.
+        // validity: current: a replaced or ended standing instruction must not count toward the
+        // cap, the same predicate src/standing/cache.ts's own build uses (T-0089.2.1, 5.5) — the
+        // two counts would otherwise disagree about how many standing instructions are active.
+        const capRow = await env.DB.prepare(
+          `SELECT COUNT(*) AS n FROM entries
+            WHERE workspace_id = ? AND instr(lower(tags), '"standing:active"') > 0 AND tags NOT LIKE '%"status:deprecated"%'
+              AND ${currentValidityAt("", "?")}`,
+        ).bind(writeCtx.workspaceId, Date.now()).first<{ n: number }>();
+        if ((capRow?.n ?? 0) >= cfg.STANDING_MAX) {
+          t7Reply = { kind: "standing", applied: false, reason: "cap" };
+        } else {
+          t.push(STANDING_TAG);
+          t7Reply = { kind: "standing", applied: true };
+        }
+      }
+    }
+  }
+  /** Attaches this capture's t7 reply info to a result, except across a merge/replace: those tags are
+   * not propagated by the merge path (only a standing tag is, separately, in commitPerson below). */
+  const withT7 = (r: CaptureResult): CaptureResult => (t7Reply ? { ...r, t7: t7Reply } : r);
+  const standingKnownVector = (vector: number[] | null | undefined, entryId: string) => {
+    if (t7Reply?.kind !== "standing" || !t7Reply.applied || !vector) return;
+    standingTouched(env, ctx, cfg as StandingCacheConfig, [writeCtx.workspaceId], [{ id: entryId, vector }]);
+  };
+
   const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(c, env, cfg, writeCtx.workspaceId, ctx);
 
   const definesCapsule = t.some(isCapsuleTag);
@@ -210,8 +276,11 @@ export async function captureEntry(
 
       if (!protectedTarget) {
         let newVectorIds: string[] | null = null;
+        let newVectorValues: number[] | null = null;
         try {
-          newVectorIds = (await reembedOrThrow(env, targetId, newContent, existingTags, existingSource, cfg, writeCtx)).vectorIds;
+          const reembedded = await reembedOrThrow(env, targetId, newContent, existingTags, existingSource, cfg, writeCtx);
+          newVectorIds = reembedded.vectorIds;
+          newVectorValues = reembedded.values;
         } catch (e) {
           console.error("Merge re-embed failed — keeping both, target untouched:", e);
         }
@@ -279,7 +348,12 @@ export async function captureEntry(
             const stripped = tagsAfterWrite(existingTags);
             const verdictTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
             // A person's capture merging into a digest or insight makes it theirs.
-            const refreshedTags = withUserEditMarker(verdictTags);
+            const userEditedTags = withUserEditMarker(verdictTags);
+            // Design 2.1 point 4a: a standing capture that merges into an existing row makes
+            // THAT row standing too, through the normal merge path — the rest of the incoming
+            // tag list is otherwise discarded here, but this one is not optional.
+            const refreshedTags = t.includes(STANDING_TAG) && !userEditedTags.includes(STANDING_TAG)
+              ? [...userEditedTags, STANDING_TAG] : userEditedTags;
             const personCasColumns = { tags: targetRow.tags ?? "[]", content: existingContent, workspace_id: writeCtx.workspaceId, vector_ids: targetRow.vector_ids ?? null };
             const results = await env.DB.batch([
               snapshotStatement(env, {
@@ -314,6 +388,9 @@ export async function captureEntry(
             // This merge's own upload never became the row's (round 6: ids are per upload): delete it.
             await discardUpload(env, targetId, newVectorIds);
           } else {
+            if (opts.systemWrite === undefined && t.includes(STANDING_TAG)) {
+              standingTouched(env, ctx, cfg as StandingCacheConfig, [writeCtx.workspaceId], newVectorValues ? [{ id: targetId, vector: newVectorValues }] : undefined);
+            }
             try {
               await deleteStaleVectors(env, targetId, oldVectorIds, newVectorIds);
             } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
@@ -331,9 +408,13 @@ export async function captureEntry(
             classifyThenInfer(targetId, newContent, env, ctx, cfg, kind =>
               inferEdgesOnWrite(targetId, neighbors, env, { suppressId: dup.matchId, newKind: kind }));
 
+            // Only standing's tag is propagated by a merge (see refreshedTags above); a decision's or
+            // commitment's own tags are silently discarded like the rest of the incoming list, matching
+            // existing merge behavior, so their reply info is not attached to a merged/replaced outcome.
+            const mergeT7 = t7Reply?.kind === "standing" ? t7Reply : undefined;
             return mergeAction.action === "merge"
-              ? { status: "merged", id: targetId }
-              : { status: "replaced", id: targetId };
+              ? { status: "merged", id: targetId, ...(mergeT7 ? { t7: mergeT7 } : {}) }
+              : { status: "replaced", id: targetId, ...(mergeT7 ? { t7: mergeT7 } : {}) };
           }
         }
       }
@@ -400,21 +481,27 @@ export async function captureEntry(
     ? withStatus(duplicateTags.filter(tag => tag !== "contradiction-resolved"), "draft")
     : duplicateTags;
 
-  // The caller's own `when` always wins. Absent one, a cheap regex pass looks
-  // for an unambiguous future date already in the text — negligible CPU, no
-  // model call — and only ever claims a date nobody could dispute; anything
-  // fuzzier is src/when/pass.ts's job, on a budget, at night.
-  const resolvedWhen = when ?? (() => {
+  // A decision's own computed review date wins over everything (Design 4.1); it is never
+  // combined with a caller `when` (validateT7Capture already refused review_by + when
+  // together). Otherwise the caller's own `when` always wins. Absent both, a cheap regex
+  // pass looks for an unambiguous future date already in the text — negligible CPU, no
+  // model call — and only ever claims a date nobody could dispute; anything fuzzier is
+  // src/when/pass.ts's job, on a budget, at night.
+  const resolvedWhen = t7When ?? when ?? (() => {
     const at = extractUnambiguousDate(c, now, cfg.TIMEZONE);
     return at !== null ? { at, kind: "due" as WhenKind, source: "regex" as WhenSource } : undefined;
   })();
 
   // versioning: exempt: creation — a new row has no prior state to keep
   await env.DB.prepare(
-    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source, valid_from, valid_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source, when_label, valid_from, valid_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, c, JSON.stringify(finalTags), source, now, now, "[]", writeCtx.workspaceId, writeCtx.actorId,
     resolvedWhen?.at ?? null, resolvedWhen?.kind ?? null, resolvedWhen?.source ?? null,
+    // Only a decision's review date carries a stored label (Design 4.1: "Review: " + shortDecision(content),
+    // bare — no English prefix, see decisions/capture.ts's reviewLabel comment); the regex/caller-`when`
+    // paths never generate one, matching every other when_label writer in this codebase.
+    (resolvedWhen && "label" in resolvedWhen) ? resolvedWhen.label : null,
     window.valid_from, window.valid_until,
   ).run();
 
@@ -422,6 +509,7 @@ export async function captureEntry(
   // still be turned into a held draft by a lost compare-and-set below.
   const scheduleIndex = (indexTags: string[]) => ctx.waitUntil(
     storeEntry(env, id, c, indexTags, source, now, cfg, writeCtx)
+      .then(stored => standingKnownVector(stored.values, id))
       .catch(e => console.error("Vectorize insert failed (non-fatal):", e))
   );
 
@@ -471,6 +559,7 @@ export async function captureEntry(
         canonicalId: conflictId,
         entryStatus: getStatus(protectedTags),
         reason: contradiction.reason,
+        ...(t7Reply ? { t7: t7Reply } : {}),
       };
     };
 
@@ -513,7 +602,7 @@ export async function captureEntry(
       scheduleIndex(keptTags);
       classifyThenInfer(id, c, env, ctx, cfg, kind =>
         inferEdgesOnWrite(id, neighbors, env, { suppressId, newKind: kind }));
-      return { status: "stored", id, tags: keptTags };
+      return withT7({ status: "stored", id, tags: keptTags });
     }
 
     if (opts.channel) {
@@ -527,22 +616,22 @@ export async function captureEntry(
     scheduleIndex(finalTags);
     classifyThenInfer(id, c, env, ctx, cfg, kind =>
       inferEdgesOnWrite(id, neighbors.filter(n => n.id !== conflictId), env, { suppressId, newKind: kind }));
-    return {
+    return withT7({
       status: "contradiction", id, resolvedConflict: conflictId, reason: contradiction.reason,
       supersede: { closedId, at, direction: closesOlder ? "older" : "newer", conflictPreview: String(snap.content ?? "").slice(0, 60) },
-    };
+    });
   }
   scheduleIndex(finalTags);
   classifyThenInfer(id, c, env, ctx, cfg, kind =>
     inferEdgesOnWrite(id, neighbors, env, { suppressId, newKind: kind }));
 
   if (dup.status === "flagged") {
-    return { status: "flagged", id, matchId: dup.matchId, score: dup.score };
+    return withT7({ status: "flagged", id, matchId: dup.matchId, score: dup.score });
   }
 
   // finalTags is what actually landed on the row — hashtags pulled out of the
   // content, plus anything the caller passed. The dashboard shows it back as a
   // capture receipt, so a person can see what the brain did with what they
   // wrote rather than trusting it silently.
-  return { status: "stored", id, tags: finalTags };
+  return withT7({ status: "stored", id, tags: finalTags });
 }

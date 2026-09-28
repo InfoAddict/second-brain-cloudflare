@@ -13,6 +13,7 @@ import { STALE_REVIEW_SQL } from "../../src/memory/stale";
 import { PENDING_INSIGHT_SQL } from "../../src/memory/patterns";
 import { dueSql } from "../../src/when/input";
 import { openLoopSql } from "../../src/memory/loops";
+import { openOutboundSql, openInboundSql } from "../../src/commitments/direction";
 
 const ROOT = join(import.meta.dirname, "../..");
 
@@ -27,7 +28,7 @@ function* walk(dir: string): Generator<string> {
 /** Drops rows that are deprecated, quarantined or held: a "what is live" filter. */
 const LIVENESS_FILTER = /NOT LIKE '%"status:deprecated"%'|NOT LIKE '%"quarantine:|NOT LIKE '%"conflict-held"%'|\$\{NOT_HELD_SQL\}/;
 /** The validity predicate itself, or a named fragment that carries it (checked below). */
-const VALIDITY = /(\w+\.)?valid_until IS NULL OR (\w+\.)?valid_until >|currentValidityAt\(|currentValiditySql\(|validAtSql\(|\$\{(STALE_REVIEW_SQL|PENDING_INSIGHT_SQL)\}|dueSql\(|openLoopSql\(|resurfaceFilter\(/;
+const VALIDITY = /(\w+\.)?valid_until IS NULL OR (\w+\.)?valid_until >|currentValidityAt\(|currentValiditySql\(|validAtSql\(|\$\{(STALE_REVIEW_SQL|PENDING_INSIGHT_SQL)\}|dueSql\(|openLoopSql\(|openOutboundSql\(|openInboundSql\(|resurfaceFilter\(/;
 /** True when the SQL literal filters on current validity (the predicate itself, or a fragment that carries it). */
 export const carriesValidity = (sql: string): boolean => VALIDITY.test(sql);
 
@@ -63,6 +64,7 @@ const ANY_READERS: { file: string; has: string; why: string }[] = [
   { file: "src/insight/candidates.ts", has: "WHERE ${NOT_HELD_SQL}", why: "seed scan fragment; isCurrent() drops replaced rows in JS on the rows it returns" },
   { file: "src/recall/search.ts", has: "${tagScopeSql} AND ${NOT_HELD_SQL}", why: "tag/project member ids; the final hydration's d1Filters is the current-only predicate" },
   { file: "src/staleness/pass.ts", has: "tags NOT LIKE '%\"status:deprecated\"%'", why: "SYSTEM_TAG_EXCLUSIONS fragment; the candidate query adds currentValidityAt itself" },
+  { file: "src/brief/compute.ts", has: "AND tags LIKE '%\"standing:active\"%' AND tags NOT LIKE '%\"status:deprecated\"%'", why: "hydrates ids readStandingCaches already picked with its own currentValidityAt filter (Design 2.x); nothing here can be replaced" },
 ];
 
 describe("the validity matcher", () => {
@@ -100,6 +102,7 @@ describe("current-reader class guard (5.5)", () => {
     for (const [name, sql] of [
       ["STALE_REVIEW_SQL", STALE_REVIEW_SQL], ["PENDING_INSIGHT_SQL", PENDING_INSIGHT_SQL],
       ["dueSql", dueSql(1)], ["openLoopSql", openLoopSql(1)],
+      ["openOutboundSql", openOutboundSql(1)], ["openInboundSql", openInboundSql(1)],
     ] as const) {
       expect(sql, name).toMatch(/valid_until IS NULL OR valid_until >/);
     }

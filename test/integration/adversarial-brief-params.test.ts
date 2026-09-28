@@ -10,6 +10,7 @@ import type { Env } from "../../src/env";
 
 let sqlite: SqliteD1;
 afterEach(() => sqlite?.close());
+const ctx = { waitUntil: (_: Promise<unknown>) => {} };
 
 it("keeps a 40-pattern project brief within D1's parameter ceiling for a member in 58 teams", async () => {
   sqlite = makeSqliteD1();
@@ -35,6 +36,6 @@ it("keeps a 40-pattern project brief within D1's parameter ceiling for a member 
     aliases: Array.from({ length: 13 }, (_, j) => `topic-${i}-${j}`), created_at: 1, updated_at: null,
   }));
 
-  await computeAgentBrief(makeTestEnv(undefined, { DB: db }), auth, projects);
+  await computeAgentBrief(makeTestEnv(undefined, { DB: db }), ctx, auth, projects);
   expect(Math.max(...counts)).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
 });

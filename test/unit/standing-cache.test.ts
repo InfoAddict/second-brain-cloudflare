@@ -241,6 +241,24 @@ describe("buildStandingCache", () => {
     expect(getCalls).toBeGreaterThanOrEqual(2); // proves there is a fresh read right before writing, not just the initial one
     expect(puts).toHaveLength(0); // and the race was caught: no redundant write over the winner's identical result
   });
+
+  it("the cache-build read is served by idx_entries_standing (EXPLAIN QUERY PLAN)", async () => {
+    // Mirrors buildStandingCacheNow's own query text (src/standing/cache.ts) — kept as a
+    // literal here, like test/unit/compress-held-plan.test.ts's raw-SQL checks, because the
+    // build's query lives inline rather than behind an exported builder.
+    const rows = (await sqlite.db.prepare(
+      `EXPLAIN QUERY PLAN SELECT id, tags, vector_ids, created_at FROM entries
+        WHERE workspace_id = ?1
+          AND instr(lower(tags), '"standing:active"') > 0
+          AND tags NOT LIKE '%"status:deprecated"%'
+          AND tags NOT LIKE '%"conflict-held"%'
+          AND tags NOT LIKE '%"quarantine:%'
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?2`,
+    ).bind("ws-a", 50).all()).results as { detail: string }[];
+    const plan = rows.map(r => r.detail).join("\n");
+    expect(plan).toContain("idx_entries_standing");
+  });
 });
 
 describe("readStandingCaches", () => {

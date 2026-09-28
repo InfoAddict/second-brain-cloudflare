@@ -382,12 +382,21 @@ function compactBriefLines(brief) {
   const lines = [];
   const due = Number(brief?.attention?.due);
   const open = Number(brief?.loops?.open);
+  const owedToYou = Number(brief?.owed_to_you?.open);
   if (Number.isFinite(due) && due > 0) lines.push(`Due: ${Math.floor(due)} within 48 hours.`);
   if (Number.isFinite(open) && open > 0) {
     lines.push(`Open commitments: ${Math.floor(open)}.`);
     const items = Array.isArray(brief?.loops?.items) ? brief.loops.items.slice(0, 3) : [];
     for (const item of items) lines.push(`Commitment: ${cleanSnippet(item?.id).slice(0, 80)} ${cleanSnippet(item?.content).slice(0, 160)}`);
   }
+  // Track 7 (Design 2.11, 5.3): owed_to_you and standing are informational counts/snippets
+  // only — never decisions or calibration (map Q5 rule: the hook is not a place for
+  // informational lines beyond due/commitments).
+  if (Number.isFinite(owedToYou) && owedToYou > 0) {
+    lines.push(`Owed to you: ${Math.floor(owedToYou)}.`);
+  }
+  const standingItems = Array.isArray(brief?.standing?.items) ? brief.standing.items.slice(0, 3) : [];
+  for (const item of standingItems) lines.push(`Standing: ${cleanSnippet(item?.content).slice(0, 160)}`);
   return lines;
 }
 

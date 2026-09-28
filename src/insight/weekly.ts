@@ -529,11 +529,12 @@ export async function runWeeklyInsights(
 
       // Mark it used either way, or the pass re-proposes and re-pays for this pair forever.
       used.push(candidate.id);
-      // Only a blocked capture wrote nothing. Every other status left a row (created,
-      // flagged, or an earlier system insight merged into), and an edge sourced from
-      // a row that does not exist would dangle, so blocked alone gets none. The edge
-      // carries the insight's own workspace so scoped graph walks can see it.
-      if (captured.status !== "blocked") {
+      // Only a blocked capture (or a t7_refused one — never reachable here, a system job
+      // never passes Track 7 parameters) wrote nothing. Every other status left a row
+      // (created, flagged, or an earlier system insight merged into), and an edge sourced
+      // from a row that does not exist would dangle, so blocked/t7_refused alone gets
+      // none. The edge carries the insight's own workspace so scoped graph walks can see it.
+      if (captured.status !== "blocked" && captured.status !== "t7_refused") {
         written++;
         // A replaced insight was redrawn from THIS pair, so the pair it was drawn from
         // before no longer describes it. A merge keeps its edges and adds these.

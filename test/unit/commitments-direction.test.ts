@@ -8,6 +8,8 @@ import {
   directionOf,
   counterpartySlug,
   counterpartyName,
+  counterpartyOf,
+  dueKindOf,
 } from "../../src/commitments/direction";
 
 const NOW = Date.now();
@@ -120,5 +122,28 @@ describe("counterpartyName", () => {
     expect(counterpartyName("dana-smith")).toBe("Dana Smith");
     expect(counterpartyName("priya")).toBe("Priya");
     expect(counterpartyName("sam_jones")).toBe("Sam Jones");
+  });
+});
+
+describe("counterpartyOf", () => {
+  it("reads the counterparty tag's display name", () => {
+    expect(counterpartyOf(["task", "counterparty:priya"])).toBe("Priya");
+  });
+
+  it("is undefined when no counterparty tag is present", () => {
+    expect(counterpartyOf(["task"])).toBeUndefined();
+  });
+});
+
+describe("dueKindOf", () => {
+  it("classifies a decision, inbound, outbound and other", () => {
+    expect(dueKindOf(["ledger:decision"])).toBe("decision");
+    expect(dueKindOf(["task", "owed-to-me"])).toBe("inbound");
+    expect(dueKindOf(["task"])).toBe("outbound");
+    expect(dueKindOf(["work"])).toBe("other");
+  });
+
+  it("a decision always wins over a task tag", () => {
+    expect(dueKindOf(["ledger:decision", "task"])).toBe("decision");
   });
 });

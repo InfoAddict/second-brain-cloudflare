@@ -8,6 +8,7 @@ import { requireIdentity, type Identity } from "../lib/identity";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { scopeWrite, effectiveWriteTarget, readTeamParam, type WriteContext } from "../lib/scope";
 import { captureEntry } from "../capture/entry";
+import { partitionIgnoredTags, t7ReplyText, validateT7Capture, validateT7RestFields, type T7CaptureInput } from "../capture/t7-capture";
 import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
@@ -46,12 +47,19 @@ function readVolatility(raw: unknown): { value?: Volatility; error?: string } {
 /**
  * Additive: older clients ignore both extra fields. Merged rather than
  * overwritten, since several branches already carry their own `message`.
+ * `extraNotes` (Design 1.3) carries T7's own per-tag notes ("use standing: true"),
+ * kept separate from `ignored` so a T7 tag is never also named in the generic sentence.
  */
-function withReservedNote(body: Record<string, unknown>, ignored: readonly string[]): Record<string, unknown> {
-  if (!ignored.length) return body;
-  const note = reservedTagsNote(ignored);
+function withReservedNote(body: Record<string, unknown>, ignored: readonly string[], extraNotes: readonly string[] = []): Record<string, unknown> {
+  const notes = [...extraNotes, ...(ignored.length ? [reservedTagsNote(ignored)] : [])];
+  if (!notes.length) return body;
+  const combined = notes.join(" ");
   const existingMessage = typeof body.message === "string" ? body.message : undefined;
-  return { ...body, ignored_tags: [...ignored], message: existingMessage ? `${existingMessage} ${note}` : note };
+  return {
+    ...body,
+    ...(ignored.length ? { ignored_tags: [...ignored] } : {}),
+    message: existingMessage ? `${existingMessage} ${combined}` : combined,
+  };
 }
 
 export async function handleCaptureRoutes(
@@ -66,7 +74,11 @@ export async function handleCaptureRoutes(
     if (auth instanceof Response) return auth;
     const identity = auth;
 
-    let body: { content?: string; tags?: string[]; source?: string; volatility?: unknown; workspace?: unknown; team?: unknown; project?: unknown; when?: unknown; when_kind?: unknown; valid_from?: unknown; valid_until?: unknown };
+    let body: {
+      content?: string; tags?: string[]; source?: string; volatility?: unknown; workspace?: unknown; team?: unknown; project?: unknown; when?: unknown; when_kind?: unknown;
+      standing?: unknown; decision?: unknown; confidence?: unknown; confidence_source?: unknown; review_by?: unknown; owed_by?: unknown; owed_to?: unknown;
+      valid_from?: unknown; valid_until?: unknown;
+    };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (body.tags !== undefined && !validInputTags(body.tags)) return json({ ok: false, error: `tags must contain at most ${MAX_INPUT_TAGS} NUL-free strings of at most ${MAX_INPUT_TAG_CHARS} characters` }, 400);
     const badProjectTag = body.tags === undefined ? null : projectTagError(body.tags);
@@ -83,14 +95,42 @@ export async function handleCaptureRoutes(
     const captureVol = readVolatility(body.volatility);
     if (captureVol.error) return json({ ok: false, error: captureVol.error }, 400);
 
+    // Every T7 field's type/range is checked here, unconditionally, before anything below
+    // branches on `decision` or reads a field under a different path (the class of bug a
+    // cross-vendor review found: decision:true skipped `when`'s own type guard and crashed
+    // parseExplicitWhen with a 500 instead of a 400).
+    const restFieldError = validateT7RestFields(body);
+    if (restFieldError) return json({ ok: false, error: restFieldError.error }, 400);
+    const t7Input: T7CaptureInput = {
+      standing: body.standing === undefined ? undefined : !!body.standing,
+      decision: body.decision === undefined ? undefined : !!body.decision,
+      confidence: body.confidence as number | undefined,
+      confidence_source: body.confidence_source as "stated" | "inferred" | undefined,
+      review_by: body.review_by as string | undefined,
+      owed_by: body.owed_by as string | undefined,
+      owed_to: body.owed_to as string | undefined,
+      when: body.when as string | undefined,
+      when_kind: body.when_kind as string | undefined,
+    };
+    const t7Validation = validateT7Capture(t7Input);
+    if (t7Validation) return json({ ok: false, error: t7Validation.error }, 400);
+
+    // A decision's review date comes from review_by/when, resolved inside captureEntry
+    // (Design 4.1); the generic when/when_kind parsing below is skipped for it. A
+    // commitment's promised date is an ordinary `when`, just defaulting when_kind to
+    // "due" instead of "wake" (Design 5.1) when the caller left it out.
     let when: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
-    if (body.when !== undefined && body.when !== null) {
-      if (typeof body.when !== "string") return json({ ok: false, error: "when must be a string" }, 400);
-      const parsed = parseExplicitWhen(body.when, body.when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
-      if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
-      when = parsed.value;
-    } else if (body.when_kind !== undefined) {
-      return json({ ok: false, error: "when_kind requires when" }, 400);
+    if (!t7Input.decision) {
+      const hasCommitment = body.owed_by !== undefined || body.owed_to !== undefined;
+      const effectiveKind = body.when_kind ?? (hasCommitment ? "due" : undefined);
+      if (body.when !== undefined && body.when !== null) {
+        if (typeof body.when !== "string") return json({ ok: false, error: "when must be a string" }, 400);
+        const parsed = parseExplicitWhen(body.when, effectiveKind, undefined, (await resolveConfig(env)).TIMEZONE);
+        if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
+        when = parsed.value;
+      } else if (body.when_kind !== undefined) {
+        return json({ ok: false, error: "when_kind requires when" }, 400);
+      }
     }
 
     // T-0089.2.1: when the fact became and stopped being true, as the user said it.
@@ -117,12 +157,19 @@ export async function handleCaptureRoutes(
 
     // Computed on the caller's raw tags — captureEntry strips these again on its own
     // path (normalizeCaptureInput), this is purely for telling the caller honestly.
-    const { ignored: ignoredReservedTags } = stripNewReservedTags(body.tags ?? []);
+    // Design 1.3: a T7-namespace tag gets its own specific note, kept out of the
+    // generic reserved-tags sentence so it is never named in both.
+    const { ignored: allIgnoredTags } = stripNewReservedTags(body.tags ?? []);
+    const { t7Notes, otherIgnored: ignoredReservedTags } = partitionIgnoredTags(body.tags ?? [], allIgnoredTags);
 
     const writeCtx = await writeContextFor(env, identity, body.workspace, body.team);
     if (writeCtx instanceof Response) return writeCtx;
 
-    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx, when, { channel: "rest", validity: validity.value });
+    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx, when, { channel: "rest", t7: t7Input, validity: validity.value });
+
+    if (result.status === "t7_refused") {
+      return json({ ok: false, error: result.error }, 400);
+    }
 
     if (projectSlug && result.status !== "blocked") {
       await autoCreateProject(env, ctx, { workspaceId: writeCtx.workspaceId, actorId: identity.userId, slug: projectSlug });
@@ -149,11 +196,14 @@ export async function handleCaptureRoutes(
         message: "Near-exact duplicate detected. Not stored.",
       });
     }
+    const t7Message = async () => result.t7 && t7ReplyText(result.id, result.t7, {
+      timezone: (await resolveConfig(env)).TIMEZONE, hasProject: !!projectSlug, commitmentWhenAt: when?.at,
+    });
     if (result.status === "contradiction") {
       const supersede = result.supersede
         ? { closed_id: result.supersede.closedId, at: result.supersede.at, direction: result.supersede.direction }
         : null;
-      return json(withReservedNote({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason, supersede }, ignoredReservedTags));
+      return json(withReservedNote({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason, supersede, message: await t7Message() }, ignoredReservedTags, t7Notes));
     }
     if (result.status === "contradiction_protected") {
       return json(withReservedNote({
@@ -162,27 +212,29 @@ export async function handleCaptureRoutes(
         status: result.entryStatus,
         kept_canonical: result.canonicalId,
         reason: result.reason,
-      }, ignoredReservedTags));
+        message: await t7Message(),
+      }, ignoredReservedTags, t7Notes));
     }
     if (result.status === "replaced") {
-      return json(withReservedNote({ ok: true, id: result.id, action: "replaced", message: "The new memory replaced an older one." }, ignoredReservedTags));
+      return json(withReservedNote({ ok: true, id: result.id, action: "replaced", message: "The new memory replaced an older one." }, ignoredReservedTags, t7Notes));
     }
     if (result.status === "merged") {
-      return json(withReservedNote({ ok: true, id: result.id, action: "merged", message: "Merged into an existing memory." }, ignoredReservedTags));
+      return json(withReservedNote({ ok: true, id: result.id, action: "merged", message: "Merged into an existing memory." }, ignoredReservedTags, t7Notes));
     }
     if (result.status === "flagged") {
+      const message = await t7Message();
       return json(withReservedNote({
         ok: true,
         id: result.id,
         warning: "similar",
         matchId: result.matchId,
         score: parseFloat((result.score * 100).toFixed(1)),
-        message: "Stored but similar entry exists: tagged as duplicate-candidate",
-      }, ignoredReservedTags));
+        message: message ?? "Stored but similar entry exists: tagged as duplicate-candidate",
+      }, ignoredReservedTags, t7Notes));
     }
     // Additive: older clients ignore the extra field, and the dashboard uses it
     // to show what was filed under what.
-    return json(withReservedNote({ ok: true, id: result.id, tags: result.tags ?? [] }, ignoredReservedTags));
+    return json(withReservedNote({ ok: true, id: result.id, tags: result.tags ?? [], message: await t7Message() }, ignoredReservedTags, t7Notes));
   }
 
   // POST /append

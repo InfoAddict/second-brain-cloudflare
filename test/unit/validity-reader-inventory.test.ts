@@ -103,14 +103,19 @@ const OWNED_FILES = new Set([
  * so a new unmarked line landing in lane B's own region of these files still fails the guard.
  */
 const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
-  "src/brief/compute.ts": [110, 118, 127, 142, 344, 347],
+  // MOVED (merge of release/v4 d3b5b25c into v4/t7-c): Track 7's own reads (dueSplit/loopsSplit's
+  // items+totals, now each marked directly; the standing-hydration read, now marked `any`) and
+  // Track 9's dashboard aggregates shifted; recomputed against the real scanner output.
+  "src/brief/compute.ts": [116, 124, 133, 148, 465, 468],
   "src/compression/digest.ts": [145, 183, 257, 286, 296],
   "src/insight/weekly.ts": [354],
   // MOVED (merge 3e5961b7, release/v4 57583d10): admin.ts after line 900 +4, entries.ts +1; same queries.
   // REMOVED mcp/server.ts:489 (T-0089.2.1 fix round): the digest tool's read now carries its own
   // `validity: current` marker and predicate.
   "src/mcp/server.ts": [],
-  "src/routes/admin.ts": [609, 622, 634, 659, 732, 757, 806, 855, 860, 999, 1006, 1122, 1128, 1434, 1525, 1555, 1667],
+  // MOVED (merge of release/v4 d3b5b25c into v4/t7-c): Track 7's GET /loops direction/kind logic
+  // added lines above several of these sites; recomputed against the real scanner output.
+  "src/routes/admin.ts": [610, 623, 635, 660, 733, 758, 807, 856, 861, 1000, 1007, 1123, 1129, 1453, 1544, 1574, 1686],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };

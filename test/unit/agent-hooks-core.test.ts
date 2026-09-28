@@ -103,6 +103,23 @@ describe("core.frameOutput", () => {
     expect(out).toContain("Open commitments: 1");
     expect(out.length).toBeLessThanOrEqual(core.MAX_OUTPUT_CHARS);
   });
+  it("adds Owed to you and Standing lines (Design 2.11, 5.3), inside the same bounded frame", () => {
+    const out = core.frameOutput([{ content: "a remembered thing" }], null, {
+      attention: { due: 0 }, loops: { open: 0, items: [] },
+      owed_to_you: { open: 2, items: [{ id: "y", content: "Priya: send the contract" }] },
+      standing: { items: [{ id: "s1", content: "When choosing a database, prefer boring tech." }] },
+    });
+    expect(out).toContain("Owed to you: 2.");
+    expect(out).toContain("Standing: When choosing a database, prefer boring tech.");
+    expect(out.length).toBeLessThanOrEqual(core.MAX_OUTPUT_CHARS);
+  });
+  it("never adds Owed to you or Standing when there is nothing to say", () => {
+    const out = core.frameOutput([{ content: "a remembered thing" }], null, {
+      attention: { due: 0 }, loops: { open: 0, items: [] }, owed_to_you: { open: 0, items: [] }, standing: { items: [] },
+    });
+    expect(out).not.toContain("Owed to you");
+    expect(out).not.toContain("Standing:");
+  });
   it("returns empty for nothing usable", () => {
     expect(core.frameOutput([{ content: "" }, { content: "ab" }])).toBe("");
   });
