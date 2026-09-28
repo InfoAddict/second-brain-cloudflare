@@ -102,7 +102,7 @@ interface RawRow {
  * `capsuleTagsChanged` are omitted on purpose -- a bare name can be neither
  * a burst nor a capsule edit, so those signals have nothing to read here.
  */
-function safeClient(rawClient: unknown, cfg: Readonly<Config>): string | null {
+export function safeClient(rawClient: unknown, cfg: Readonly<Config>): string | null {
   if (typeof rawClient !== "string") return null;
   const name = rawClient.trim();
   if (!name) return null;
@@ -243,6 +243,36 @@ function group(rows: Classified[], cfg: Readonly<Config>): ChangeRow[] {
 }
 
 /**
+ * The 5.8 event read, shared by getChanges (a rolling window, newest first) and
+ * groupCandidates below (an exact [since, until] bound, oldest first, for 5.9's
+ * membership re-derivation). One D1 statement either way.
+ */
+async function changeEventRows(
+  env: Env, identity: Identity, since: number, until: number, order: "ASC" | "DESC",
+  layer?: "personal" | "company", teamId?: string,
+): Promise<RawRow[]> {
+  const workspaces = readScopeWorkspaces(identity, { layer, teamId });
+  const { results } = await env.DB.prepare(
+    // scope-checked: the reader's scope clause is applied to COALESCE(en.workspace_id, t.workspace_id); entry_events has no workspace column
+    `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+            COALESCE(en.actor_id, t.actor_id) AS author_id,
+            COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
+            substr(COALESCE(en.content, t.content), 1, 160) AS preview
+     FROM entry_events e INDEXED BY idx_entry_events_created
+     LEFT JOIN entries en ON en.id = e.entry_id
+     LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id
+     WHERE e.created_at > ?1 AND e.created_at <= ?2
+       AND e.event IN ('held','released','updated','appended','status_changed','deleted','reverted')
+       AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
+       AND COALESCE(en.workspace_id, t.workspace_id) IN (SELECT value FROM json_each(?3))
+       AND (e.actor_id = ?4 OR COALESCE(en.actor_id, t.actor_id) = ?4 OR e.event = 'held')
+     ORDER BY e.created_at ${order}
+     LIMIT 200`,
+  ).bind(since, until, JSON.stringify(workspaces), identity.userId).all<RawRow>();
+  return results;
+}
+
+/**
  * The "what AI tools changed" query and grouping (5.8). Exactly one D1
  * statement; pure JS grouping after. Read-only.
  */
@@ -255,26 +285,9 @@ export async function getChanges(
   teamId?: string,
 ): Promise<ChangesResult> {
   const cfg = config ?? await resolveConfig(env);
-  const since = Date.now() - windowHours * 60 * 60 * 1000;
-  const workspaces = readScopeWorkspaces(identity, { layer, teamId });
-
-  const { results } = await env.DB.prepare(
-    // scope-checked: the reader's scope clause is applied to COALESCE(en.workspace_id, t.workspace_id); entry_events has no workspace column
-    `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
-            COALESCE(en.actor_id, t.actor_id) AS author_id,
-            COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
-            substr(COALESCE(en.content, t.content), 1, 160) AS preview
-     FROM entry_events e INDEXED BY idx_entry_events_created
-     LEFT JOIN entries en ON en.id = e.entry_id
-     LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id
-     WHERE e.created_at > ?1
-       AND e.event IN ('held','released','updated','appended','status_changed','deleted','reverted')
-       AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
-       AND COALESCE(en.workspace_id, t.workspace_id) IN (SELECT value FROM json_each(?2))
-       AND (e.actor_id = ?3 OR COALESCE(en.actor_id, t.actor_id) = ?3 OR e.event = 'held')
-     ORDER BY e.created_at DESC
-     LIMIT 200`,
-  ).bind(since, JSON.stringify(workspaces), identity.userId).all<RawRow>();
+  const now = Date.now();
+  const since = now - windowHours * 60 * 60 * 1000;
+  const results = await changeEventRows(env, identity, since, now, "DESC", layer, teamId);
 
   const classified = results.map(row => classify(row, cfg)).filter((c): c is Classified => c !== null);
   const held = classified.filter(c => c.family === "held").length;
@@ -286,6 +299,61 @@ export async function getChanges(
     truncated: results.length === READ_LIMIT,
     items: group(classified, cfg).slice(0, OUTPUT_LIMIT),
   };
+}
+
+// ── Group membership (S3, 5.9) ──────────────────────────────────────────────
+
+export const UNDO_GROUP_MAX = 50;
+export const UNDO_GROUP_PAGE = 5;
+
+export interface DecodedGroup { family: ChangeFamily; actorId: string; client: string | null; start: number; end: number }
+
+const GROUP_FAMILIES: readonly ChangeFamily[] = ["held", "released", "canonical_edit", "capsule_changed", "status", "trash", "revert"];
+
+function fromBase64Url(key: string): string {
+  return atob(key.replace(/-/g, "+").replace(/_/g, "/"));
+}
+
+/** The inverse of groupKey() above. Never trusts the decoded fields as-is beyond their shape --
+ * groupCandidates below re-derives membership from the reader's own scoped read, so a tampered
+ * key just narrows to nothing rather than reading anything it should not (5.9). */
+export function decodeGroupKey(key: string): DecodedGroup | null {
+  try {
+    const parsed = JSON.parse(fromBase64Url(key)) as { f?: unknown; a?: unknown; c?: unknown; s?: unknown; e?: unknown };
+    if (typeof parsed.f !== "string" || !GROUP_FAMILIES.includes(parsed.f as ChangeFamily)) return null;
+    if (typeof parsed.a !== "string" || typeof parsed.s !== "number" || typeof parsed.e !== "number") return null;
+    if (parsed.c !== null && typeof parsed.c !== "string") return null;
+    return { family: parsed.f as ChangeFamily, actorId: parsed.a, client: (parsed.c as string | null) ?? null, start: parsed.s, end: parsed.e };
+  } catch {
+    return null;
+  }
+}
+
+export interface GroupCandidates { decoded: DecodedGroup; ids: string[]; capped: boolean }
+
+/**
+ * Re-derives a group's membership from the reader's own scoped read of the 5.8 event window
+ * (5.9): distinct entry_id, oldest change first, capped at UNDO_GROUP_MAX. The decoded actor and
+ * client are matched, never trusted to select rows on their own -- changeEventRows applies the
+ * same reader-scope and "whose changes" clause getChanges does, so a group key naming someone
+ * else's actor or a workspace the reader cannot see simply matches nothing here.
+ */
+export async function groupCandidates(
+  env: Env, identity: Identity, groupKeyStr: string, cfg: Readonly<Config>,
+): Promise<GroupCandidates | null> {
+  const decoded = decodeGroupKey(groupKeyStr);
+  if (!decoded) return null;
+  const rows = await changeEventRows(env, identity, decoded.start - 1, decoded.end, "ASC");
+  const classified = rows.map(row => classify(row, cfg)).filter((c): c is Classified => c !== null);
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const c of classified) {
+    if (c.family !== decoded.family || c.actorId !== decoded.actorId || c.client !== decoded.client) continue;
+    if (seen.has(c.id)) continue;
+    seen.add(c.id);
+    ids.push(c.id);
+  }
+  return { decoded, ids: ids.slice(0, UNDO_GROUP_MAX), capped: ids.length > UNDO_GROUP_MAX };
 }
 
 // ── Rendering (S2) ────────────────────────────────────────────────────────────

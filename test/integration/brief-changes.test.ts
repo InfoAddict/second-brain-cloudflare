@@ -110,11 +110,13 @@ describe("getChanges() (S1)", () => {
 
     expect(capturedBindArgs).not.toBeNull();
     const args = capturedBindArgs!;
-    // since, workspaces-json, actor -- exactly 3, regardless of team count.
-    expect(args).toHaveLength(3);
-    expect(typeof args[1]).toBe("string");
-    expect(() => JSON.parse(args[1] as string)).not.toThrow();
-    expect((JSON.parse(args[1] as string) as string[])).toHaveLength(1 + manyTeams.length);
+    // since, until, workspaces-json, actor -- exactly 4, regardless of team count
+    // (S3, T-0089.4.3: the window gained an upper bound so groupCandidates can share this
+    // same query with an exact [since, until] instead of a rolling "since Date.now()").
+    expect(args).toHaveLength(4);
+    expect(typeof args[2]).toBe("string");
+    expect(() => JSON.parse(args[2] as string)).not.toThrow();
+    expect((JSON.parse(args[2] as string) as string[])).toHaveLength(1 + manyTeams.length);
   });
 
   it("includes the reader's own tools' changes and others' changes to the reader's memories", async () => {
