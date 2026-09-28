@@ -90,8 +90,9 @@ it("measures standing cosine from the embedding used by recall", async () => {
   const report = await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: [q], isolate: "cold", embeddingModel: MODEL });
   expect(report.standing?.memories).toBe(1);
   expect(report.standing?.groups.yes).toBe(1);
-  expect(report.standing?.inputs.distilled.curve).toHaveLength(13);
-  expect(report.standing?.inputs.raw.curve).toHaveLength(13);
+  // Deliberate: Task 2 (T-0089.7.1) moved the reported grid from THRESHOLD_GRID (13) to THRESHOLD_GRID_FINE (21).
+  expect(report.standing?.inputs.distilled.curve).toHaveLength(21);
+  expect(report.standing?.inputs.raw.curve).toHaveLength(21);
   expect(report.results[0].error).toBeUndefined();
 });
 

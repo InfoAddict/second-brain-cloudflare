@@ -67,3 +67,8 @@ export async function seedVersionsFor(t: TrashEnv, entryIds: string[], k: number
       SELECT '${id}', '${t.roots.ownerPersonalWorkspaceId}', i, 'v' || i, NULL, '[]', '', 'rest', 'update', i FROM n`);
   }
 }
+
+/** The nonce of the trash row currently under `id` ("" when there is none): what the trash view sends to Delete forever. */
+export async function trashNonce(env: Pick<Env, "DB">, id: string): Promise<string> {
+  return (await env.DB.prepare(`SELECT nonce FROM entries_trash WHERE id = ?`).bind(id).first<{ nonce: string }>())?.nonce ?? "";
+}

@@ -50,6 +50,21 @@ describe("isInsightEligible()", () => {
   });
 });
 
+describe("codex-session and cursor-session are transcript sources, not mirrored sources", () => {
+  // Deliberate MCP writes from these clients use "codex" / "cursor" — a bare
+  // source string, never these hook-only labels — so sharing a label with the
+  // hook would let an automatic capture supersede a deliberate memory under
+  // the same-source exemption in src/capture/entry.ts.
+  it("both are in TRANSCRIPT_SOURCES (excluded from insights, cannot supersede another source)", () => {
+    expect(TRANSCRIPT_SOURCES.has("codex-session")).toBe(true);
+    expect(TRANSCRIPT_SOURCES.has("cursor-session")).toBe(true);
+  });
+  it("neither is in MIRRORED_SOURCES", () => {
+    expect(MIRRORED_SOURCES.has("codex-session")).toBe(false);
+    expect(MIRRORED_SOURCES.has("cursor-session")).toBe(false);
+  });
+});
+
 describe("isAssistantAuthored()", () => {
   it("recognises an assistant-written memory", () => {
     expect(isAssistantAuthored(["work", "claude-response"])).toBe(true);

@@ -126,7 +126,16 @@ export interface StandingFiringPoint {
 export interface StandingInputReport {
   curve: StandingFiringPoint[];
   /** Threshold chosen on the dev split only; dev and held-out test numbers at it, with 95% Wilson intervals on test. */
-  chosen: { threshold: number; meetsPrecisionTarget: boolean; dev: StandingFiringPoint; test: StandingFiringPoint & { precisionCi: [number, number]; recallCi: [number, number] } };
+  chosen: {
+    threshold: number; meetsPrecisionTarget: boolean; dev: StandingFiringPoint;
+    test: StandingFiringPoint & {
+      precisionCi: [number, number]; recallCi: [number, number];
+      /** Same intervals, using the count of distinct standing memories in play instead of query count: true positives cluster by memory (five phrasings are not independent trials), so these are wider and less optimistic. */
+      precisionCiClustered: [number, number]; recallCiClustered: [number, number];
+    };
+    /** Same-subject-different-intent fires, scored the other way (Q1): counted as false positives instead of excluded. */
+    intentCountedAsFalsePositive: { dev: StandingFiringPoint; test: StandingFiringPoint };
+  };
 }
 export interface StandingReport {
   groups: Record<"yes" | "overlap" | "intent" | "unrelated", number>;

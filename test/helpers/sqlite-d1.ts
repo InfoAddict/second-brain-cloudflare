@@ -159,6 +159,8 @@ export interface SqliteD1 {
     prepare(sql: string): SqliteStatement;
     exec(sql: string): Promise<void>;
     batch(statements: SqliteStatement[]): Promise<{ results?: unknown[]; success: true; meta: { rows_written: number } }[]>;
+    /** Vector id -> the row that listed it, remembered across statements (never counted). */
+    __vectorOwners(): Map<string, string>;
   };
   /**
    * One entry per D1 call made through `db` — which is one entry per subrequest,
@@ -270,6 +272,19 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
 
   const issued: string[] = [];
   const batches: string[][] = [];
+  // Test-infrastructure reads straight from SQLite, never counted in `issued` (T-0089.1.1).
+  const listedVectors = new Map<string, string>();
+  const rememberListed = () => {
+    for (const table of ["entries", "entries_trash"]) {
+      let rows: { id: string; vector_ids: string | null }[] = [];
+      try { rows = raw.prepare(`SELECT id, vector_ids FROM ${table}`).all() as typeof rows; } catch { continue; }
+      for (const r of rows) {
+        let ids: string[] = [];
+        try { ids = JSON.parse(r.vector_ids ?? "[]"); } catch { ids = []; }
+        for (const v of ids) if (!listedVectors.has(v)) listedVectors.set(v, r.id);
+      }
+    }
+  };
   let savepointCounter = 0;
 
   return {
@@ -277,9 +292,12 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
     batches,
     db: {
       prepare: (sql: string) => {
+        if (/^\s*(UPDATE entries|DELETE FROM entries|INSERT INTO entries_trash)/i.test(sql)) rememberListed();
         issued.push(sql);
         return new SqliteStatement(raw, sql);
       },
+      /** Vector id -> the row that listed it, remembered across statements; uncounted (see D1Mock.__vectorOwners). */
+      __vectorOwners: () => { rememberListed(); return listedVectors; },
       // Present so a whole-Worker request against this facade runs the real
       // initializeDatabase path rather than failing on a missing method. The
       // schema is already applied above; that DDL is idempotent, and the ALTERs

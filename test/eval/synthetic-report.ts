@@ -68,6 +68,8 @@ export function syntheticLines(report: VariantReport): string[] {
       out.push(`  firing curve, ${name} query embedding (at most 2 per query, all splits):`, ...r.curve.map(x => `    ${point(x)}`));
       const c = r.chosen;
       out.push(`    chosen on dev: threshold ${c.threshold.toFixed(2)} (${c.meetsPrecisionTarget ? "meets" : "misses"} precision 0.9); dev precision ${f(c.dev.precision)} recall ${f(c.dev.recall)}; held-out test precision ${f(c.test.precision)} ${ci(c.test.precisionCi)} recall ${f(c.test.recall)} ${ci(c.test.recallCi)}`);
+      out.push(`      clustered by memory (less optimistic): test precision ${ci(c.test.precisionCiClustered)} recall ${ci(c.test.recallCiClustered)}`);
+      out.push(`      same-subject-other-intent counted as false positive instead of excluded: dev precision ${f(c.intentCountedAsFalsePositive.dev.precision)}; test precision ${f(c.intentCountedAsFalsePositive.test.precision)}`);
     }
   }
   return out;

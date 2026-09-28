@@ -117,7 +117,8 @@ describe("trash.ts builders are dense (T-0089.1.2, T-0089.4.7, T-0089.4.9)", () 
 
   it("deleteForever's batch", async () => {
     const { env, calls } = captureEnv();
-    await deleteForever(env, "a", change, "ws1");
+    await deleteForever(env, "a", change, "ws1", "n1");
+    expect(calls.length).toBeGreaterThan(0);
     for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
   });
 

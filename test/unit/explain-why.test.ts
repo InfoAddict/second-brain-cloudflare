@@ -26,7 +26,7 @@ describe("rerankWithTimeDecayTraced", () => {
   it("reports the four multipliers that shaped each score", () => {
     const traced = rerankWithTimeDecayTraced(matches, ...args);
     const b = traced.find(t => t.match.id === "b")!.multipliers;
-    expect(Object.keys(b).sort()).toEqual(["append_penalty", "combined", "frequency", "importance", "recency", "rolled_up_penalty", "tag_boost"]);
+    expect(Object.keys(b).sort()).toEqual(["append_penalty", "combined", "frequency", "importance", "recency", "rolled_up_penalty", "source_weight", "tag_boost"]);
     expect(b.tag_boost).toBeGreaterThan(1);
     expect(b.importance).toBeGreaterThan(1);
     expect(b.recency).toBeGreaterThan(0.9);
@@ -67,7 +67,7 @@ describe("renderRecallText why line", () => {
   const why = (over: Partial<WhyTrace> = {}): WhyTrace => ({
     dense_rank: 2,
     keyword_terms: [{ term: "gatewright", level: 2, idf: 5.3 }],
-    multipliers: { recency: 0.99, frequency: 1, combined: 0.99, importance: 1, tag_boost: 1, append_penalty: 1, rolled_up_penalty: 1 },
+    multipliers: { recency: 0.99, frequency: 1, combined: 0.99, importance: 1, tag_boost: 1, append_penalty: 1, rolled_up_penalty: 1, source_weight: 1 },
     rerank_percentile: 0.9,
     rerank_move: "up",
     age_known: true,
@@ -93,7 +93,7 @@ describe("renderRecallText why line", () => {
   });
 
   it("marks a demoted rerank and a partial keyword hit", () => {
-    const out = renderRecallText([m({ tags: [], why: why({ keyword_terms: [{ term: "plan", level: 1, idf: 1 }], rerank_percentile: 0.1, rerank_move: "down", multipliers: { recency: 0.5, frequency: 1.4, combined: 0.7, importance: 1, tag_boost: 1.2, append_penalty: 1, rolled_up_penalty: 1 } }) })], "");
+    const out = renderRecallText([m({ tags: [], why: why({ keyword_terms: [{ term: "plan", level: 1, idf: 1 }], rerank_percentile: 0.1, rerank_move: "down", multipliers: { recency: 0.5, frequency: 1.4, combined: 0.7, importance: 1, tag_boost: 1.2, append_penalty: 1, rolled_up_penalty: 1, source_weight: 1 } }) })], "");
     expect(out).toContain('keywords "plan" (inside a longer word)');
     expect(out).toContain("reranked down");
     expect(out).toContain("tag match");

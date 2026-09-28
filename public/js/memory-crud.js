@@ -184,11 +184,11 @@ function notifyMemoryResolved(id) {
 }
 
 /**
- * Delete forever (T-0089.4.7): REST-only, `{id, permanent: true, confirm: id}`. Not offered to
- * agents (there is no MCP tool or parameter for it) — the confirm echo, not a hidden token, is
- * what keeps this from being one accidental tap away from Forget.
+ * Delete forever (T-0089.4.7): `{id, permanent: true, confirm: id, nonce}` on one trash row. The
+ * nonce is that row's own (from the trash list), so a stale view never deletes a different row
+ * under a reused id. Lives in the trash view only (Q11); not offered to agents.
  */
-function openDeleteForeverConfirm(id, cardElement) {
+function openDeleteForeverConfirm(id, nonce, cardElement) {
   openDangerConfirm({
     title: t('memories.deleteForeverTitle'),
     body: t('memories.deleteForeverConfirm'),
@@ -203,7 +203,7 @@ function openDeleteForeverConfirm(id, cardElement) {
         const res = await fetch(`${WORKER_URL}/forget`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-          body: JSON.stringify({ id, permanent: true, confirm: id }),
+          body: JSON.stringify({ id, permanent: true, confirm: id, nonce }),
         })
         const data = await res.json()
         if (!res.ok || !data.ok) throw new Error(data.error || t('memories.deleteForeverFailed'))
@@ -484,7 +484,7 @@ function renderViewTimeline(entry) {
  * only on readability (src/routes/graph.ts), so a reader may remove a link.
  */
 function applyAuthorLock(entry) {
-  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget', 'view-btn-delete-forever'].map((id) => document.getElementById(id)), 'view-btn--locked')
+  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
 }
 
 /**
@@ -575,16 +575,6 @@ function openView(entry, cardElement) {
     forgetBtn.style.display = 'flex'
   } else {
     forgetBtn.style.display = 'none'
-  }
-  const deleteForeverBtn = document.getElementById('view-btn-delete-forever')
-  if (entry.id) {
-    deleteForeverBtn.onclick = () => {
-      closeView()
-      openDeleteForeverConfirm(entry.id, cardElement || null)
-    }
-    deleteForeverBtn.style.display = 'flex'
-  } else {
-    deleteForeverBtn.style.display = 'none'
   }
   const editBtn = document.getElementById('view-btn-edit')
   if (entry.id) {

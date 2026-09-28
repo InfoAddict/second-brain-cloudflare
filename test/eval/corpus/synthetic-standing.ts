@@ -48,7 +48,8 @@ export const STANDING: readonly Standing[] = [
 const POSITIVE = [
   (s: Standing) => `I am about to ${s.inf}. What should I keep in mind?`,
   (s: Standing) => `Someone just asked me to ${s.inf}. Anything I told myself about that?`,
-  (s: Standing) => `Heads up: ${s.noun} is on my plate this week.`,
+  // No relative-time phrase (Task 2's eval input note: parseTimePhrase must find none in this corpus).
+  (s: Standing) => `Heads up: ${s.noun} is on my plate again.`,
   (s: Standing) => `Getting ready to ${s.inf}, what is my usual rule?`,
   (s: Standing) => `${s.noun[0].toUpperCase()}${s.noun.slice(1)} is coming up, remind me how I handle it.`,
 ];

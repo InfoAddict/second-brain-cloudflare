@@ -53,7 +53,7 @@ it("every trash mutation is conditional on the exact row it read or the workspac
     t.seed("id-delete", { content: "Bob's private memory", actor_id: bob.userId, workspace_id: bob.personalWorkspaceId });
     await forget("id-delete", bob.userId, bob.personalWorkspaceId);
 
-    const result = await deleteForever(t.env, "id-delete", { actorId: owner.userId, channel: "rest" }, ownerRead.workspace_id);
+    const result = await deleteForever(t.env, "id-delete", { actorId: owner.userId, channel: "rest" }, ownerRead.workspace_id, ownerRead.nonce);
     expect(result.status).not.toBe("deleted");
     expect(await t.one<{ workspace_id: string }>("SELECT workspace_id FROM entries_trash WHERE id = ?", "id-delete"))
       .toMatchObject({ workspace_id: bob.personalWorkspaceId });

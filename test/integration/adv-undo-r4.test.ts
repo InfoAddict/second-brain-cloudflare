@@ -13,6 +13,7 @@ import { applyStatus, forgetEntry } from "../../src/capture/lifecycle";
 import { moveEntry } from "../../src/capture/share";
 import { resolveEntryAction } from "../../src/memory/actions";
 import { deleteForever } from "../../src/memory/trash";
+import { trashNonce } from "../helpers/trash-env";
 import { D1_ROW_MAX_BYTES } from "../../src/constants";
 import { revertEntry } from "../../src/memory/undo";
 import { DEFAULTS } from "../../src/config";
@@ -166,7 +167,8 @@ describe("ADV-U20 (MINOR): keptIncoming says a row is kept after it has been del
     await seed("old", { content: "Old text", tags: ["work"] });
     await capture(e, "Incoming fact");
     const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId)) as any).recreatedIncomingId as string;
-    await deleteForever(e, x, change(), owner.personalWorkspaceId);
+    await forgetEntry(x, e, change(), { reason: "forget", config: DEFAULTS, purge: false }, owner.personalWorkspaceId);
+    expect((await deleteForever(e, x, change(), owner.personalWorkspaceId, await trashNonce(e, x))).status).toBe("deleted");
     const redo = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(row(x)).toBeUndefined();
     // Task 15 will turn this into user-facing text; it must not claim a memory exists that does not.

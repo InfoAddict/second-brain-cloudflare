@@ -16,6 +16,7 @@ import { updateEntryContent, appendToEntry } from "../../src/capture/store";
 import { applyStatus, forgetEntry } from "../../src/capture/lifecycle";
 import { resolveEntryAction, applyInsightResolution } from "../../src/memory/actions";
 import { restoreEntry, deleteForever, getTrashedEntry, trashMirroredEntries } from "../../src/memory/trash";
+import { trashNonce } from "../helpers/trash-env";
 import { revertEntry } from "../../src/memory/undo";
 import { moveEntry } from "../../src/capture/share";
 import { markSourcesRolledUp } from "../../src/compression/digest";
@@ -99,7 +100,7 @@ describe("compare-and-set retries: A's write-conflict loop", () => {
     expect(t.sqlite.issued.filter((s) => s === "BATCH")).toHaveLength(2);
   });
 
-  it("exhausting all retries costs the per-retry total, PLUS a vector repair the spec's row does not name", async () => {
+  it("exhausting all retries costs exactly the per-retry total", async () => {
     t = await makeTrashEnv();
     t.seed("e1");
     // Race every attempt: none ever commits, so the loop exhausts all WRITE_CAS_ATTEMPTS.
@@ -120,7 +121,9 @@ describe("compare-and-set retries: A's write-conflict loop", () => {
     // whichever text actually won (restoreRowVectors, store.ts:174): a re-read of the live row plus
     // an UPDATE of vector_ids, +2 more the spec's "at most 2 retries" row does not mention because
     // it fires once on total exhaustion, not per retry. Measured total: 8, not 6.
-    expect(t.sqlite.issued).toHaveLength(WRITE_CAS_ATTEMPTS * 2 + 2);
+    // MOVED 8 -> 6 (T-0089.1.1 round 6): per-upload vector ids retire the exhaustion repair; the last
+    // attempt's own upload is deleted in Vectorize, with no D1 call.
+    expect(t.sqlite.issued).toHaveLength(WRITE_CAS_ATTEMPTS * 2);
     expect(t.sqlite.issued.filter((s) => s === "BATCH")).toHaveLength(WRITE_CAS_ATTEMPTS);
   });
 });
@@ -176,12 +179,14 @@ describe("forget: baseline, POST /forget", () => {
     expect(t.sqlite.issued.filter((s) => s === "BATCH")).toHaveLength(2);
   });
 
-  it("POST /forget permanent (deleteForever) is one batch: five statements, via RETURNING, not a separate guard/vectors read", async () => {
+  it("POST /forget permanent (deleteForever) is one batch: four statements, via RETURNING, not a separate guard/vectors read", async () => {
     t = await makeTrashEnv();
     t.seed("e1");
+    await forgetEntry("e1", t.env, change(), { reason: "forget", config: DEFAULTS, purge: false }, t.roots.ownerPersonalWorkspaceId);
+    const nonce = await trashNonce(t.env, "e1");
     t.sqlite.issued.length = 0;
-    const r = await deleteForever(t.env, "e1", change(), t.roots.ownerPersonalWorkspaceId);
-    expect(r).toMatchObject({ status: "deleted", from: "live" });
+    const r = await deleteForever(t.env, "e1", change(), t.roots.ownerPersonalWorkspaceId, nonce);
+    expect(r).toMatchObject({ status: "deleted" });
     // Spec said "guard + vectors read + 1 batch + audit"; the current code folds the guard, the
     // vectors read AND the audit insert into ONE batch via RETURNING clauses (trash.ts:591-614).
     // Measured: 1 execution, not 4.

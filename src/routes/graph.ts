@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { intParam, json, readWorkspaceParam, readTeamQueryParam } from "../lib/http";
 import { getReadableEntry } from "../lib/entry-access";
 import { requireIdentity } from "../lib/identity";
+import { readableWorkspaces } from "../lib/scope";
 import { createEdge, deleteEdge, isValidEdgeType, kindMismatchMessage, kindOfRow, kindsAllowEdge, CROSS_WORKSPACE_LINK_MESSAGE } from "../graph/edges";
 import { EDGE_TYPES } from "../graph/types";
 import { buildGraph, getConnections } from "../graph/traverse";
@@ -55,7 +56,7 @@ export async function handleGraphRoutes(
       return json({ ok: false, error: kindMismatchMessage(type), code: "kind_not_allowed" }, 400);
     }
 
-    const edge = await createEdge(sourceId, targetId, type, { provenance: "explicit", weight: 1.0, workspaceId: source.workspace_id }, env);
+    const edge = await createEdge(sourceId, targetId, type, { provenance: "explicit", weight: 1.0, workspaceId: source.workspace_id, readableWorkspaceIds: readableWorkspaces(auth) }, env);
     if (!edge) return json({ ok: false, error: "Cannot link an entry to itself" }, 400);
     return json({ ok: true, source_id: edge.source_id, target_id: edge.target_id, type: edge.type });
   }

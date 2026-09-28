@@ -1,3 +1,4 @@
+import { parentIdOfVectorId } from "../../src/vectorize/ids";
 /**
  * Round 4 adversary against 3318ca20 ("restoreRowVectors takes its stale set from the row's own current
  * vector_ids"). Invariant: after any interleaving settles, (a) every vector id in Vectorize for a row is in that
@@ -14,6 +15,7 @@ import { resolveIdentityByUserId, resolveIdentityFromToken, type Identity } from
 import { appendToEntry, storeEntry, updateEntryContent } from "../../src/capture/store";
 import { deprecateEntry, forgetEntry } from "../../src/capture/lifecycle";
 import { deleteForever } from "../../src/memory/trash";
+import { trashNonce } from "../helpers/trash-env";
 import { DEFAULTS } from "../../src/config";
 import type { Env } from "../../src/env";
 
@@ -46,13 +48,16 @@ function vectorEnv() {
     upsert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v); return { mutationId: "m" } as any; }),
     insert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v); return { mutationId: "m" } as any; }),
     deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
+    // deleteEntryVectors reads metadata.parentId first (T-0089.1.1): answer from this store.
+    getByIds: vi.fn(async (ids: string[]) => ids.filter(i => store.has(i)).map(i => store.get(i))) as any,
   });
   const e = makeTestEnv(undefined, {
     DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
     AI: { run: vi.fn(async () => { if (failEmbed.on) throw new Error("AI transient"); return { data: [new Array(384).fill(0.1)] }; }) } as any,
   }) as Env;
   const put = (id: string, content: string) => store.set(id, { id, values: [0.1], metadata: { content, parentId: id } });
-  const under = (id: string) => [...store.keys()].filter(k => k === id || k.startsWith(`${id}-`));
+  // Every vector of the entry, either id form (3.7's deterministic ids, or per-upload ids since T-0089.1.1).
+  const under = (id: string) => [...store.keys()].filter(k => parentIdOfVectorId(k) === id);
   return { e, store, failEmbed, put, under };
 }
 
@@ -94,11 +99,12 @@ describe("R4-V1 (MAJOR): a restore whose content CAS misses never retires the lo
     const { e, put, under } = vectorEnv();
     await seed("a1", "short base");
     put("a1", "short base");
-    const losing = losingEnv(e, { afterRestoreRead: async () => { expect((await update(e, "a1", "winner text")).status).toBe("updated"); } });
+    // Round 6: restoreRowVectors is gone; the race lands inside the loser's own attempt instead.
+    const losing = losingEnv(e, { beforeThrow: async () => { expect((await update(e, "a1", "winner text")).status).toBe("updated"); } });
     await expect(update(losing, "a1", DRAFT)).rejects.toThrow(/transient/);
     expect((await live("a1")).content).toBe("winner text");
     expect((await forgetEntry("a1", e, change(), { reason: "forget", config: DEFAULTS, purge: false }, wctx().workspaceId)).status).toBe("deleted");
-    expect((await deleteForever(e, "a1", change(), wctx().workspaceId)).status).toBe("deleted");
+    expect((await deleteForever(e, "a1", change(), wctx().workspaceId, await trashNonce(e, "a1"))).status).toBe("deleted");
     // FAILS: ["a1-chunk-0","a1-chunk-1","a1-chunk-2"] (LOSER-DRAFT text) outlive Delete forever.
     expect(under("a1")).toEqual([]);
   });
@@ -107,12 +113,12 @@ describe("R4-V1 (MAJOR): a restore whose content CAS misses never retires the lo
     const { e, put, under } = vectorEnv();
     await seed("a2", "short base");
     put("a2", "short base");
-    const losing = losingEnv(e, { afterRestoreRead: async () => {
+    const losing = losingEnv(e, { beforeThrow: async () => {
       expect((await forgetEntry("a2", e, change(), { reason: "forget", config: DEFAULTS, purge: false }, wctx().workspaceId)).status).toBe("deleted");
     } });
     await expect(update(losing, "a2", DRAFT)).rejects.toThrow(/transient/);
     expect(await live("a2")).toBeNull();
-    expect((await deleteForever(e, "a2", change(), wctx().workspaceId)).status).toBe("deleted");
+    expect((await deleteForever(e, "a2", change(), wctx().workspaceId, await trashNonce(e, "a2"))).status).toBe("deleted");
     // FAILS: the loser's three chunks survive (the CAS misses on the gone row, so nothing is deleted).
     expect(under("a2")).toEqual([]);
   });
@@ -126,14 +132,15 @@ describe("R4-V2 (MINOR): a restore whose content CAS misses leaves the row's lis
     const { e, store, put } = vectorEnv();
     await seed("b1", "short base");
     put("b1", "short base");
-    const losing = losingEnv(e, { afterRestoreRead: async () => { expect((await update(e, "b1", "winner text")).status).toBe("updated"); } });
+    const losing = losingEnv(e, { beforeThrow: async () => { expect((await update(e, "b1", "winner text")).status).toBe("updated"); } });
     await expect(update(losing, "b1", "loser text")).rejects.toThrow(/transient/);
     const row = await live("b1");
     expect(row.content).toBe("winner text");
+    // The row lists the winner's own upload, which the loser (per-upload ids) could not overwrite.
     const listed = JSON.parse(row.vector_ids) as string[];
-    expect(listed).toEqual(["b1"]); // non-empty: no repair path will ever pick this row up
-    // FAILS: "short base" — the winner's committed text is not in the index.
-    expect(store.get("b1")?.metadata?.content).toBe("winner text");
+    expect(listed).toHaveLength(1);
+    expect(store.get(listed[0])?.metadata?.content).toBe("winner text");
+    expect([...store.values()].map((v: any) => v.metadata?.content)).not.toContain("loser text");
   });
 });
 
@@ -185,13 +192,11 @@ describe("R4-V4 (MAJOR): the failure branch drops a short append's chunk from ve
       failEmbed.on = true;
     } });
     await expect(update(losing, "c1", "rewrite")).rejects.toThrow(/transient/);
-    expect(JSON.parse((await live("c1")).vector_ids)).toEqual([]); // the failure branch's own clear landed
-    // POST /vectorize-pending's repair of the row (routes/admin.ts:1473), then forget and Delete forever.
+    // Round 6: no failure branch clears the row any more; it lists its base vector and the append's chunk.
+    expect(JSON.parse((await live("c1")).vector_ids)).toHaveLength(2);
     failEmbed.on = false;
-    const row = await live("c1");
-    await storeEntry(e, "c1", row.content, JSON.parse(row.tags), row.source, row.created_at, DEFAULTS, wctx());
     expect((await forgetEntry("c1", e, change(), { reason: "forget", config: DEFAULTS, purge: false }, wctx().workspaceId)).status).toBe("deleted");
-    expect((await deleteForever(e, "c1", change(), wctx().workspaceId)).status).toBe("deleted");
+    expect((await deleteForever(e, "c1", change(), wctx().workspaceId, await trashNonce(e, "c1"))).status).toBe("deleted");
     // FAILS: ["c1-update-<ts>"] ("PRIVATE ADDITION") outlives Delete forever.
     expect(under("c1")).toEqual([]);
   });
@@ -202,16 +207,16 @@ describe("R4-V5 (MINOR): a restore re-indexes a memory deprecated during its re-
   // vector_ids = '[]' but not content, so the restore's write still lands: the dismissed memory's vector is back,
   // listed, with metadata tags that predate the deprecation — exactly what INDEXABLE_SQL (lifecycle.ts:84) excludes.
   it("a deprecated row stays out of the index", async () => {
-    const { e, store, put } = vectorEnv();
+    const { e, put, under } = vectorEnv();
     await seed("d1", "dismissed pattern");
     put("d1", "dismissed pattern");
-    const losing = losingEnv(e, { afterRestoreRead: async () => {
+    const losing = losingEnv(e, { beforeThrow: async () => {
       expect(await deprecateEntry("d1", e, change(), DEFAULTS, wctx().workspaceId)).toBe(true);
     } });
     await expect(update(losing, "d1", "rewrite")).rejects.toThrow(/transient/);
     const row = await live("d1");
     expect(JSON.parse(row.tags)).toContain("status:deprecated");
-    expect(JSON.parse(row.vector_ids)).toEqual([]); // FAILS: ["d1"]
-    expect(store.has("d1")).toBe(false);
+    expect(JSON.parse(row.vector_ids)).toEqual([]);
+    expect(under("d1")).toEqual([]); // neither the old vector nor the loser's upload is left in the index
   });
 });

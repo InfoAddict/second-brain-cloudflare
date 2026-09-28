@@ -72,50 +72,71 @@ function scanInventory(): Site[] {
 // shifting lines this branch's own commits never touched. Recomputed against the real scanner
 // output after combining rather than hand-reconciling two independently-tracked line sets, same
 // reasoning as every prior cross-track merge this table records — see the history further below.
+// MOVED (T-0089.1.1 final round): shared delete helper and the id bound shifted these lines; same sites.
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
   { file: 'src/capture/entry.ts', line: 250, kind: 'snapshot' },
   { file: 'src/capture/entry.ts', line: 289, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 375, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 412, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 419, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 421, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 459, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 503, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 512, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 514, kind: 'exempt' },
-  { file: 'src/capture/lifecycle.ts', line: 127, kind: 'snapshot' },
-  { file: 'src/capture/lifecycle.ts', line: 195, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 376, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 413, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 420, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 422, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 460, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 504, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 513, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 515, kind: 'exempt' },
+  { file: 'src/capture/lifecycle.ts', line: 128, kind: 'snapshot' },
+  { file: 'src/capture/lifecycle.ts', line: 196, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 56, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 215, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 245, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 266, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 474, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 642, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 728, kind: 'snapshot' },
+  // MOVED 56 -> 60 and every later store.ts site (T-0089.1.1 round 5): storeEntry's CAS pins the
+  // workspace, StoredEntry gains `committed`, and settleLostVectorCommit is new; same sites.
+  // REMOVED store.ts 243/274/295 and MOVED the rest (T-0089.1.1 round 6): restoreRowVectors and its
+  // three vector_ids writes are gone (per-upload vector ids); a losing writer deletes only its own upload.
+  { file: 'src/capture/store.ts', line: 62, kind: 'exempt' },
+  // MOVED +3 below line 56 (T-0089.1.1 round 3): upsertEntryVectors takes an opt-in batchEmbeds option.
+  { file: 'src/capture/store.ts', line: 383, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 547, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 632, kind: 'snapshot' },
   { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot' },
-  { file: 'src/entries/import.ts', line: 26, kind: 'exempt' },
+  // MOVED 26 -> 30 (T-0089.1.1 round 2): the id-uniqueness comment above import's insert, which now mints a fresh id in-statement.
+  { file: 'src/entries/import.ts', line: 33, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 96, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 148, kind: 'snapshot' },
-  { file: 'src/lib/team-admin.ts', line: 587, kind: 'hard-delete' },
+  { file: 'src/lib/team-admin.ts', line: 591, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
   { file: 'src/memory/actions.ts', line: 64, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 107, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 119, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 172, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 183, kind: 'snapshot' },
-  { file: 'src/memory/trash.ts', line: 218, kind: 'trash' },
-  { file: 'src/memory/trash.ts', line: 605, kind: 'exempt' },
-  { file: 'src/memory/trash.ts', line: 760, kind: 'hard-delete' },
-  { file: 'src/memory/undo.ts', line: 312, kind: 'snapshot' },
-  { file: 'src/memory/undo.ts', line: 348, kind: 'exempt' },
-  { file: 'src/recall/search.ts', line: 1194, kind: 'exempt' },
-  { file: 'src/routes/admin.ts', line: 1548, kind: 'exempt' },
+  { file: 'src/memory/actions.ts', line: 173, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 184, kind: 'snapshot' },
+  // MOVED 218 -> 220, 605 -> 607 (T-0089.1.1 round 2): the trash insert is a plain INSERT, with a comment saying why.
+  // MOVED 220 -> 221, 607 -> 608 (T-0089.1.1 round 3): trash.ts imports the shared edge readability guard.
+  { file: 'src/memory/trash.ts', line: 221, kind: 'trash' },
+  { file: 'src/memory/trash.ts', line: 588, kind: 'exempt' },
+  // REMOVED trash.ts:760 (T-0089.1.1 close-out): deleteForever no longer deletes a live entry at all;
+  // it acts only on a trash row pinned by nonce.
+  // MOVED 312 -> 316, 348 -> 352 (T-0089.1.1 round 2): revertEntry takes an optional trash nonce; same sites.
+  { file: 'src/memory/undo.ts', line: 320, kind: 'snapshot' },
+  { file: 'src/memory/undo.ts', line: 356, kind: 'exempt' },
+  // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
+  // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
+  { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
+  { file: 'src/recall/search.ts', line: 1235, kind: 'exempt' },
+  // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
+  // retryAfterMs rework added lines above this site; same site, shifted only.
+  // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.
+  // MOVED 1531 -> 1535 (T-0101.8.5, BE-10): history_since on GET /health added lines above this site.
+  { file: 'src/routes/admin.ts', line: 1535, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
+  // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
+  // MOVED 78 -> 89 (T-0089.1.1 round 3): the pass plans from lengths, then reads the chosen rows.
+  // MOVED 89 -> 93 (T-0089.1.1 round 5): indexPendingRow reports whether its commit landed.
+  // MOVED 93 -> 131 (T-0089.1.1 round 5): failure counting and demotion above the batch; same site.
+  // MOVED 131 -> 151 (T-0089.1.1, budget auditor R11): the 128 KB nightly cap and its skip count.
+  { file: 'src/vectorize/pending.ts', line: 165, kind: 'exempt' },
   { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
 ];
 
@@ -128,10 +149,10 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:86", "src/staleness/pass.ts:96",
   "src/when/pass.ts:367",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1548", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1535", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
-  "src/capture/entry.ts:412", "src/capture/entry.ts:503",
+  "src/capture/entry.ts:413", "src/capture/entry.ts:504",
 ]);
 
 describe("write-path inventory guard", () => {

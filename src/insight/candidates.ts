@@ -27,6 +27,7 @@ import type { Env } from "../env";
 import { initializeDatabase } from "../db/init";
 import { VECTORIZE_GET_BY_IDS_BATCH, D1_MAX_BOUND_PARAMS } from "../constants";
 import { isInsightEligible, isAssistantAuthored } from "./eligibility";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 import { MIN_GAP_MS, MIN_SIMILARITY, normalisePair, scoreCandidate, type ScorableEntry } from "./score";
 
 /**
@@ -139,7 +140,11 @@ async function writeCursor(env: Env, row: { created_at: number; id: string }): P
  * `src/migration/embedding.ts`'s `pageSql`, including the tie-break column.
  */
 function seedSql(hasCursor: boolean): string {
-  const where = hasCursor ? `WHERE created_at > ? OR (created_at = ? AND id > ?)` : "";
+  // Held rows are skipped in SQL, not only by isInsightEligible, so a burst of
+  // them cannot fill the ACCRUAL_SEED_LIMIT window (trust spec 5.3).
+  const where = hasCursor
+    ? `WHERE (created_at > ? OR (created_at = ? AND id > ?)) AND ${NOT_HELD_SQL}`
+    : `WHERE ${NOT_HELD_SQL}`;
   // workspace_id rides along so a candidate pair can be kept inside one workspace:
   // accrual walks every workspace's rows (it is a maintenance pass), but a pair
   // spanning two workspaces would have the weekly pass reason over two people's
@@ -368,6 +373,8 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
            AND ABS(a.created_at - b.created_at) >= ?
            AND a.tags NOT LIKE '%"status:deprecated"%'
            AND b.tags NOT LIKE '%"status:deprecated"%'
+           AND a.${NOT_HELD_SQL}
+           AND b.${NOT_HELD_SQL}
          ORDER BY e.created_at DESC
          LIMIT 10`,
       ).bind(MIN_GAP_MS).all() as {

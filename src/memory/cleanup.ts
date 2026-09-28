@@ -6,7 +6,7 @@ import {
 } from "../constants";
 import { writeAdminEvent } from "../lib/admin-audit";
 import { cleanupMemberData, findPendingRemoval } from "../lib/team-admin";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import { purgeTrash } from "./trash";
 
 export interface NightlyCleanupResult {
@@ -85,7 +85,7 @@ export async function runNightlyCleanup(env: Env): Promise<NightlyCleanupResult>
       }
       if (!res.done) break;
       if (res.vectorIds.length) {
-        try { await deleteVectorIds(env, res.vectorIds); } catch (e) { console.error("Vectorize deleteByIds failed during member removal resume (non-fatal):", e); }
+        try { await deleteEntryVectors(env, res.ownedVectors); } catch (e) { console.error("Vectorize deleteByIds failed during member removal resume (non-fatal):", e); }
       }
       await writeAdminEvent(env, {
         actorId: "",

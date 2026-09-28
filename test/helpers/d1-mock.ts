@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { COMPRESSION_IMPORTANCE_THRESHOLD, COMPRESSION_MIN_RECALL, isTopicTag } from "../../src/compression/eligibility";
+import { NOT_HELD_SQL } from "../../src/quarantine/tags";
 
 /**
  * Decode a `%"tag"%` bind parameter back to the tag, undoing tagLikePattern's escaping.
@@ -104,8 +105,32 @@ export class D1Mock {
   workspaces: any[] = [];
   memberships: any[] = [];
 
+  /**
+   * Vector id -> the row that listed it, remembered across statements (T-0089.1.1): the index still
+   * holds a row's vectors after the write that clears its vector_ids, until they are deleted. Read by
+   * make-env's Vectorize double to answer deleteEntryVectors' parentId check the way real data would.
+   */
+  private listedVectors = new Map<string, string>();
+  private rememberListed(): void {
+    for (const r of [...this.entries, ...this.trash]) {
+      let ids: string[] = [];
+      try { ids = JSON.parse(r.vector_ids ?? "[]"); } catch { ids = []; }
+      for (const v of ids) if (!this.listedVectors.has(v)) this.listedVectors.set(v, r.id);
+    }
+  }
+  __vectorOwners(): Map<string, string> { this.rememberListed(); return this.listedVectors; }
+
   prepare(sql: string) {
+    if (/^\s*(UPDATE entries|DELETE FROM entries|INSERT INTO entries_trash)/i.test(sql)) this.rememberListed();
     let s = sql.replace(/\s+/g, " ").trim();
+
+    // T-0089.4.2 (quarantine): every read this double models predates held
+    // rows, and none of its fixtures seed one, so the clause changes nothing a
+    // test here could see. Stripped like the ESCAPE clause below, rather than
+    // grown onto every exact-string branch, because it never changes which
+    // query a statement IS. Held exclusion itself is covered against real
+    // SQLite in test/integration/recall-held.test.ts.
+    s = s.replace(new RegExp(` AND ${NOT_HELD_SQL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g"), "");
 
     // Team-edition workspace scoping. Production appends `AND workspace_id IN (?, ?)`
     // (or a bare `WHERE` form) whenever an Identity is in play. Every integration test
@@ -135,6 +160,19 @@ export class D1Mock {
         .replace(/WHERE\s*\)/gi, ")");
     }
 
+    // Round 6 (T-0089.1.1): writers that replace vector_ids also compare-and-set the vector_ids they
+    // read (`AND e.vector_ids = ?N`). Modelled once here: the clause is checked against the row at run
+    // time and stripped, so every existing branch below keeps matching the statement it always did.
+    let vectorIdsGuard: { valueIdx: number; idIdx: number } | null = null;
+    {
+      const vg = /\s+AND e\.vector_ids (?:=|IS) \?(\d+)/.exec(s);
+      const idm = /e\.id = \?(\d+)/.exec(s);
+      if (vg && idm) {
+        vectorIdsGuard = { valueIdx: Number(vg[1]) - 1, idIdx: Number(idm[1]) - 1 };
+        s = s.replace(vg[0], "");
+      }
+    }
+
     // Production pairs every tag LIKE clause with `ESCAPE '\\'` (see tagLikePattern). The
     // escape clause never changes which query a statement IS, so branches that identify a
     // query by its exact text compare against this form rather than each growing a suffix.
@@ -146,6 +184,11 @@ export class D1Mock {
       const args = scopeDrop.size ? allArgs.filter((_, i) => !scopeDrop.has(i)) : allArgs;
       const stmt: any = {
       async run() {
+        if (vectorIdsGuard) {
+          const row = db.entries.find((e: any) => e.id === args[vectorIdsGuard!.idIdx]);
+          const expected = args[vectorIdsGuard.valueIdx];
+          if (row && expected !== null && (row.vector_ids ?? "[]") !== expected) return { meta: { changes: 0 } };
+        }
         // D1 returns each batched statement's rows as well as its meta, and a
         // batch carries reads as well as writes: identity resolution pairs its
         // SELECT with the throttled last_used_at write so the pair costs one
@@ -212,7 +255,7 @@ export class D1Mock {
           }
           return { meta: { changes: n } };
         }
-        if (s.startsWith("INSERT INTO entries")) {
+        if (s.startsWith("INSERT INTO entries (")) {
           const colMatch = s.match(/INSERT INTO entries \(([^)]+)\)/i);
           if (!colMatch) throw new Error("INSERT INTO entries missing column list");
           const cols = colMatch[1].split(",").map(c => c.trim());
@@ -391,6 +434,9 @@ export class D1Mock {
         if (s.startsWith("UPDATE entries SET vector_ids")) {
           const [vector_ids, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
+          // storeEntry's and the nightly pass's compare-and-set on the vector_ids read (round 6).
+          if (row && s.endsWith("AND vector_ids = ?") && (row.vector_ids ?? "[]") !== args[args.length - 1]) return { meta: { changes: 0 } };
+          if (row && s.includes("AND vector_ids = '[]'") && (row.vector_ids ?? "[]") !== "[]") return { meta: { changes: 0 } };
           if (row) row.vector_ids = vector_ids;
           return { meta: { changes: row ? 1 : 0 } };
         }
@@ -534,14 +580,15 @@ export class D1Mock {
           return { meta: { changes: row ? 1 : 0 } };
         }
         // The trash batch (src/memory/trash.ts trashManyStatements): every id list is one JSON parameter.
-        if (s.startsWith("INSERT OR REPLACE INTO entries_trash")) {
+        if (s.startsWith("INSERT INTO entries_trash")) {
           const [idsJson, now, by, channel, reason] = args;
           const withEdges = s.includes("json_group_array");
           const rows = db.entries.filter((e: any) => (JSON.parse(idsJson) as string[]).includes(e.id));
           for (const e of rows) {
             const { id, content, vector_ids, ...rest } = e;
             const edges = withEdges ? db.edges.filter((g: any) => g.source_id === id || g.target_id === id) : [];
-            db.trash = db.trash.filter((t: any) => t.id !== id);
+            // A plain INSERT, as in SQLite: an id already in the trash is a PRIMARY KEY error.
+            if (db.trash.some((t: any) => t.id === id)) throw new Error("UNIQUE constraint failed: entries_trash.id");
             db.trash.push({ id, workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "", content, row_json: JSON.stringify(rest), edges_json: JSON.stringify(edges), vector_ids: vector_ids ?? "[]", deleted_at: now, deleted_by: by, channel, reason });
           }
           return { meta: { changes: rows.length } };
@@ -574,8 +621,20 @@ export class D1Mock {
           // ten values, then the pair the guard tests. Modelled here because the
           // rule lives in the statement, so a mock that ignored it would report
           // an insert production would have skipped.
-          if (s.includes("WHERE NOT EXISTS")) {
-            const [ga, gb, gc, gd] = args.slice(10);
+          // The endpoint readability guard every edge insert carries (edgeEndpointsReadableSql): the
+          // ten values, then source, readable JSON, target, readable JSON.
+          let guardEnd = 10;
+          if (s.includes("json_each")) {
+            const [gs, gsr, gt, gtr] = args.slice(10, 14);
+            guardEnd = 14;
+            const readableIn = (id: unknown, json: unknown) => {
+              const allowed = JSON.parse(String(json)) as string[];
+              return db.entries.some((e: any) => e.id === id && allowed.includes(e.workspace_id ?? ""));
+            };
+            if (!readableIn(gs, gsr) || !readableIn(gt, gtr)) return { meta: { changes: 0 } };
+          }
+          if (s.includes("AND NOT EXISTS")) {
+            const [ga, gb, gc, gd] = args.slice(guardEnd);
             const typed = db.edges.some((e: any) =>
               ((e.source_id === ga && e.target_id === gb) || (e.source_id === gc && e.target_id === gd))
               && e.type !== "relates_to");
