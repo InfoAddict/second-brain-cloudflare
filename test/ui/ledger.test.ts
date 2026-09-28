@@ -92,9 +92,9 @@ describe("ledger math (pure, no DOM)", () => {
 
     expect(text.startsWith("70-79%:")).toBe(true);
     expect(text).toContain("you said 74%");
-    expect(text).toContain("came true 52%");
-    expect(text).toContain("n=14");
-    expect(text).toContain("9 stated, 5 inferred");
+    expect(text).toContain("came true 52% of the time");
+    expect(text).toContain("14 decisions");
+    expect(text).toContain("9 stated, 5 estimated");
   });
 
   it("a not-enough-yet row's tooltip names n and carries no rate", () => {
@@ -104,8 +104,8 @@ describe("ledger math (pure, no DOM)", () => {
 
     const text = calibrationTooltipText(thinRow);
 
-    expect(text).toContain("not enough yet");
-    expect(text).toContain("n=2");
+    expect(text).toContain("too few yet");
+    expect(text).toContain("(2)");
     expect(text).not.toContain("came true");
   });
 });
@@ -223,7 +223,7 @@ describe("renderCalibrationChart", () => {
     // Direct labels are the n per row only — no "74%"/"52%" printed on the marks themselves.
     expect(svg.innerHTML).not.toMatch(/>74%</);
     expect(svg.innerHTML).not.toMatch(/>52%</);
-    expect(svg.innerHTML).toContain("n=14");
+    expect(svg.innerHTML).toContain(">14<");
   });
 
   it("legend is present even when not ready", () => {
@@ -259,9 +259,9 @@ describe("renderCalibrationChart", () => {
     expect(tbody).toContain("74%");
     expect(tbody).toContain("52%");
     expect(tbody).toContain("9/5");
-    // An unshown bucket still gets its own row, not enough yet rather than a value.
+    // An unshown bucket still gets its own row, too few yet rather than a value.
     expect(tbody).toContain("50-59%");
-    expect(tbody).toContain("not enough yet");
+    expect(tbody).toContain("too few yet");
   });
 
   it("tooltip text leads with values and uses textContent, on hover and on focus", () => {
@@ -344,7 +344,7 @@ describe("the ledger sheet's filters (source, state)", () => {
     expect(fetchCalls.some((u) => u.includes("source=stated"))).toBe(true);
     // All three surfaces reflect the new fetch's data, not the previous one's.
     expect(els["ledger-sentence"].textContent).toBe("Stated-only line.");
-    expect(els["ledger-list"].innerHTML).toContain("No decisions logged yet");
+    expect(els["ledger-list"].innerHTML).toContain("No decisions yet");
   });
 
   it("switching state re-fetches and re-renders too, and a repeat of the same tab is a no-op", async () => {
@@ -368,7 +368,7 @@ describe("the ledger sheet's filters (source, state)", () => {
 
     await ctx.openLedgerSheet();
 
-    expect(els["ledger-list"].innerHTML).toContain("No decisions logged yet");
+    expect(els["ledger-list"].innerHTML).toContain("No decisions yet");
   });
 
   it("lists an open decision's review date and a resolved one's outcome chip", async () => {
@@ -385,8 +385,8 @@ describe("the ledger sheet's filters (source, state)", () => {
     expect(html).toContain("Review around Dec 26");
     expect(html).toContain("70%");
     expect(html).toContain("stated");
-    expect(html).toContain("Went right");
-    expect(html).toContain("no confidence");
-    expect(html).toContain("Edited since recorded");
+    expect(html).toContain("Right call");
+    expect(html).toContain("no percentage given");
+    expect(html).toContain("Edited after it was logged");
   });
 });

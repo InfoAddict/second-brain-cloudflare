@@ -38,13 +38,13 @@ function xScale(pct) {
   return Math.max(0, Math.min(1, pct / 100))
 }
 
-/** "70-79%: you said 74%, came true 52%, n=14 (9 stated, 5 inferred)" or the not-enough-yet line — pure, so the tooltip and the aria-label can share it without either drifting from the other. */
+/** "70-79%: you said 74%, came true 52% of the time, 14 decisions (9 stated, 5 estimated)" or the not-enough-yet line — pure, so the tooltip and the aria-label can share it without either drifting from the other. */
 function calibrationTooltipText(row) {
   if (!row) return ''
   if (!row.shown) return `${row.label}: ${t('ledger.notEnoughYet', { n: row.n })}`
   const stated = t('ledger.tipStated', { pct: Math.round(row.meanStated * 100) })
   const hit = t('ledger.tipHit', { pct: Math.round(row.hitRate * 100) })
-  const n = t('ledger.tipN', { n: row.n, stated: row.nStated, inferred: row.nInferred })
+  const n = tPlural('ledger.tipN', row.n, { stated: row.nStated, inferred: row.nInferred })
   return `${row.label}: ${stated}, ${hit}, ${n}`
 }
 
@@ -148,8 +148,9 @@ function renderCalibrationChart(chartEl, result) {
       out += `<line class="cal-connector" x1="${x1}" x2="${x2}" y1="${y}" y2="${y}"/>`
       out += `<circle class="cal-mark-ring" cx="${x1}" cy="${y}" r="5"/>`
       out += `<circle class="cal-mark-dot" cx="${x2}" cy="${y}" r="5"/>`
-      // Direct label: only the n, at the row end (Design 7.4 item 3) — never a value on the dots themselves.
-      out += `<text x="${W}" y="${y + 4}" class="cal-n-label" text-anchor="end">n=${row.n}</text>`
+      // Direct label: only the n, at the row end (Design 7.4 item 3), never a value on the dots themselves.
+      // The visible digit alone; the full reading (n plus the stated/estimated split) is the aria-label, same text the tooltip shows.
+      out += `<text x="${W}" y="${y + 4}" class="cal-n-label" text-anchor="end" aria-label="${escAttr(tPlural('ledger.tipN', row.n, { stated: row.nStated, inferred: row.nInferred }))}">${row.n}</text>`
     } else {
       out += `<text x="${padL}" y="${y + 4}" class="cal-not-enough">${escHtml(t('ledger.notEnoughYet', { n: row.n }))}</text>`
     }

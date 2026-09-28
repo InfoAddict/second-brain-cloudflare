@@ -321,15 +321,33 @@ describe("decision rows in the due sheet (T7-E, Design 7.2)", () => {
     expect(JSON.parse(call.init.body)).toEqual({ id: "d1", result: "right", note: "Went better than expected." });
   });
 
-  it("Can't tell yet toast names the next date", async () => {
-    const ctx = load([decisionResponse(), { ok: true, id: "d1", message: "OK, I'll ask again around Dec 26, 2026." }]);
+  it("Can't tell yet toast names the next date, from the structured review_at field", async () => {
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", review_at: Date.UTC(2026, 11, 26, 12), message: "OK, I'll ask again around Dec 26, 2026." }]);
     await ctx.loadDueQueue();
 
     await ctx.resolveDecision("d1", "unknown", { disabled: false });
 
     const call = ctx.__fetchCalls.find((c: any) => c.url.includes("/decisions/outcome"));
     expect(JSON.parse(call.init.body)).toEqual({ id: "d1", result: "unknown" });
-    expect(ctx.__toasts[0].message).toContain("Dec 26, 2026");
+    expect(ctx.__toasts[0].message).toBe("Okay. Review again around Dec 26, 2026");
+  });
+
+  it("Can't tell yet toast says no more reviews when review_at is null (re-arming exhausted)", async () => {
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", review_at: null, message: "OK, no more reviews for this one." }]);
+    await ctx.loadDueQueue();
+
+    await ctx.resolveDecision("d1", "unknown", { disabled: false });
+
+    expect(ctx.__toasts[0].message).toBe("Okay. No more reviews for this one");
+  });
+
+  it("falls back to the Worker's own reply when review_at is absent (a Worker that predates it)", async () => {
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", message: "OK, I'll ask again around Dec 26, 2026." }]);
+    await ctx.loadDueQueue();
+
+    await ctx.resolveDecision("d1", "unknown", { disabled: false });
+
+    expect(ctx.__toasts[0].message).toBe("OK, I'll ask again around Dec 26, 2026.");
   });
 
   it("re-enables the button and keeps the row on a failed outcome", async () => {

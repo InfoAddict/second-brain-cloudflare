@@ -209,14 +209,20 @@ function decisionOutcomeToast(result) {
 }
 
 /**
- * Records how a logged decision turned out (Design 4.2, POST
- * /decisions/outcome). Right, Wrong and Mixed show the dashboard's own short
- * toast; Can't tell yet (result "unknown") shows the Worker's own reply
- * instead, since only it knows the next review date or whether re-arming is
- * exhausted (buildOutcomeUpdate, src/decisions/outcome.ts) — nothing in the
- * response threads that back out as a plain date the dashboard could format
- * itself (see the T7-E report: a backend gap).
+ * The toast for "Too early to tell" (result "unknown"): a review date when
+ * `review_at` is present (T7-C's structured field on POST
+ * /decisions/outcome, src/decisions/outcome.ts), formatted the same way
+ * ledger.reviewAround does; "no more reviews" when the field is present but
+ * null (re-arming exhausted); the Worker's own reply when the field is
+ * absent entirely, from a Worker that predates it.
  */
+function decisionUnknownToast(data) {
+  if (!('review_at' in data)) return data.message
+  if (data.review_at == null) return t('due.outcomeToastNoMore')
+  return t('due.outcomeToastLater', { date: formatDateUI(data.review_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
+}
+
+/** Records how a logged decision turned out (Design 4.2, POST /decisions/outcome). */
 async function resolveDecision(id, result, btn) {
   if (btn) btn.disabled = true
   const note = dueNoteValue(id)
@@ -229,7 +235,7 @@ async function resolveDecision(id, result, btn) {
     const data = await res.json()
     if (!data.ok) throw new Error(data.error || 'failed')
     dropFromDueQueue(id)
-    showToast(result === 'unknown' ? data.message : decisionOutcomeToast(result), {
+    showToast(result === 'unknown' ? decisionUnknownToast(data) : decisionOutcomeToast(result), {
       action: t('due.undo'),
       onAction: async () => {
         try {
