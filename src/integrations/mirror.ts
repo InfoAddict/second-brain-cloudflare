@@ -25,7 +25,7 @@ import { MIRROR_VERSION_KEEP, WRITE_CAS_ATTEMPTS } from "../constants";
 import { changesOf, mirrorPruneStatement, pruneStatement, snapshotStatement } from "../memory/versions";
 import { scoreWrite } from "../quarantine/score";
 import { heldTagsFor, holdStatements } from "../quarantine/hold";
-import { isHeld } from "../quarantine/tags";
+import { isHeld, withNeedsRescan } from "../quarantine/tags";
 import { deleteEntryVectors } from "../vectorize/batch";
 
 export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_CONTEXT, resolved?: Readonly<Config>, providerId?: string): MirrorStore & { flushAudit(): Promise<void> } {
@@ -95,16 +95,19 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       } catch (e) {
         console.error("Mirror classify failed (non-fatal):", e);
       }
-      // versioning: exempt: creation — a new row has no prior state to keep
-      const insertStatement = env.DB.prepare(
-        `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, importance_score, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id, content, JSON.stringify(finalTags), source, now, now, "[]", importance, writeCtx.workspaceId, writeCtx.actorId);
-
       // Track 4 (16-t3-t4-trust-spec.md 5.1, 5.4 W-d): mirror writes are scored strictest —
       // channel system:mirror, x1.25, no meta-discussion damping — because an email or a
       // calendar invite sets its own `source` and can never declare itself `direct`.
       const change = { actorId: writeCtx.actorId, channel: "system:mirror" as const };
       const score = scoreWrite({ content, tags: finalTags, source, channel: "system:mirror", kind: "create" }, cfg);
+      // 5.1 scorer byte budget, point 2 (Lane W follow-up): queues an unheld >32 KB mirror
+      // create for the nightly background rescan of its unscanned middle.
+      if (score.partial && !score.hold) finalTags = withNeedsRescan(finalTags);
+
+      // versioning: exempt: creation — a new row has no prior state to keep
+      const insertStatement = env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, importance_score, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, content, JSON.stringify(finalTags), source, now, now, "[]", importance, writeCtx.workspaceId, writeCtx.actorId);
 
       if (score.hold) {
         // Same shape as a held capture (W1): the INSERT (with the tags the sync asked for)
@@ -158,7 +161,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
         const tags: string[] = JSON.parse(readTags);
         const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
 
-        const refreshedTags = tagsAfterWrite(tags);
+        let refreshedTags = tagsAfterWrite(tags);
         const now = Date.now();
         const change = { actorId: writeCtx.actorId, channel: "system:mirror" as const };
 
@@ -170,6 +173,9 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
           { content, tags: refreshedTags, source: row.source as string, channel: "system:mirror", kind: "update" }, cfg,
         );
         const heldTags = score?.hold ? heldTagsFor(refreshedTags, score.reasons) : null;
+        // 5.1 scorer byte budget, point 2 (Lane W follow-up): queues an unheld >32 KB mirror
+        // update for the nightly background rescan of its unscanned middle.
+        if (!heldTags && score?.partial) refreshedTags = withNeedsRescan(refreshedTags);
 
         // Versioned, keeping the last MIRROR_VERSION_KEEP (D1.1): the normal prune caps the row
         // at VERSION_KEEP whatever it holds, and the mirror prune below brings it back to 3 once

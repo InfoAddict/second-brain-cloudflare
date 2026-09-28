@@ -12,6 +12,25 @@ export const QUARANTINE_TAG_PREFIX = "quarantine:";
 export const EDITED_CANONICAL_TAG_PREFIX = "edited-canonical:";
 
 /**
+ * Lane W follow-up (spec 5.1 "Scorer byte budget", point 2): a create or update scored
+ * `partial` (the note is over 32 KB, so only the head and tail were scanned) but did not hold
+ * on what was scanned. This bare marker — never a `quarantine:` tag — queues the row for the
+ * bounded background pass (inside the existing nightly cron) that scores the unscanned middle.
+ * Until that pass runs the row stays unheld and indexable, which is the accepted, recorded gap.
+ */
+export const NEEDS_RESCAN_TAG = "quarantine-scan-pending";
+
+/** Adds NEEDS_RESCAN_TAG if absent; a no-op if the row is already queued. */
+export function withNeedsRescan(tags: readonly string[]): string[] {
+  return tags.includes(NEEDS_RESCAN_TAG) ? [...tags] : [...tags, NEEDS_RESCAN_TAG];
+}
+
+/** Removes NEEDS_RESCAN_TAG once the background pass has scored the row. */
+export function withoutNeedsRescan(tags: readonly string[]): string[] {
+  return tags.filter(t => t !== NEEDS_RESCAN_TAG);
+}
+
+/**
  * The only wildcard is the leading and trailing `%` that match the JSON
  * array's neighbours; the literal itself carries no LIKE metacharacter.
  */

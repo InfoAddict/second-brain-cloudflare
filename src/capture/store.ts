@@ -18,7 +18,7 @@ import type { ChangeContext, AuditChannel } from "../lib/audit";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement, type WhenChange } from "../memory/versions";
 import { scoreWrite, type QuarantineChannel } from "../quarantine/score";
 import { heldTagsFor, holdStatements, type HeldInfo } from "../quarantine/hold";
-import { isHeld, withEditedCanonical } from "../quarantine/tags";
+import { isHeld, withEditedCanonical, withNeedsRescan } from "../quarantine/tags";
 import { countMcpWritesInWindow } from "../quarantine/burst";
 import { getStatus } from "../memory/status";
 import { isCapsuleTag } from "../tags/system";
@@ -368,6 +368,9 @@ export async function updateEntryContent(
       );
     }
     const heldTags = score?.hold ? heldTagsFor(committedTags, score.reasons) : null;
+    // 5.1 scorer byte budget, point 2 (Lane W follow-up): queues an unheld >32 KB edit for the
+    // nightly background rescan of its unscanned middle.
+    if (!heldTags && score?.partial) committedTags = withNeedsRescan(committedTags);
 
     // Re-embed FIRST (#212): if it fails, leave the entry's content and vectors untouched and
     // surface an error, instead of committing new content and then deleting every vector —
@@ -620,6 +623,10 @@ export async function appendToEntry(
       );
     }
     const heldTags = score?.hold ? heldTagsFor(refreshedTags, score.reasons) : null;
+    // 5.1 scorer byte budget, point 2 (Lane W follow-up): the scored slice here is already
+    // bounded (2,000 characters of context plus the addition), so this only fires when the
+    // addition itself is large enough to trip the scorer's own 32 KB cap.
+    if (!heldTags && score?.partial) refreshedTags = withNeedsRescan(refreshedTags);
 
     if (readContent.length + suffix.length > CHUNK_MAX_CHARS) {
       // The whole text is re-embedded, so this commit must be of the text that was embedded.

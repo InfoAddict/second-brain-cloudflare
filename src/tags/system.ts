@@ -14,7 +14,7 @@
 // additionally hides machine identifiers (`#5118`, `#fd540a`). That extra rule is
 // deliberately absent here: hiding a junk tag costs nothing, but treating it as
 // unowned would let an edit silently delete a tag that is genuinely stored.
-import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX, isHoldReasonValue, isEditedCanonicalDateValue } from "../quarantine/tags";
+import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX, NEEDS_RESCAN_TAG, isHoldReasonValue, isEditedCanonicalDateValue } from "../quarantine/tags";
 import {
   T7_TAG_PREFIXES, OWED_TO_ME_TAG,
   STANDING_TAG_PREFIX, LEDGER_TAG_PREFIX, CONFIDENCE_TAG_PREFIX, CONFIDENCE_SOURCE_TAG_PREFIX,
@@ -97,6 +97,9 @@ const PIPELINE_TAG_NAMES = new Set([
   OWED_TO_ME_TAG,
   // Built on a memory that was later retracted (Track 2 cascade, T-0089.2.4). Cleared by undo or Keep.
   RETRACTED_SOURCE_TAG,
+  // Queues a >32 KB row whose unscanned middle the nightly background pass still owes a
+  // quarantine rescan (Lane W follow-up, spec 5.1 point 2). Cleared once that pass runs.
+  NEEDS_RESCAN_TAG,
 ]);
 
 /** True when the tag is the brain's own bookkeeping rather than the user's word. */

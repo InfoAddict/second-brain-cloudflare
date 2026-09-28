@@ -27,6 +27,7 @@ import { buildCommitmentTags, validateT7Capture, type T7CaptureInput, type T7Rep
 import { scoreWrite, type QuarantineChannel, type ScoreResult } from "../quarantine/score";
 import { heldTagsFor, holdStatements, type HeldInfo } from "../quarantine/hold";
 import { countMcpWritesInWindow } from "../quarantine/burst";
+import { withNeedsRescan } from "../quarantine/tags";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -499,9 +500,13 @@ export async function captureEntry(
   const supersedes = contradiction.detected && !!contradiction.conflicting_id && (protectConflict || (plan !== null && plan.action !== "none"));
   const baseTags = supersedes ? [...t, "contradiction-resolved"] : t;
   const duplicateTags = dup.status === "flagged" ? [...baseTags, "duplicate-candidate"] : baseTags;
-  const finalTags = protectConflict
+  const scoredTags = protectConflict
     ? withStatus(duplicateTags.filter(tag => tag !== "contradiction-resolved"), "draft")
     : duplicateTags;
+  // 5.1 scorer byte budget, point 2 (Lane W follow-up): this branch is only reached when
+  // score.hold is false (a held write already returned above), so a `partial` score here is an
+  // unheld write over 32 KB whose middle the nightly pass still owes a check.
+  const finalTags = score?.partial ? withNeedsRescan(scoredTags) : scoredTags;
 
   // A decision's own computed review date wins over everything (Design 4.1); it is never
   // combined with a caller `when` (validateT7Capture already refused review_by + when
