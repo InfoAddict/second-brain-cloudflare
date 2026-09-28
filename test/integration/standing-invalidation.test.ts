@@ -12,9 +12,11 @@ import { moveEntry } from "../../src/capture/share";
 import { restoreEntry, getTrashedEntry } from "../../src/memory/trash";
 import { revertEntry } from "../../src/memory/undo";
 import { resolveEntryAction } from "../../src/memory/actions";
-import { resetStandingIsolateState, standingKvKey } from "../../src/standing/cache";
+import { captureEntry } from "../../src/capture/entry";
+import { appendToEntry } from "../../src/capture/store";
+import { resetStandingIsolateState, standingKvKey, standingTouched } from "../../src/standing/cache";
 import type { StandingCacheV1 } from "../../src/standing/codec";
-import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
+import { makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import type { Identity } from "../../src/lib/identity";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
@@ -125,5 +127,69 @@ describe("standing invalidation: every touch writer refreshes the cache", () => 
     expect(result.status).toBe("ok");
     await Promise.all(deferred);
     expect(put).not.toHaveBeenCalled();
+  });
+});
+
+// Lane W's own files (spec 15 2.6): captureEntry's insert, merge and replace, its contradiction
+// supersede-close, and store.ts's appendToEntry — wired once lane W merged (director's follow-up).
+describe("standing invalidation: captureEntry and appendToEntry (lane W's files)", () => {
+  const stream = (text: string) => new ReadableStream({ start(c) {
+    c.enqueue(new TextEncoder().encode(`data: {"response":${JSON.stringify(text)}}\n\n`));
+    c.enqueue(new TextEncoder().encode("data: [DONE]\n\n")); c.close();
+  } });
+  const decisionAI = (decision: string) =>
+    ({ run: vi.fn(async (model: string) => model.startsWith("@cf/baai/bge") ? { data: [new Array(384).fill(0.1)] } : stream(decision)) }) as unknown as Ai;
+
+  it("merge into an already-standing target touches the cache, even when the incoming capture is not itself tagged standing", async () => {
+    const { sqlite, kv } = await setup();
+    insertEntry(sqlite, { id: "s1", content: "Old text", workspaceId: "" });
+    const decision = JSON.stringify({ action: "merge", target_id: "s1", merged_content: "Old text. Incoming fact." });
+    const env: Env = makeTestEnv(undefined, {
+      DB: sqlite.db as unknown as D1Database, OAUTH_KV: kv,
+      VECTORIZE: makeVectorizeMock({ query: vi.fn().mockResolvedValue({ matches: [{ id: "s1", score: 0.9, metadata: { parentId: "s1" } }] }) }),
+      AI: decisionAI(decision),
+    });
+    await initializeDatabase(env);
+
+    const result = await captureEntry("Incoming fact", [], "api", env, ctx, undefined, { workspaceId: "", actorId: "u1" }, undefined, { channel: "rest" });
+    expect(result.status).toBe("merged");
+    const cache = await cacheAfter(kv, "");
+    expect(cache?.items.map(i => i.id)).toContain("s1");
+  });
+
+  it("a contradiction that closes a standing row's window touches the cache and drops it", async () => {
+    const { sqlite, kv } = await setup();
+    insertEntry(sqlite, { id: "old", content: "I live in NYC", workspaceId: "" });
+    const env: Env = makeTestEnv(undefined, {
+      DB: sqlite.db as unknown as D1Database, OAUTH_KV: kv,
+      VECTORIZE: makeVectorizeMock({ query: vi.fn().mockResolvedValue({ matches: [{ id: "old", score: 0.72, metadata: { parentId: "old" } }] }) }),
+      AI: decisionAI(JSON.stringify({ contradicts: true, conflicting_id: "old", reason: "different city" })),
+    });
+    await initializeDatabase(env);
+    standingTouched(env, ctx, DEFAULTS, [""]);
+    const before = await cacheAfter(kv, "");
+    expect(before?.items.map(i => i.id)).toContain("old");
+    deferred = [];
+
+    const result = await captureEntry("I moved to LA", [], "api", env, ctx, undefined, { workspaceId: "", actorId: "u1" }, undefined, { channel: "rest" });
+    expect(result.status).toBe("contradiction");
+    const cache = await cacheAfter(kv, "");
+    expect(cache?.items.map(i => i.id)).not.toContain("old");
+  });
+
+  it("appendToEntry touches the cache for a standing row", async () => {
+    const { env, sqlite, kv } = await setup();
+    insertEntry(sqlite, { id: "s1", content: "When reviewing code, prefer small diffs", workspaceId: "ws-a" });
+    standingTouched(env, ctx, DEFAULTS, ["ws-a"]);
+    await cacheAfter(kv, "ws-a");
+    deferred = [];
+
+    const result = await appendToEntry(
+      env, "s1", "existing", " and pair review", [], "api", DEFAULTS, undefined,
+      { workspaceId: "ws-a", actorId: "u1" }, { actorId: "u1", channel: "rest" }, undefined, "ws-a", ctx,
+    );
+    expect(result.indexed).toBe(true);
+    const cache = await cacheAfter(kv, "ws-a");
+    expect(cache?.items.map(i => i.id)).toContain("s1");
   });
 });

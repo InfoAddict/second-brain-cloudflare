@@ -425,7 +425,11 @@ export async function captureEntry(
             // This merge's own upload never became the row's (round 6: ids are per upload): delete it.
             await discardUpload(env, targetId, newVectorIds);
           } else {
-            if (opts.systemWrite === undefined && t.includes(STANDING_TAG)) {
+            // Either side: the incoming capture's own standing tag (propagated by refreshedTags
+            // above), or the target already being standing:active before this merge/replace ever
+            // ran — either way its content and vector just changed, so the cache's stored vector
+            // for it is now stale (spec 15 2.6).
+            if (opts.systemWrite === undefined && (t.includes(STANDING_TAG) || existingTags.includes(STANDING_TAG))) {
               standingTouched(env, ctx, cfg as StandingCacheConfig, [writeCtx.workspaceId], newVectorValues ? [{ id: targetId, vector: newVectorValues }] : undefined);
             }
             try {
@@ -663,6 +667,14 @@ export async function captureEntry(
       classifyThenInfer(id, c, env, ctx, cfg, kind =>
         inferEdgesOnWrite(id, neighbors, env, { suppressId, newKind: kind }));
       return withT7({ status: "stored", id, tags: keptTags });
+    }
+
+    // The supersede close (spec 15 2.6): the CLOSED row just left "current", which is what the
+    // cache build's own currentValidityAt filter admits on. Only the closed side's tags matter —
+    // the closer (still open) had no eligibility change of its own from this write.
+    const closedTags: string[] = closesOlder ? JSON.parse(snap.tags ?? "[]") : finalTags;
+    if (closedTags.includes(STANDING_TAG)) {
+      standingTouched(env, ctx, cfg as StandingCacheConfig, [writeCtx.workspaceId]);
     }
 
     if (opts.channel) {

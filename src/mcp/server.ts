@@ -813,7 +813,7 @@ export function buildMcpServer(
       const cfg = await resolveConfig(env);
       let appendResult: Awaited<ReturnType<typeof appendToEntry>>;
       try {
-        appendResult = await appendToEntry(env, id, existingContent, a, tags, source, cfg, volatility as Volatility | undefined, writeCtx, { ...mcpChange, client }, whenInput, row.workspace_id as string);
+        appendResult = await appendToEntry(env, id, existingContent, a, tags, source, cfg, volatility as Volatility | undefined, writeCtx, { ...mcpChange, client }, whenInput, row.workspace_id as string, ctx);
       } catch (e) {
         if (e instanceof WriteConflictError) return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was appended. Please try again.` }] };
         if (e instanceof EntryGoneError) return { content: [{ type: "text", text: e.message }] };
@@ -929,7 +929,7 @@ export function buildMcpServer(
 
       const client = identity ? await resolveClient(extra) : undefined;
       const cfg = await resolveConfig(env);
-      const result = await updateEntryContent(env, id, newContent, cfg, volatility as Volatility | undefined, tags, writeCtx, { ...mcpChange, client }, row.workspace_id as string);
+      const result = await updateEntryContent(env, id, newContent, cfg, volatility as Volatility | undefined, tags, writeCtx, { ...mcpChange, client }, row.workspace_id as string, ctx);
 
       // Only reachable if the entry was deleted between the guard read and the write.
       if (result.status === "not_found") {

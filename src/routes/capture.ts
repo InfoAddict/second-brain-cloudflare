@@ -299,7 +299,7 @@ export async function handleCaptureRoutes(
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      appendResult = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
+      appendResult = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string, ctx);
     } catch (e) {
       if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
       if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
@@ -417,7 +417,7 @@ export async function handleCaptureRoutes(
     const { ignored: ignoredReservedTags } = stripNewReservedTags(replaceTags ?? []);
 
     const cfg = await resolveConfig(env);
-    const result = await updateEntryContent(env, id, newContent, cfg, updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string);
+    const result = await updateEntryContent(env, id, newContent, cfg, updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string, ctx);
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {
