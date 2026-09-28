@@ -289,7 +289,7 @@ function renderLedgerPanel(board, brief) {
   if (!calibration) return
   const panel = boardPanel('ledger', { title: t('board.ledgerTitle'), sub: t('board.ledgerSub'), span: 3 })
   panel.body.innerHTML =
-    `<p class="digest-note">${escHtml(calibration.line || '')}</p>` +
+    `<p class="digest-note">${escHtml(calibrationSentence(calibration))}</p>` +
     `<button class="digest-more" type="button" onclick="openLedgerSheet()">${escHtml(t('ledger.openLog'))}</button>`
   board.appendChild(panel)
 }

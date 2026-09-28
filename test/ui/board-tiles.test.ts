@@ -8,7 +8,7 @@ import vm from "node:vm";
 import { describe, it, expect } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "../..");
-const src = ["public/js/i18n.js", "public/utils.js", "public/js/state.js", "public/js/api.js", "public/js/loops.js", "public/js/board.js", "public/js/chart.js"]
+const src = ["public/js/i18n.js", "public/utils.js", "public/js/state.js", "public/js/api.js", "public/js/loops.js", "public/js/ledger.js", "public/js/board.js", "public/js/chart.js"]
   .map((f) => readFileSync(resolve(ROOT, f), "utf8"))
   .join("\n");
 
@@ -989,7 +989,7 @@ describe("decision log panel (T7-E, Design 7.4)", () => {
     const ctx = ctxFor();
     const board = ctx.document.createElement("div");
 
-    ctx.renderLedgerPanel(board, { calibration: { ready: false, n: 4, line: "You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 4 so far." } });
+    ctx.renderLedgerPanel(board, { calibration: { ready: false, n: 4, needed: 10, line: "You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 4 so far." } });
 
     expect(board.children).toHaveLength(1);
     const html = board.children[0].body.innerHTML;
@@ -997,13 +997,31 @@ describe("decision log panel (T7-E, Design 7.4)", () => {
     expect(html).toContain("openLedgerSheet()");
   });
 
-  it("shows the ready sentence once calibration is ready", () => {
+  it("falls back to the server's own sentence when calibration is ready but kind is absent (a Worker that predates it)", () => {
     const ctx = ctxFor();
     const board = ctx.document.createElement("div");
 
     ctx.renderLedgerPanel(board, { calibration: { ready: true, n: 14, line: "So far, your 74% calls came true 52% of the time, based on 14 decisions." } });
 
     expect(board.children[0].body.innerHTML).toContain("came true 52%");
+  });
+
+  // UI reviewer final pass: the board card used to read calibration.line
+  // directly, so it kept showing the server's raw English sentence even
+  // after the sheet moved to the localized, kind-built one. Both now go
+  // through the same calibrationSentence(), so this proves they can never
+  // drift apart again.
+  it("renders the same sentence the ledger sheet builds, via the shared calibrationSentence", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+    const calibration = { ready: true, kind: "rate", stated: 74, hit: 52, n: 14, nInferred: 0, line: "So far, your 74% calls came true 52% of the time, based on 14 decisions." };
+
+    ctx.renderLedgerPanel(board, { calibration });
+
+    const expected = ctx.calibrationSentence(calibration);
+    expect(expected).toBe("So far, when you were about 74% sure, you were right 52% of the time, based on 14 decisions.");
+    expect(board.children[0].body.innerHTML).toContain(expected);
+    expect(board.children[0].body.innerHTML).not.toContain(calibration.line);
   });
 });
 
