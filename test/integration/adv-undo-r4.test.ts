@@ -149,14 +149,18 @@ describe("ADV-U19 (MINOR): the oversize fallback drops the record, so 'at most o
     const incoming = "i".repeat(900_000);
     expect((await capture(e, incoming)).status).toBe("merged");
     const mergeSeq = (await versions("big"))[0].seq;
-    // The row keeps growing after the merge (still well inside D1's 2 MB row).
-    expect((await appendToEntry(e, "big", "", "g".repeat(950_000), [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), undefined, owner.personalWorkspaceId)).indexed).toBe(true);
+    // The row keeps growing after the merge (still well inside D1's 2 MB row). The result is
+    // well over the scorer's 32 KB budget, so class D (T-0089.4.2) holds it pending-scan and
+    // skips the embed rather than index a row nobody has fully read yet.
+    expect((await appendToEntry(e, "big", "", "g".repeat(950_000), [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), undefined, owner.personalWorkspaceId)).indexed).toBe(false);
     // First rollback: the version row needs a full 1.85 MB copy, so recreated_incoming is dropped.
-    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("reverted");
+    // The row is currently held (pending-scan, from the append above) and the merge-time target
+    // was not, so per 5.6 this rollback is a release, not a plain revert (class D, T-0089.4.2).
+    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("released");
     expect(live(incoming)).toHaveLength(1);
     // Undo the rollback, then roll back to the merge again.
     expect((await revertEntry(e, owner, "big", change(), DEFAULTS, undefined, owner.personalWorkspaceId)).status).toBe("reverted");
-    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("reverted");
+    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("released");
     expect(live(incoming)).toHaveLength(1); // actual: 2
   }, 120_000);
 });

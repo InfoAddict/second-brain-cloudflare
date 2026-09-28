@@ -468,6 +468,9 @@ describe("the 3.7.0 d1-mock probe shape", () => {
     // introduced. MOVED (T-0089.1.1, adv-final MAJOR 1): entries_trash.nonce joins
     // prior_length_utf16 in this list.
     // MOVED (T-0089.2.1): a 3.7.0 brain is also owed the two validity ALTERs, and nothing else.
+    // idx_entries_quarantine_pending_scan (T-0089.4.2, class D) is baked into db/schema.sql, like
+    // idx_entries_ledger and idx_entries_standing before it, so PRE_TASK11_OBJECTS (parsed straight
+    // out of schema.sql) already counts it as pre-existing here — nothing new for this brain to owe.
     expect(execd.map(target)).toEqual([
       "entry_versions",
       "idx_entry_versions_entry",

@@ -267,6 +267,12 @@ WHERE instr(lower(tags), '"ledger:decision"') > 0;
 CREATE INDEX IF NOT EXISTS idx_entries_standing ON entries(workspace_id, created_at)
 WHERE instr(lower(tags), '"standing:active"') > 0;
 
+-- Quarantine pending-scan candidate lookup (T-0089.4.2, class D / R19): the nightly rescan reads
+-- only rows still carrying this marker, across every workspace, not the whole table. Must stay
+-- in step with src/db/init.ts.
+CREATE INDEX IF NOT EXISTS idx_entries_quarantine_pending_scan ON entries(id)
+WHERE instr(lower(tags), '"quarantine:pending-scan"') > 0;
+
 -- Web Push subscriptions. One row per subscribed browser/device, scoped to
 -- the workspace it was created against. Must stay in step with src/db/init.ts.
 CREATE TABLE IF NOT EXISTS push_subscriptions (

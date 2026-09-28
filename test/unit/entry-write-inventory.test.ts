@@ -78,14 +78,14 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // entries-write sites. Recomputed against the real scanner output.
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 358, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 402, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 522, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 588, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 595, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 597, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 632, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 649, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 361, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 405, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 525, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 591, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 598, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 600, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 635, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 652, kind: 'exempt' },
   { file: 'src/capture/lifecycle.ts', line: 158, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 235, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
@@ -143,8 +143,9 @@ const HYGIENE_EXEMPT = new Set([
   "src/capture/classify.ts:78", "src/routes/admin.ts:1563", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
-  // MOVED 540/601 -> 589/650 (T-0089.4.2, Lane W): W1's scoring code shifted these down; same two sites.
-  "src/capture/entry.ts:588", "src/capture/entry.ts:649",
+  // MOVED 540/601 -> 589/650 -> 591/652 (T-0089.4.2, Lane W): W1's scoring code, then the class D
+  // skipModelCall comment, shifted these down; same two sites throughout.
+  "src/capture/entry.ts:591", "src/capture/entry.ts:652",
   // The nightly quarantine-rescan pass (5.1 point 2 follow-up) clears its own NEEDS_RESCAN_TAG
   // pipeline marker once a row's unscanned middle has been checked: bookkeeping, not a
   // user-visible change, and the row's hold path (a real tags edit) is its own snapshot site above.

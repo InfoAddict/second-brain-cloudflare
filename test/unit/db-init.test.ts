@@ -84,6 +84,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
   // Decision ledger and standing memory (T-0089.7.1, T-0089.7.2): partial indexes, post-column.
   "idx_entries_ledger", "idx_entries_standing",
+  // Quarantine pending-scan candidate lookup (T-0089.4.2, class D / R19): partial index, post-column.
+  "idx_entries_quarantine_pending_scan",
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
   // Sampled recall log (T-0089.5.2 Part A).
@@ -300,7 +302,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 74 -> 75 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER.
       // MOVED 75 -> 77 (T-0089.2.1, merge with v4/t5-log) by the valid_from and valid_until ALTERs; measured.
       // MOVED 77 -> 79 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
-      expect(migrated).toBe(79); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs + T7 ledger/standing indexes)
+      // MOVED 79 -> 80 (T-0089.4.2, class D): idx_entries_quarantine_pending_scan, a new post-column partial index.
+      expect(migrated).toBe(80); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs + T7 ledger/standing indexes + class D pending-scan index)
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -669,7 +672,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 68 -> 69 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER, wasted the same way.
     // MOVED 69 -> 71 (T-0089.2.1, merge with v4/t5-log) by the valid_from and valid_until ALTERs; measured.
     // MOVED 71 -> 73 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
-    expect(cold).toBe(73); // one probe, then the 72 statements a new brain needs
+    // MOVED 73 -> 74 (T-0089.4.2, class D): idx_entries_quarantine_pending_scan, a new post-column partial index.
+    expect(cold).toBe(74); // one probe, then the 73 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });

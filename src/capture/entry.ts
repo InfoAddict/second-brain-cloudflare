@@ -256,9 +256,12 @@ export async function captureEntry(
   // Codex review class D (T-0089.4.2): a `partial` score (over 32 KB, only the head and tail
   // scanned) holds too, reason pending-scan, not just an outright `hold` — see holdDecision.
   const decision = score ? holdDecision(score) : { hold: false as const };
-
+  // The model call below is skipped only for a real hold (a matched suspicious signal), not
+  // merely because the write is oversized and pending-scan: a benign large capture still
+  // deserves a normal merge/duplicate decision, and skipping it would silently strand every
+  // oversized merge as a standalone held row instead of landing on its target.
   const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(
-    c, env, cfg, writeCtx.workspaceId, ctx, { skipModelCall: decision.hold },
+    c, env, cfg, writeCtx.workspaceId, ctx, { skipModelCall: score?.hold === true },
   );
 
   const definesCapsule = t.some(isCapsuleTag);
