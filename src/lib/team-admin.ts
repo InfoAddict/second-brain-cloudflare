@@ -5,6 +5,7 @@ import {
   D1_MAX_BOUND_PARAMS, MEMBER_HISTORY_CHUNK, MEMBER_HISTORY_MAX_CHUNKS, MEMBER_HISTORY_SLICE,
 } from "../constants";
 import type { OwnedVectors } from "../vectorize/batch";
+import { standingTouched } from "../standing/cache";
 
 /** Team membership, workspace, and offboarding operations. */
 
@@ -492,7 +493,7 @@ export async function cleanupMemberData(
   env: Env,
   userId: string,
   personalWid: string,
-  opts: { rowsLeft?: number; allowOversize?: boolean } = {},
+  opts: { rowsLeft?: number; allowOversize?: boolean; ctx?: ExecutionContext } = {},
 ): Promise<RemovalProgress> {
   let rowsWritten = 0;
   const left = () => (opts.rowsLeft ?? Infinity) - rowsWritten;
@@ -565,8 +566,9 @@ export async function cleanupMemberData(
   const count = await env.DB.prepare(
     `SELECT (SELECT COUNT(*) FROM entries WHERE workspace_id = ?1) AS entries,
             (SELECT COUNT(*) FROM entries_trash WHERE workspace_id = ?1) AS trashed,
-            (SELECT COUNT(*) FROM edges WHERE workspace_id = ?1) AS edges`,
-  ).bind(personalWid).first<{ entries: number; trashed: number; edges: number }>();
+            (SELECT COUNT(*) FROM edges WHERE workspace_id = ?1) AS edges,
+            (SELECT COUNT(*) FROM entries WHERE workspace_id = ?1 AND instr(lower(tags), '"standing:active"') > 0) AS standing`,
+  ).bind(personalWid).first<{ entries: number; trashed: number; edges: number; standing: number }>();
   const removedEntries = count?.entries ?? 0;
   // A final batch that would not fit the night's budget waits for a night when nothing else wrote,
   // unless it is the only thing left to do (the 3.7 route paid this cost at click time).
@@ -595,6 +597,8 @@ export async function cleanupMemberData(
     env.DB.prepare(`DELETE FROM workspaces WHERE id = ?`).bind(personalWid),
   ]);
 
+  // Bulk: once for the whole workspace, not per row (spec 15 2.6) — it no longer exists to narrow further.
+  if (opts.ctx && (count?.standing ?? 0) > 0) standingTouched(env, opts.ctx, await resolveConfig(env), [personalWid]);
   return { done: true, removedEntries, vectorIds, ownedVectors, rowsWritten: rowsWritten + estimate };
 }
 

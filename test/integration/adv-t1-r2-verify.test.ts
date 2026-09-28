@@ -297,7 +297,7 @@ describe("R3-2: an admin's unshare can take a member's already-private memory", 
     let fired = false;
     const racing = { ...env, DB: { ...raw, prepare(sql: string) {
       const st = raw.prepare(sql);
-      if (fired || !/^SELECT id, workspace_id, actor_id, vector_ids FROM entries WHERE id = \? AND/.test(sql)) return st;
+      if (fired || !/^SELECT id, workspace_id, actor_id, vector_ids, tags FROM entries WHERE id = \? AND/.test(sql)) return st;
       return { bind: (...a: unknown[]) => ({ first: async () => {
         const r = await st.bind(...a).first();
         fired = true;

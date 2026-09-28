@@ -4,6 +4,8 @@ import { isCompanyWorkspace, scopeWhere, scopeWrite } from "../lib/scope";
 import { VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
 import type { ChangeContext } from "../lib/audit";
 import { changesOf } from "../memory/versions";
+import { resolveConfig } from "../config";
+import { standingTouched } from "../standing/cache";
 
 /** Move entries between personal and company workspaces; sharing is not a copy. */
 
@@ -27,11 +29,12 @@ export async function moveEntry(
   identity: Identity,
   change: ChangeContext,
   team?: string,
+  ctx?: ExecutionContext,
 ): Promise<ShareResult> {
   const scope = scopeWhere(identity);
   const row = await env.DB.prepare(
-    `SELECT id, workspace_id, actor_id, vector_ids FROM entries WHERE id = ? AND ${scope.clause}`
-  ).bind(id, ...scope.bindings).first<{ id: string; workspace_id: string; actor_id: string; vector_ids: string }>();
+    `SELECT id, workspace_id, actor_id, vector_ids, tags FROM entries WHERE id = ? AND ${scope.clause}`
+  ).bind(id, ...scope.bindings).first<{ id: string; workspace_id: string; actor_id: string; vector_ids: string; tags: string }>();
   if (!row) return { status: "not_found" };
 
   // Parse before moving the row so malformed metadata cannot fail after commit.
@@ -103,6 +106,12 @@ export async function moveEntry(
     return { status: "conflict" };
   }
 
+  if (ctx) {
+    let tags: string[] = [];
+    try { tags = JSON.parse(row.tags ?? "[]"); } catch { /* leave empty: an unparsable tags column touches nothing */ }
+    // A move names BOTH workspaces (spec 15 2.6): the row left one and entered the other.
+    if (tags.includes("standing:active")) standingTouched(env, ctx, await resolveConfig(env), [row.workspace_id, targetWorkspaceId]);
+  }
   return { status: event, workspaceId: targetWorkspaceId, vectorIds, fromWorkspaceId: row.workspace_id };
 }
 

@@ -178,7 +178,7 @@ export async function handleEntriesRoutes(
     // company layer: a restore is not a share, and the company layer is only
     // ever reached through POST /share ("move, not copy").
     const writeCtx = { workspaceId: auth.personalWorkspaceId, actorId: auth.userId };
-    const summary = await importExportPayload(env, parsed.payload, { limit, offset, edgeOffset, projectOffset, writeCtx });
+    const summary = await importExportPayload(env, parsed.payload, { limit, offset, edgeOffset, projectOffset, writeCtx, ctx });
     return json(summary);
   }
 
@@ -218,7 +218,7 @@ export async function handleEntriesRoutes(
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
     const cfg = await resolveConfig(env);
-    const result = await forgetEntry(id, env, { actorId: auth.userId, channel: "rest" }, { reason: "forget", config: cfg }, row.workspace_id as string);
+    const result = await forgetEntry(id, env, { actorId: auth.userId, channel: "rest" }, { reason: "forget", config: cfg }, row.workspace_id as string, ctx);
 
     if (result.status === "not_found") {
       return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
@@ -250,7 +250,7 @@ export async function handleEntriesRoutes(
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
     const cfg = await resolveConfig(env);
-    const result = await restoreEntry(env, trashed, { actorId: auth.userId, channel: "rest" }, cfg);
+    const result = await restoreEntry(env, trashed, { actorId: auth.userId, channel: "rest" }, cfg, ctx);
     if (result.status === "not_found") return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
     if (result.status === "conflict") return json({ ok: false, error: `An entry with ID ${id} already exists` }, 409);
     if (result.status === "reembed_failed") return json({ ok: false, error: "Could not restore: re-indexing failed. Try again." }, 502);
@@ -328,7 +328,7 @@ export async function handleEntriesRoutes(
     const authorizedWorkspaceId = (liveRow?.workspace_id ?? trashedRow?.workspace_id) as string | undefined;
 
     const cfg = await resolveConfig(env);
-    const result = await revertEntry(env, auth, id, { actorId: auth.userId, channel: "rest" }, cfg, toVersion, authorizedWorkspaceId ?? "", nonce);
+    const result = await revertEntry(env, auth, id, { actorId: auth.userId, channel: "rest" }, cfg, toVersion, authorizedWorkspaceId ?? "", nonce, ctx);
 
     switch (result.status) {
       case "reverted":
@@ -522,7 +522,7 @@ export async function handleEntriesRoutes(
     if (teamRead.error) return json({ ok: false, error: teamRead.error }, 400);
 
     const id = body.id.trim();
-    const result = await moveEntry(id, target, env, auth, { actorId: auth.userId, channel: "rest" }, teamRead.teamId);
+    const result = await moveEntry(id, target, env, auth, { actorId: auth.userId, channel: "rest" }, teamRead.teamId, ctx);
 
     if (result.status === "not_found") {
       return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
@@ -563,7 +563,7 @@ export async function handleEntriesRoutes(
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
-    const result = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env), row.workspace_id as string);
+    const result = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env), row.workspace_id as string, ctx);
 
     if (result.status === "not_found") {
       return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);

@@ -94,6 +94,20 @@ export interface RecallMatch {
   retractedBelief?: RetractedBelief | null;
 }
 
+/** A standing instruction that fired above the results (spec 15 2.7-2.9), hydrated fresh from D1, never from KV. */
+export interface StandingFire {
+  id: string;
+  content: string;
+  createdAt: number;
+  workspace: "personal" | "company" | "system";
+  /** Set only when the row is not the caller's own (2.9: "set by Dana, Jul 3, 2026"). */
+  actorName?: string;
+  project: string | null;
+  score: number;
+  /** Present only when the caller asked to explain the ranking (2.9). */
+  why?: string;
+}
+
 export interface RecallSearchResult {
   matches: RecallMatch[];
   insight: string;
@@ -105,6 +119,8 @@ export interface RecallSearchResult {
   compoundStale?: CompoundStaleSignal;
   /** Present only when `asOf` was set (spec 14 5.7/5.9). */
   asOf?: { at: number; notRecordedBefore: number | null };
+  /** Standing instructions that fired, capped at STANDING_MAX_FIRES, present only when non-empty (spec 15 2.8/2.9). */
+  standing?: StandingFire[];
 }
 
 export interface RecallDiagnostics {

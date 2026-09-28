@@ -299,7 +299,7 @@ export async function handleIntegrationsRoutes(
       for (const key of batchKeys) {
         const mapped = record.itemMap[key];
         try {
-          const result = await moveEntry(mapped.entryId, target, env, auth, { actorId: auth.userId, channel: "rest" });
+          const result = await moveEntry(mapped.entryId, target, env, auth, { actorId: auth.userId, channel: "rest" }, undefined, ctx);
           d1Spent += 1;
           switch (result.status) {
             case "shared":
@@ -466,7 +466,7 @@ export async function handleIntegrationsRoutes(
         ).bind(JSON.stringify(pageIds), ...scope.bindings).all<{ id: string }>();
         const alreadyTrashed = new Set((already ?? []).map((r) => r.id));
         const toProcess = pageIds.filter((id) => !alreadyTrashed.has(id));
-        const result = await trashMirroredEntries(env, auth, toProcess, { provider: provider.id });
+        const result = await trashMirroredEntries(env, auth, toProcess, { provider: provider.id }, ctx);
         purged = tally.purged + alreadyTrashed.size + result.purged;
         skipped = tally.skipped + result.skipped;
         if (remainingKeys.length > page.length) {

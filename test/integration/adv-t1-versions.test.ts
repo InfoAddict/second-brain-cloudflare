@@ -740,7 +740,7 @@ describe("R3-2 (MAJOR): an admin's unshare can take a member's already-private m
     const admin = (await resolveIdentityFromToken(adminTok, env))!;
     const author = await member("Bob");
     await seed("x2", { content: "Bob's note", workspaceId: companyWs, actorId: author.userId });
-    const racing = afterFirstRead(env, /^SELECT id, workspace_id, actor_id, vector_ids FROM entries WHERE id = \? AND/, async () => {
+    const racing = afterFirstRead(env, /^SELECT id, workspace_id, actor_id, vector_ids, tags FROM entries WHERE id = \? AND/, async () => {
       await sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'x2'`).bind(author.personalWorkspaceId).run();
     });
     await worker.fetch(req("POST", "/share", { body: { id: "x2", workspace: "personal" }, token: adminTok }), racing, ctx);
@@ -830,7 +830,7 @@ describe("R4-1 (MINOR): a move that loses its pinned UPDATE still records a move
     const admin = (await resolveIdentityFromToken(adminTok, env))!;
     const author = await member("Bob");
     await seed("x4", { content: "Bob's note", workspaceId: companyWs, actorId: author.userId });
-    const racing = afterFirstRead(env, /^SELECT id, workspace_id, actor_id, vector_ids FROM entries WHERE id = \? AND/, async () => {
+    const racing = afterFirstRead(env, /^SELECT id, workspace_id, actor_id, vector_ids, tags FROM entries WHERE id = \? AND/, async () => {
       await sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'x4'`).bind(author.personalWorkspaceId).run();
     });
     const res = await worker.fetch(req("POST", "/share", { body: { id: "x4", workspace: "personal" }, token: adminTok }), racing, ctx);

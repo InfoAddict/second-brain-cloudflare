@@ -28,7 +28,7 @@ import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/vo
 import { WHEN_KIND_VALUES, parseExplicitWhen } from "../when/input";
 import { recallEntries } from "../recall/search";
 import { maybeMarkFollowed, maybeMarkFollowedMany } from "../recall/log";
-import { renderRecallText, memoryHeader, validityBracket } from "../recall/render";
+import { renderRecallText, memoryHeader, validityBracket, standingSection } from "../recall/render";
 import { parseSupersededBy, validitySummary } from "../recall/validity-view";
 import { RECALL_OUTPUT_BUDGET, SNIPPET_MAX_CHARS, snippetOf, truncationNote } from "../recall/snippet";
 import { buildPromptCapsule } from "../prompt-capsule/build";
@@ -961,7 +961,7 @@ export function buildMcpServer(
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
       const client = identity ? await resolveClient(extra) : undefined;
-      const result = await applyStatus(id, status as MemoryStatus, env, { ...mcpChange, client }, await resolveConfig(env), row.workspace_id as string);
+      const result = await applyStatus(id, status as MemoryStatus, env, { ...mcpChange, client }, await resolveConfig(env), row.workspace_id as string, ctx);
       if (result.status === "not_found") return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       if (result.status === "reembed_failed") {
         return { content: [{ type: "text", text: "Could not change the status: re-indexing failed. Nothing changed. Try again." }] };
@@ -997,7 +997,7 @@ export function buildMcpServer(
       const target = workspace ?? "company";
       const teamRead = readTeamParam(team, identity, target);
       if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
-      const result = await moveEntry(id, target, env, identity, mcpChange, teamRead.teamId);
+      const result = await moveEntry(id, target, env, identity, mcpChange, teamRead.teamId, ctx);
       if (result.status === "not_found") return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       if (result.status === "forbidden") return { content: [{ type: "text", text: `Only the entry's author or an admin can un-share ${id}.` }] };
       if (result.status === "conflict") return { content: [{ type: "text", text: `Entry ${id} changed while saving, try again.` }] };
@@ -1115,17 +1115,19 @@ export function buildMcpServer(
         if (typeof parsed !== "number") return { content: [{ type: "text", text: parsed.error }] };
         asOf = parsed;
       }
-      const { matches, insight, semanticUnavailable, queryTokens, compoundStale, asOf: asOfHeader } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain, channel: "mcp" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId, asOf });
+      const { matches, insight, semanticUnavailable, queryTokens, compoundStale, asOf: asOfHeader, standing } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain, channel: "mcp" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId, asOf });
 
       const notice = semanticUnavailable
         ? `Note: semantic search was unavailable or incomplete for this query, so these results may be keyword matches only. ${SEMANTIC_UNAVAILABLE_DETAIL}\n\n`
         : "";
 
       if (!matches.length) {
-        return { content: [{ type: "text", text: notice + "Nothing found matching that query." }] };
+        // A standing instruction can fire above zero results (spec 15 2.8 step 5): it still renders.
+        const standingText = standing?.length ? standingSection(standing) : "";
+        return { content: [{ type: "text", text: notice + standingText + "Nothing found matching that query." }] };
       }
 
-      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg, compoundStale, asOf: asOfHeader }) }] };
+      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg, compoundStale, asOf: asOfHeader, standing }) }] };
     }
   );
 
@@ -1378,7 +1380,7 @@ export function buildMcpServer(
 
       const cfg = await resolveConfig(env);
       const client = identity ? await resolveClient(extra) : undefined;
-      const result = await forgetEntry(id, env, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp", client }, { reason: "forget", config: cfg }, row.workspace_id as string);
+      const result = await forgetEntry(id, env, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp", client }, { reason: "forget", config: cfg }, row.workspace_id as string, ctx);
       if (result.status === "not_found") {
         return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       }
@@ -1423,7 +1425,7 @@ export function buildMcpServer(
 
       const cfg = await resolveConfig(env);
       const result = await revertEntry(
-        env, identity, id, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" }, cfg, to_version, authorizedWorkspaceId ?? "",
+        env, identity, id, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" }, cfg, to_version, authorizedWorkspaceId ?? "", undefined, ctx,
       );
 
       switch (result.status) {
