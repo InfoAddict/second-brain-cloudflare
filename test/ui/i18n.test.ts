@@ -805,7 +805,6 @@ describe("dashboard i18n", () => {
       "public/js/history-view.js t(`history.${key}`)",
       "public/js/memory-crud.js t(STATUS_HELP_KEYS[status] || '')",
       "public/js/due.js t(wentToLoops ? 'undo.done' : 'undo.dateRemoved')",
-      "public/js/loops.js t(action === 'done' ? 'undo.done' : 'undo.notTask')",
     ].sort();
 
     function dynamicIdentity(file: string, fn: string, snippet: string): string {
