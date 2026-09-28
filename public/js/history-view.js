@@ -29,7 +29,17 @@ function historyStatusTarget(items, index, entry) {
   return typeof tagValue === 'function' ? tagValue(entry.tags || [], 'status:') : null
 }
 
+/**
+ * S5 (deck section 9): the too-long hold has no automatic check to report,
+ * so its own change row reads "Held: too long to check automatically"
+ * instead of the ordinary "Status changed to Unconfirmed" a ordinary hold's
+ * status-change row would otherwise show. The other four hold reasons have
+ * no distinct history key (deck section 7.9 gives one only for too_long),
+ * so they keep whatever their own `reason` already renders as - the sheet's
+ * held banner and the timeline's own "Held" event row already name them.
+ */
 function historyReasonLabel(item, index, items, entry) {
+  if (item.hold && item.hold.reason === 'too_long') return t('history.reasonHeldTooLong')
   const key = HISTORY_REASON_KEYS[item.reason]
   if (!key) return item.reason || ''
   if (item.reason === 'status') {

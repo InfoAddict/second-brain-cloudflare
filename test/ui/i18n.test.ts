@@ -656,16 +656,14 @@ describe("dashboard i18n", () => {
       by: "public/js/memory-crud.js t(keys[event]), keyed by the timeline event name",
     },
     {
-      prefix: "patterns.shapes.",
-      by: "t(`patterns.shapes.${shape}`) in public/js/brief.js and public/js/patterns.js",
+      // S5 (16-t3-t4-trust-spec.md 7.9): the same timelineEventLabel() keys map as
+      // memories.ev above, but the deck names these two under history.* instead.
+      keys: ["history.evHeld", "history.evReleased"],
+      by: "public/js/memory-crud.js t(keys[event]), keyed by the timeline event name (held/released)",
     },
     {
-      // Lane W (T-0089.4.2, copy deck 9) added these ahead of the dashboard UI: the too-long
-      // hold chip/line and history entry have no lane-W-owned consumer yet. Lane S wires the
-      // chip/banner/history rendering (spec 16, S4/S5) and should remove this entry once real
-      // call sites exist.
-      keys: ["held.tooLongChip", "held.tooLongLine", "history.reasonHeldTooLong"],
-      by: "not yet consumed: reserved for lane S's too-long chip, banner and history rendering",
+      prefix: "patterns.shapes.",
+      by: "t(`patterns.shapes.${shape}`) in public/js/brief.js and public/js/patterns.js",
     },
   ];
 

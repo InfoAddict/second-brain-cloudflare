@@ -607,8 +607,14 @@ function makeRecentCard(entry, { selectable = true } = {}) {
   // a badge on every row is not a badge. The two that mean something — this
   // memory will not come back in recall, and this one is still being indexed —
   // now stand out because they are the only ones there.
+  //
+  // A hold empties vector_ids (src/quarantine/hold.ts), so "off" is every
+  // held row's permanent state, not a signal of its own — the Held chip
+  // already says "not in search" (UI review, S5), and showing both said it
+  // twice.
+  const held = typeof heldReason === 'function' ? heldReason(tags) : null
   const vecChip =
-    vec === 'on'
+    held || vec === 'on'
       ? ''
       : vec === 'pending'
         ? `<span class="tag-chip vec-chip vec-chip--pending" title="${escAttr(t('memories.vecPendingTitle'))}"><i class="ti ti-clock"></i></span>`
@@ -648,7 +654,7 @@ function makeRecentCard(entry, { selectable = true } = {}) {
     <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
     ${created ? `<span class="card-time" title="${escAttr(new Date(created).toLocaleString(localeTag()))}">${escHtml(relativeTime(created))}</span>` : ''}
   </div>
-  <div class="card-tags">${standingBadgeHtml(tags)}${projectChipsHtml(tags)}${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}</div>
+  <div class="card-tags">${heldChipHtml(tags)}${standingBadgeHtml(tags)}${projectChipsHtml(tags)}${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}</div>
   <div class="card-actions">
     <button class="card-action-btn append-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
     <button class="card-action-btn edit-btn"><i class="ti ti-pencil"></i> ${escHtml(t('memories.edit'))}</button>

@@ -697,6 +697,14 @@
              at which point the actions overflowed the padding box and sat flush
              against the bottom edge of the card. -->
         <div class="view-scroll">
+          <!-- T3/T4 lane S5 (16-t3-t4-trust-spec.md 7.2, UX-E.2): the held
+               banner, first in the sheet since it changes how everything
+               below it should be read - hidden entirely on a memory that
+               is not currently held. -->
+          <div class="view-held" id="view-held" style="display: none">
+            <div class="view-held-line" id="view-held-line"></div>
+            <button type="button" class="card-action-btn" id="view-held-release"><i class="ti ti-lock-open"></i> <span data-i18n="held.release">Release</span></button>
+          </div>
           <div class="view-meta" id="view-meta"></div>
           <div class="view-auto-save-note" id="view-auto-save-note" style="display: none"></div>
           <div class="view-content" id="view-content-text"></div>

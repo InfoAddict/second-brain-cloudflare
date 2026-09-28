@@ -671,6 +671,34 @@ async function stopStanding(entry, btn) {
   }
 }
 
+/**
+ * S5 (5.7, UX-E.3): no job ever expires the tag itself - every renderer
+ * decides freshness at render time by comparing today to the tagged date.
+ * 7, not a config value: the spec fixes it as a constant, unlike
+ * STANDING_MAX or similar per-brain settings.
+ */
+const EDITED_CANONICAL_LABEL_DAYS = 7
+
+/**
+ * "Trusted · edited via Cursor on Sep 26" for 7 days after an MCP edit kept a
+ * canonical memory canonical (5.7) - null once the tag is stale, absent, or
+ * the memory isn't canonical (the label only ever qualifies "Trusted").
+ * The client name comes from the newest matching history row's own `client`
+ * (BE-6); a channel of `mcp` with no client name reads as "an AI tool".
+ */
+function canonicalEditLabel(entry) {
+  if ((tagValue(entry.tags || [], 'status:') || 'canonical') !== 'canonical') return null
+  const editedAt = typeof editedCanonicalAt === 'function' ? editedCanonicalAt(entry.tags || []) : null
+  if (!editedAt) return null
+  const ageDays = (Date.now() - Date.parse(`${editedAt}T00:00:00Z`)) / 86400000
+  if (!(ageDays >= 0 && ageDays < EDITED_CANONICAL_LABEL_DAYS)) return null
+  const rows = (entry.history && entry.history.items) || []
+  const editRow = rows.find((row) => row.kind === 'change' && (row.reason === 'update' || row.reason === 'append') && row.channel === 'mcp')
+  const tool = (editRow && editRow.client) || t('status.anAiTool')
+  const date = formatDateUI(Date.parse(`${editedAt}T00:00:00Z`), { month: 'short', day: 'numeric' })
+  return { tool, date }
+}
+
 function renderViewStatus(entry) {
   const group = document.getElementById('view-status')
   const caption = document.getElementById('view-status-caption')
@@ -683,8 +711,90 @@ function renderViewStatus(entry) {
     btn.tabIndex = checked ? 0 : -1
     wireViewStatusButton(btn, entry)
   })
-  caption.textContent = t(STATUS_HELP_KEYS[status] || '')
+  // UI review, S5: every status help line (Trusted/Unconfirmed/Wrong) claims
+  // search visibility ("shows up in search", "search leaves it out"), which
+  // is false while the memory is held - the banner above already says it is
+  // out of search. No held-aware copy exists yet, so this hides the line
+  // rather than risk shipping a second, possibly-conflicting claim.
+  const held = typeof heldReason === 'function' ? heldReason(entry.tags || []) : null
+  if (held) {
+    caption.style.display = 'none'
+    caption.textContent = ''
+    renderViewStatusLockNote(entry)
+    return
+  }
+  caption.style.display = ''
+  const editedLabel = canonicalEditLabel(entry)
+  caption.textContent = editedLabel ? t('status.editedBy', editedLabel) : t(STATUS_HELP_KEYS[status] || '')
   renderViewStatusLockNote(entry)
+}
+
+/**
+ * S5 (7.2, UX-E.2): the held banner and Release, hidden entirely on a memory
+ * that is not currently held. Covers every hold reason (`quarantine:<reason>`,
+ * src/quarantine/tags.ts): `too_long` gets its own complete sentence (deck
+ * section 9); every other reason fills held.banner's {reason} from the
+ * matching held.reason* key.
+ *
+ * Release is hidden, not just disabled, when `can_edit === false` (deck 18
+ * section 11's truth check: only the author or an admin can actually release
+ * a shared company hold - see assertCanMutateEntry). held.bannerOther takes
+ * over the sentence in that case, naming who can act instead of saying "you".
+ */
+function renderViewHeld(entry) {
+  const block = document.getElementById('view-held')
+  const line = document.getElementById('view-held-line')
+  const btn = document.getElementById('view-held-release')
+  if (!block || !line || !btn) return
+  const reason = typeof heldReason === 'function' ? heldReason(entry.tags || []) : null
+  if (!reason) {
+    block.style.display = 'none'
+    return
+  }
+  block.style.display = ''
+  const locked = entry.can_edit === false
+  btn.style.display = locked ? 'none' : ''
+  if (reason === 'too_long') {
+    line.textContent = t('held.tooLongLine')
+  } else if (locked) {
+    line.textContent = t('held.bannerOther', { reason: heldReasonPhrase(reason) })
+  } else {
+    line.textContent = t('held.banner', { reason: heldReasonPhrase(reason) })
+  }
+  btn.onclick = () => releaseHeld(entry, btn)
+}
+
+/** Explicit if-else, not a keyed lookup passed to the translate helper - the i18n test's static scanner flags a variable argument there as a new dynamic call site. */
+function heldReasonPhrase(reason) {
+  if (reason === 'instruction') return t('held.reasonInstruction')
+  if (reason === 'hidden') return t('held.reasonHidden')
+  if (reason === 'burst') return t('held.reasonBurst')
+  if (reason === 'capsule') return t('held.reasonCapsule')
+  return ''
+}
+
+/** Release is Undo on a currently-held row (5.6): the same POST /undo every other write-site Undo calls. */
+async function releaseHeld(entry, btn) {
+  if (btn) btn.disabled = true
+  try {
+    const res = await fetch(`${WORKER_URL}/undo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: entry.id }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || '')
+    undoToast(t('held.released'), entry.id, {
+      onUndone: () => {
+        if (typeof hydrateView === 'function') hydrateView(entry.id)
+      },
+    })
+    if (typeof hydrateView === 'function') hydrateView(entry.id)
+  } catch (e) {
+    showToast(t('held.releaseFailed', { message: e.message || '' }))
+  } finally {
+    if (btn) btn.disabled = false
+  }
 }
 
 /**
@@ -706,6 +816,7 @@ async function hydrateView(id) {
     renderViewAutoSaveNote(data.entry)
     renderViewBrain(data.entry)
     renderViewStanding(data.entry)
+    renderViewHeld(data.entry)
     renderViewStatus(data.entry)
     renderViewTimeline(data.entry)
     // openView rendered from whatever the caller happened to hold; /entry is
@@ -750,6 +861,9 @@ function timelineEventLabel(event) {
     reverted: 'memories.evReverted',
     restored: 'memories.evRestored',
     purged: 'memories.evPurged',
+    // T3/T4 lane S5 (16-t3-t4-trust-spec.md 7.9).
+    held: 'history.evHeld',
+    released: 'history.evReleased',
   }
   return keys[event] ? t(keys[event]) : event || ''
 }
@@ -802,6 +916,7 @@ function applyAuthorLock(entry) {
   lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
   lockAuthoredControls(entry, Array.from(document.querySelectorAll('#view-status .status-option')), 'status-option--locked')
   lockAuthoredControls(entry, [document.getElementById('view-standing-stop')], 'card-action-btn--locked')
+  lockAuthoredControls(entry, [document.getElementById('view-held-release')], 'card-action-btn--locked')
 }
 
 /**
@@ -861,6 +976,7 @@ function openView(entry, cardElement) {
   renderViewAutoSaveNote(entry)
   renderViewBrain(entry)
   renderViewStanding(entry)
+  renderViewHeld(entry)
   renderViewStatus(entry)
   if (entry.id) hydrateView(entry.id)
   const tagsContainer = document.getElementById('view-tags-container')
