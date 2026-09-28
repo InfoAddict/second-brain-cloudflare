@@ -242,34 +242,60 @@ function group(rows: Classified[], cfg: Readonly<Config>): ChangeRow[] {
   return out;
 }
 
+/** entry_events carries no workspace column (5.8's own comment below), so nothing before the
+ * join is scoped to this reader — a corpus-wide burst in the window used to cost a corpus-wide
+ * scan before LIMIT 200 could apply (R21 review, MINOR: 5,101 rows read to return one item
+ * against 5,000 unrelated events). Caps the pre-join, pre-filter read so the worst case is
+ * bounded by this constant regardless of deployment size, not by how many OTHER people's events
+ * landed in the window. */
+const RAW_EVENT_SCAN_LIMIT = 1000;
+
 /**
  * The 5.8 event read, shared by getChanges (a rolling window, newest first) and
  * groupCandidates below (an exact [since, until] bound, oldest first, for 5.9's
- * membership re-derivation). One D1 statement either way.
+ * membership re-derivation). One D1 call either way: two plain statements in one
+ * `.batch()`, which this codebase's D1 budget counts as a single call, same as
+ * every other batched write elsewhere in src/.
  */
 async function changeEventRows(
   env: Env, identity: Identity, since: number, until: number, order: "ASC" | "DESC",
   layer?: "personal" | "company", teamId?: string,
-): Promise<RawRow[]> {
+): Promise<{ rows: RawRow[]; rawCapped: boolean }> {
   const workspaces = readScopeWorkspaces(identity, { layer, teamId });
-  const { results } = await env.DB.prepare(
-    // scope-checked: the reader's scope clause is applied to COALESCE(en.workspace_id, t.workspace_id); entry_events has no workspace column
-    `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
-            COALESCE(en.actor_id, t.actor_id) AS author_id,
-            COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
-            substr(COALESCE(en.content, t.content), 1, 160) AS preview
-     FROM entry_events e INDEXED BY idx_entry_events_created
-     LEFT JOIN entries en ON en.id = e.entry_id
-     LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id
-     WHERE e.created_at > ?1 AND e.created_at <= ?2
-       AND e.event IN ('held','released','updated','appended','status_changed','deleted','reverted')
-       AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
-       AND COALESCE(en.workspace_id, t.workspace_id) IN (SELECT value FROM json_each(?3))
-       AND (e.actor_id = ?4 OR COALESCE(en.actor_id, t.actor_id) = ?4 OR e.event = 'held')
-     ORDER BY e.created_at ${order}
-     LIMIT 200`,
-  ).bind(since, until, JSON.stringify(workspaces), identity.userId).all<RawRow>();
-  return results;
+  const eventFilter = `created_at > ?1 AND created_at <= ?2
+       AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')`;
+  const [countResult, mainResult] = await env.DB.batch([
+    // A cheap, bounded probe: capped at RAW_EVENT_SCAN_LIMIT + 1 so it can say "at least that
+    // many raw events exist in the window" without ever reading more than that to say so.
+    env.DB.prepare(
+      `SELECT COUNT(*) as raw_count FROM (
+         SELECT 1 FROM entry_events INDEXED BY idx_entry_events_created
+         WHERE ${eventFilter} LIMIT ${RAW_EVENT_SCAN_LIMIT + 1}
+       )`,
+    ).bind(since, until),
+    env.DB.prepare(
+      // scope-checked: the reader's scope clause is applied to COALESCE(en.workspace_id, t.workspace_id); entry_events has no workspace column
+      `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+              COALESCE(en.actor_id, t.actor_id) AS author_id,
+              COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
+              substr(COALESCE(en.content, t.content), 1, 160) AS preview
+       FROM (
+         SELECT id, entry_id, event, payload, created_at, actor_id FROM entry_events INDEXED BY idx_entry_events_created
+         WHERE ${eventFilter}
+         ORDER BY created_at ${order}
+         LIMIT ${RAW_EVENT_SCAN_LIMIT}
+       ) e
+       LEFT JOIN entries en ON en.id = e.entry_id
+       LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id
+       WHERE (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
+         AND COALESCE(en.workspace_id, t.workspace_id) IN (SELECT value FROM json_each(?3))
+         AND (e.actor_id = ?4 OR COALESCE(en.actor_id, t.actor_id) = ?4 OR e.event = 'held')
+       ORDER BY e.created_at ${order}
+       LIMIT 200`,
+    ).bind(since, until, JSON.stringify(workspaces), identity.userId),
+  ]);
+  const rawCount = ((countResult.results as { raw_count: number }[] | undefined)?.[0]?.raw_count) ?? 0;
+  return { rows: (mainResult.results ?? []) as unknown as RawRow[], rawCapped: rawCount > RAW_EVENT_SCAN_LIMIT };
 }
 
 /**
@@ -287,7 +313,7 @@ export async function getChanges(
   const cfg = config ?? await resolveConfig(env);
   const now = Date.now();
   const since = now - windowHours * 60 * 60 * 1000;
-  const results = await changeEventRows(env, identity, since, now, "DESC", layer, teamId);
+  const { rows: results, rawCapped } = await changeEventRows(env, identity, since, now, "DESC", layer, teamId);
 
   const classified = results.map(row => classify(row, cfg)).filter((c): c is Classified => c !== null);
   const held = classified.filter(c => c.family === "held").length;
@@ -296,7 +322,9 @@ export async function getChanges(
     windowHours,
     count: classified.length,
     held,
-    truncated: results.length === READ_LIMIT,
+    // Honest either way (R21 review): the filtered read hit its own 200-row output cap, or the
+    // raw pre-filter scan hit RAW_EVENT_SCAN_LIMIT before it could see the whole window.
+    truncated: results.length === READ_LIMIT || rawCapped,
     items: group(classified, cfg).slice(0, OUTPUT_LIMIT),
   };
 }
@@ -343,7 +371,7 @@ export async function groupCandidates(
 ): Promise<GroupCandidates | null> {
   const decoded = decodeGroupKey(groupKeyStr);
   if (!decoded) return null;
-  const rows = await changeEventRows(env, identity, decoded.start - 1, decoded.end, "ASC");
+  const { rows } = await changeEventRows(env, identity, decoded.start - 1, decoded.end, "ASC");
   const classified = rows.map(row => classify(row, cfg)).filter((c): c is Classified => c !== null);
   const seen = new Set<string>();
   const ids: string[] = [];
@@ -360,7 +388,18 @@ export async function groupCandidates(
 
 /** GET /brief's `changes` shape (contract 6.2, snake_case). Held items keep their preview here —
  * REST/dashboard is not agent context. */
-export function changesToRestJson(result: ChangesResult): Record<string, unknown> {
+/**
+ * GET /brief's REST auth is a single bearer token per user (src/lib/identity.ts's extractToken)
+ * with no separate dashboard-session concept -- the same token the dashboard's own JS holds is
+ * exactly what a hook or an AI tool integration authenticates with too (every shipped hook calls
+ * `GET /brief?lean=1`, which never reaches this function at all, but nothing stops some other
+ * script from calling the non-lean path with that same token). `preview` above is an unrelated,
+ * pre-existing dry-run flag (skip persisting resurface state), not a content-reveal one, so a
+ * held item's own text is held back here by default regardless of it -- `revealHeld` is a
+ * separate, purpose-named opt-in a future dashboard UI (S4) passes only from its own "reveal"
+ * action, never a default any token-only caller gets for free (P7).
+ */
+export function changesToRestJson(result: ChangesResult, revealHeld = false): Record<string, unknown> {
   return {
     window_hours: result.windowHours,
     count: result.count,
@@ -372,7 +411,8 @@ export function changesToRestJson(result: ChangesResult): Record<string, unknown
           group: row.group, ...(row.canUndoAll ? { can_undo_all: true } : {}), ...(row.canReleaseAll ? { can_release_all: true } : {}),
         }
       : {
-          kind: "item", event: row.event, family: row.family, id: row.id, at: row.at, client: row.client, preview: row.preview,
+          kind: "item", event: row.event, family: row.family, id: row.id, at: row.at, client: row.client,
+          preview: row.family === "held" && !revealHeld ? null : row.preview,
           ...(row.reasons ? { reasons: row.reasons } : {}), ...(row.source !== undefined ? { source: row.source } : {}),
           ...(row.status ? { status: row.status } : {}), ...(row.capsuleChanged ? { capsule_changed: true } : {}),
           ...(row.canUndo ? { can_undo: true } : {}), ...(row.canRelease ? { can_release: true } : {}),

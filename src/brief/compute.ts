@@ -103,7 +103,7 @@ function briefScope(auth: Identity, projectRows?: ProjectRow[], layer?: "persona
 }
 
 /** The dashboard brief: counts every readable row, unlike the caller-only agent brief below. */
-export async function computeBrief(env: Env, auth: Identity, preview = false, projectRows?: ProjectRow[]) {
+export async function computeBrief(env: Env, auth: Identity, preview = false, projectRows?: ProjectRow[], revealHeld = false) {
   const scope = briefScope(auth, projectRows);
   const now = Date.now();
   const since = now - RECENT_WINDOW_MS;
@@ -332,7 +332,7 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
       items: loopItems,
     },
     owed_to_me: (attentionRow?.owed_to_me as number) ?? 0,
-    changes: changesToRestJson(changesResult),
+    changes: changesToRestJson(changesResult, revealHeld),
     ...(calibration ? { calibration } : {}),
   };
 }

@@ -358,6 +358,26 @@ describe("GET /brief", () => {
     expect(data.changes.items).toHaveLength(1);
     expect(data.changes.items[0]).toMatchObject({ kind: "item", event: "held", id: "e1" });
   });
+
+  // R21 review (open question): REST auth is a single bearer token per user, the same one hooks
+  // and any other AI tool integration hold — no header or cookie here distinguishes "a human on
+  // the dashboard" from any other caller with that token. A held item's preview must not leak to
+  // a plain token caller by default; only ?reveal_held=1 (a future dashboard action, S4) gets it.
+  it("GET /brief withholds a held preview from a bare token caller; reveal_held=1 opts in", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "e1", content: "The launch codes are 1234", createdAt: now - 10 * HOUR });
+    sq.db.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind("ev1", "e1", "", "held", JSON.stringify({ channel: "rest", reasons: ["instruction"] }), now - HOUR).run();
+
+    const byDefault = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+    expect(byDefault.changes.items[0]).toMatchObject({ kind: "item", event: "held", id: "e1", preview: null });
+    expect(JSON.stringify(byDefault)).not.toContain("launch codes");
+
+    const revealed = await (await worker.fetch(req("GET", "/brief?reveal_held=1"), envOf(sq), ctx)).json() as any;
+    expect(revealed.changes.items[0]).toMatchObject({ kind: "item", event: "held", id: "e1", preview: "The launch codes are 1234" });
+  });
 });
 
 /** S2 (T-0089.4.3): the MCP and lean briefs, measured the same way GET /brief is above —

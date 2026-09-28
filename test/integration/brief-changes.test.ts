@@ -230,14 +230,18 @@ describe("getChanges() (S1)", () => {
     expect(good?.client).toBe("Cursor");
   });
 
-  it("issues exactly one D1 statement", async () => {
+  it("issues exactly one D1 call (a two-statement batch, R21 review)", async () => {
     sqlite.seed({ id: "e1", content: "A memory", createdAt: now - HOUR, tags: [], source: "api" });
     sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
     await insertEvent({ id: "ev-1", entryId: "e1", event: "reverted", createdAt: now - 30 * MIN, payload: { channel: "mcp" } });
 
-    const prepareSpy = vi.spyOn(sqlite.db, "prepare");
+    // R21 review (MINOR): the raw pre-filter scan is now capped via a bounded count probe
+    // alongside the main read, batched together -- two prepared statements, one D1 call, the same
+    // way this codebase counts every other batched write (sqlite.issued collapses a whole
+    // .batch() to one "BATCH" entry; a raw vi.spyOn(prepare) count would see two and mislead).
+    sqlite.issued.length = 0;
     await getChanges(env, identityOf("u1", "ws-p"));
-    expect(prepareSpy).toHaveBeenCalledTimes(1);
+    expect(sqlite.issued).toEqual(["BATCH"]);
   });
 
   // Config threading, after the director's follow-up (T-0089.4.3): the group
@@ -316,15 +320,32 @@ describe("getChanges() (S1)", () => {
   // getChanges above, not a hand-built fixture -- so a shape drift in classify()
   // or group() would break these too, not just silently mismatch a stub.
   describe("rendering (S2)", () => {
-    it("changesToRestJson: snake_case, held preview kept (REST is not agent context)", async () => {
+    it("changesToRestJson: snake_case, non-held preview kept", async () => {
+      sqlite.seed({ id: "e1", content: "A trusted memory", createdAt: now - HOUR, tags: [], source: "api" });
+      sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+      await insertEvent({ id: "ev-canon", entryId: "e1", event: "updated", createdAt: now - 30 * MIN, payload: { channel: "mcp", was_canonical: true } });
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"));
+      const json = changesToRestJson(result);
+      expect(json).toMatchObject({ window_hours: BRIEF_CHANGES_WINDOW_HOURS, count: 1, held: 0, truncated: false });
+      expect((json.items as unknown[])[0]).toMatchObject({ kind: "item", event: "updated", id: "e1", preview: "A trusted memory" });
+    });
+
+    // R21 review (open question): REST auth is one bearer token per user with no separate
+    // dashboard-session concept, so a held item's own text must not leak to any token caller by
+    // default -- only revealHeld: true (a future dashboard "reveal" action, S4) gets it.
+    it("changesToRestJson: held preview withheld by default, shown only with revealHeld", async () => {
       sqlite.seed({ id: "e1", content: "The secret plan is X", createdAt: now - HOUR, tags: [], source: "api" });
       sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
       await insertEvent({ id: "ev-held", entryId: "e1", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
 
       const result = await getChanges(env, identityOf("u1", "ws-p"));
-      const json = changesToRestJson(result);
-      expect(json).toMatchObject({ window_hours: BRIEF_CHANGES_WINDOW_HOURS, count: 1, held: 1, truncated: false });
-      expect((json.items as unknown[])[0]).toMatchObject({ kind: "item", event: "held", id: "e1", preview: "The secret plan is X", reasons: ["instruction"] });
+      const byDefault = changesToRestJson(result);
+      expect((byDefault.items as unknown[])[0]).toMatchObject({ kind: "item", event: "held", id: "e1", preview: null, reasons: ["instruction"] });
+      expect(JSON.stringify(byDefault)).not.toContain("secret plan");
+
+      const revealed = changesToRestJson(result, true);
+      expect((revealed.items as unknown[])[0]).toMatchObject({ kind: "item", event: "held", id: "e1", preview: "The secret plan is X" });
     });
 
     it("changesToRestJson: a group row maps can_undo_all/can_release_all to snake_case", async () => {

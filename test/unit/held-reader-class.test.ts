@@ -61,7 +61,7 @@ function scan(): Hit[] {
  * owner-facing activity log (not a model prompt or an agent-facing recall result), each with why.
  */
 const EXEMPT: { file: string; has: string; why: string }[] = [
-  { file: "src/brief/changes.ts", has: "FROM entry_events e INDEXED BY idx_entry_events_created", why: "the recent-changes feed deliberately lists 'held' events, with a preview, to the brain's own owner: surfacing a hold IS the point, not a bypass of it" },
+  { file: "src/brief/changes.ts", has: "entry_events INDEXED BY idx_entry_events_created", why: "the recent-changes feed deliberately lists 'held' events, with a preview, to the brain's own owner: surfacing a hold IS the point, not a bypass of it" },
   { file: "src/routes/admin.ts", has: "FROM admin_events ae", why: "the admin activity trail: a human admin's own audit log, not a model prompt or an agent-facing recall result" },
   { file: "src/routes/admin.ts", has: "FROM edges e LEFT JOIN entries m ON m.id = e.target_id", why: "insight review's source preview for a human admin reviewer; a held source renders as unreadable the same as a deleted one (see the comment above this query), never as ordinary content" },
 ];
