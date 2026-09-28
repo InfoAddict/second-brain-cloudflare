@@ -40,7 +40,7 @@ export function retractionSites(file: string, text: string): RetractionSite[] {
   });
 }
 
-const PENDING = new Set(["src/capture/lifecycle.ts", "src/memory/actions.ts", "src/memory/trash.ts"]);
+const PENDING = new Set<string>([]);
 
 function scan(): RetractionSite[] {
   const out: RetractionSite[] = [];

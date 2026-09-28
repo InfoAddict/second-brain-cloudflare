@@ -193,7 +193,8 @@ describe("disconnect purge audit", () => {
     const realBatch = db.batch.bind(db);
     // page-1 is deleted by another deleter between the purge's read and its batch.
     db.batch = async (stmts: unknown[]) => {
-      if (stmts.length === 3) await sqlite.db.prepare(`DELETE FROM entries WHERE id = 'page-1'`).run();
+      // The trash batch: insert, edges, entries, plus the D-RET restore hook's four (T-0089.2.4).
+      if (stmts.length === 7) await sqlite.db.prepare(`DELETE FROM entries WHERE id = 'page-1'`).run();
       return realBatch(stmts);
     };
     const body = await (await disconnect()).json() as any;

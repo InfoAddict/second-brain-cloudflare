@@ -40,7 +40,7 @@ import { readEntryHistory } from "../memory/history";
 import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
 import { heldReason, holdReasonPhrase, isHeld } from "../quarantine/tags";
 import { contentByteLength, isOverContentLimit, tooLargeMcpMessage, MAX_CONTENT_BYTES } from "../lib/content-size";
-import { supersedeReply } from "../memory/validity";
+import { supersedeReply, validityReplySuffix } from "../memory/validity";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -822,7 +822,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         canonical: `Marked entry ${id} as trusted.`,
         draft: `Marked entry ${id} as unconfirmed.`,
       };
-      return { content: [{ type: "text", text: replies[status as MemoryStatus] }] };
+      return { content: [{ type: "text", text: `${replies[status as MemoryStatus]}${validityReplySuffix(result.validity, id, "status")}` }] };
     }
   );
 
@@ -1160,9 +1160,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           payload: { deletedVectors: result.vectorCount, channel: "mcp", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
         });
       }
-      return { content: [{ type: "text", text: result.trashed
+      return { content: [{ type: "text", text: (result.trashed
         ? `Moved entry ${id} to the trash; it is removed for good after ${cfg.TRASH_RETENTION_DAYS} days.`
-        : `Deleted entry ${id} and ${result.vectorCount} vector(s). It was too large for the trash, so it cannot be restored.` }] };
+        : `Deleted entry ${id} and ${result.vectorCount} vector(s). It was too large for the trash, so it cannot be restored.`)
+        + validityReplySuffix(result.validity, id, "forget") }] };
     }
   );
 

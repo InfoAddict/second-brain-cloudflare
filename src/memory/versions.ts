@@ -86,7 +86,7 @@ const INSERT_COLUMNS = `INSERT INTO entry_versions (entry_id, workspace_id, seq,
  */
 function selectList(
   p: Params, delta: string,
-  s: { reason: VersionReason; change: ChangeContext; meta?: Record<string, unknown>; now: number; priorLengthUtf16?: number },
+  s: { reason: VersionReason; change: ChangeContext; meta?: Record<string, unknown>; metaSql?: string; now: number; priorLengthUtf16?: number },
 ): string {
   // scope-exempt: by-id: callers authorize the entry (or entries) before building the batch
   return `SELECT e.id, e.workspace_id,
@@ -96,7 +96,7 @@ function selectList(
        CASE WHEN ${delta} THEN ${s.priorLengthUtf16 !== undefined ? p.add(s.priorLengthUtf16) : "NULL"} ELSE NULL END,
        e.tags,
        json_object('when_at', e.when_at, 'when_kind', e.when_kind, 'when_source', e.when_source, 'when_label', e.when_label, 'valid_from', e.valid_from, 'valid_until', e.valid_until),
-       ${p.add(s.change.actorId)}, ${p.add(s.change.channel)}, ${p.add(s.reason)}, ${p.add(JSON.stringify(s.meta ?? {}))},
+       ${p.add(s.change.actorId)}, ${p.add(s.change.channel)}, ${p.add(s.reason)}, ${s.metaSql ?? p.add(JSON.stringify(s.meta ?? {}))},
        COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id AND v.seq = (SELECT MAX(x.seq) FROM entry_versions x WHERE x.entry_id = e.id)),
                 COALESCE(e.updated_at, e.created_at)),
        MAX(${p.add(s.now)}, COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id AND v.seq = (SELECT MAX(x.seq) FROM entry_versions x WHERE x.entry_id = e.id)),
@@ -159,6 +159,28 @@ export function buildSnapshotMany(s: SnapshotManyInput): BuiltStatement {
     sql: `${INSERT_COLUMNS}\n${list}\n WHERE e.id IN (SELECT value FROM json_each(${p.add(JSON.stringify(s.entryIds))}))`,
     bindings: p.values(),
   };
+}
+
+export interface DerivedSnapshotInput {
+  reason: VersionReason;
+  change: ChangeContext;
+  now: number;
+  /** A SQL expression over the row `e` for its meta JSON (json_object(...)); values only through p. */
+  meta: (p: Params) => string;
+  /** Everything after the snapshot's own FROM over entries (alias e): the rows to snapshot (WHERE ...); values only through p. */
+  where: (p: Params) => string;
+}
+
+/**
+ * Content-unchanged snapshots of every row `where` selects, each with its own meta, in one statement.
+ * The Track 2 retraction hooks (validity.ts) use it: the rows are found in SQL, inside the batch of
+ * the write that retracted their closer, so no read runs first. Never skips a no-op.
+ */
+export function buildDerivedSnapshot(s: DerivedSnapshotInput): BuiltStatement {
+  const p = new Params();
+  const metaSql = s.meta(p);
+  const list = selectList(p, `instr(e.content, char(0)) = 0`, { reason: s.reason, change: s.change, now: s.now, metaSql });
+  return { sql: `${INSERT_COLUMNS}\n${list}\n ${s.where(p)}`, bindings: p.values() };
 }
 
 export function snapshotManyStatement(env: Env, s: SnapshotManyInput): D1PreparedStatement {

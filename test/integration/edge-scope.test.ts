@@ -119,7 +119,7 @@ describe("structural: every edge insert checks endpoint readability in the same 
   });
 
   it("finds the reviewed edge-insert sites", () => {
-    expect(sites.map((s) => s.file).sort()).toEqual(["entries/import.ts", "graph/edges.ts", "graph/edges.ts", "memory/trash.ts", "memory/validity.ts"]);
+    expect(sites.map((s) => s.file).sort()).toEqual(["entries/import.ts", "graph/edges.ts", "graph/edges.ts", "memory/trash.ts", "memory/validity.ts", "memory/validity.ts"]);
   });
 
   it("each one carries the shared readability guard", () => {

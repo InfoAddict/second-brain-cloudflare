@@ -16,6 +16,7 @@ import { resolveConfig, type Config } from "../config";
 import { getStatus } from "./status";
 import { Params } from "./params";
 import { chunkText } from "../text/chunk";
+import { auditValidity, outcomeOf, retractionHook, unretractionHook, type ValidityOutcome } from "./validity";
 
 export type TrashReason = "forget" | "mirror" | "disconnect";
 
@@ -168,7 +169,11 @@ const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json
 export function trashManyStatements(
   env: Env,
   plan: TrashPlan,
-  meta: { reason: TrashReason; change: ChangeContext; now: number },
+  meta: {
+    reason: TrashReason; change: ChangeContext; now: number;
+    /** Retraction hook statements (validity.ts, D-RET): run after the trash inserts, while the rows and their edges still exist. */
+    hook?: D1PreparedStatement[];
+  },
 ): D1PreparedStatement[] {
   const all = [...plan.tier1, ...plan.tier2, ...plan.tier3];
   if (!all.length) return [];
@@ -194,6 +199,7 @@ export function trashManyStatements(
   };
   if (plan.tier1.length) insert(plan.tier1, true);
   if (plan.tier2.length) insert(plan.tier2, false);
+  stmts.push(...(meta.hook ?? []));
   if (plan.tier3.length) {
     const p = new Params();
     stmts.push(env.DB.prepare(
@@ -216,12 +222,18 @@ export function trashManyStatements(
   {
     const p = new Params();
     stmts.push(env.DB.prepare(
+      // validity: retraction-hooked (forget and the disconnect purge pass meta.hook, D-RET)
       // versioning: trash
       // scope-exempt: by-id delete: callers authorize the entries before building the batch
       `DELETE FROM entries WHERE id IN (SELECT value FROM json_each(${p.add(ids)}))`,
     ).bind(...p.values()));
   }
   return stmts;
+}
+
+/** Where a hook passed to trashManyStatements starts in its batch: after the one or two trash inserts. */
+export function trashHookOffset(plan: TrashPlan): number {
+  return (plan.tier1.length ? 1 : 0) + (plan.tier2.length ? 1 : 0);
 }
 
 /** Rows one batch changed, on D1 (`changes`) and the test doubles (`rows_written`). */
@@ -244,6 +256,7 @@ export async function trashMirroredEntries(
 ): Promise<{ purged: number; skipped: number }> {
   let purged = 0;
   let skipped = 0;
+  let cfg: Readonly<Config> | undefined;
   for (let i = 0; i < entryIds.length; i += DISCONNECT_PURGE_CHUNK) {
     const chunk = [...new Set(entryIds.slice(i, i + DISCONNECT_PURGE_CHUNK))];
     const scope = scopeWhere(auth, undefined, "e.workspace_id");
@@ -267,7 +280,11 @@ export async function trashMirroredEntries(
     const plan = planTrash(allowed, opts.budget);
     const now = Date.now();
     const change = { actorId: auth.userId, channel: "rest" as const };
-    await env.DB.batch(trashManyStatements(env, plan, { reason: "disconnect", change, now }));
+    // D-RET restore rule only (P10): what a purged mirror row had replaced is current again.
+    cfg ??= await resolveConfig(env);
+    const hook = retractionHook(env, allowed.map((r) => ({ id: r.id, workspaceId: r.workspace_id ?? "" })), () => "1", change, cfg, now);
+    const batchResults = await env.DB.batch(trashManyStatements(env, plan, { reason: "disconnect", change, now, hook: hook.statements }));
+    await auditValidity(env, change, hook.read(batchResults, trashHookOffset(plan)));
     // `changes` on a DELETE FROM entries is not a reliable count here: real D1 folds in every
     // FTS/entry_counts trigger row it fired alongside the entries row (a single delete reported
     // `changes: 5`), so which of `allowed` actually landed is read back rather than counted.
@@ -498,7 +515,7 @@ export type RestoreResult =
   | { status: "not_found" }
   | { status: "conflict" }
   | { status: "reembed_failed" }
-  | { status: "restored"; edgesRestored: number; trashedReason: string; vectorCount: number };
+  | { status: "restored"; edgesRestored: number; trashedReason: string; vectorCount: number; validity: ValidityOutcome };
 
 /**
  * A losing restore's cleanup: its upload's ids were minted for this attempt alone (round 6), so they
@@ -578,6 +595,12 @@ export async function restoreEntry(
   const deleteP = new Params();
   const deleteId = deleteP.add(trashed.id);
   const deleteNonce = deleteP.add(trashed.nonce);
+  // D-RET undone: a restored memory that is not wrong closes again what its removal reopened. Lands
+  // only with this restore: the row is live, not deprecated, and this exact trash row is gone.
+  const hook = unretractionHook(env, [{ id: trashed.id, workspaceId: trashed.workspace_id }], (p) =>
+    // scope-exempt: by-id: the trash row this restore consumed, pinned by its nonce
+    `x.tags NOT LIKE '%"status:deprecated"%' AND NOT EXISTS (SELECT 1 FROM entries_trash tt WHERE tt.id = x.id AND tt.nonce = ${p.add(trashed.nonce)})`,
+    change, cfg, Date.now(), { cascade: true });
   let results;
   try {
     results = await env.DB.batch([
@@ -601,6 +624,7 @@ export async function restoreEntry(
       env.DB.prepare(
         `DELETE FROM entries_trash WHERE id = ${deleteId} AND nonce = ${deleteNonce}`,
       ).bind(...deleteP.values()),
+      ...hook.statements,
     ]);
   } catch (e) {
     // This attempt's upload never became the row's: its ids are per upload (T-0089.1.1), so deleting
@@ -635,11 +659,14 @@ export async function restoreEntry(
     console.error("Stale trash vector cleanup failed (non-fatal):", e);
   }
 
+  const done = hook.read(results, 3);
+  await auditValidity(env, change, done);
   return {
     status: "restored",
     edgesRestored: changedRows(results[1]),
     trashedReason: trashed.reason,
     vectorCount: vectorIds.length,
+    validity: outcomeOf(done),
   };
 }
 

@@ -555,6 +555,12 @@ export class D1Mock {
           }
           return { meta: { changes: row ? 1 : 0 } };
         }
+        // Track 2 (T-0089.2.4): the retraction hooks are set-based SQL this double does not model; they
+        // change nothing here (real SQLite covers them: test/integration/retraction-restore.test.ts).
+        if (/'cause', '(?:un)?retraction'/.test(s) || /^UPDATE entries AS e SET valid_until = \(SELECT/.test(s) || (s.startsWith("INSERT INTO edges") && s.includes("z.id, y.id"))) {
+          return { results: [], meta: { changes: 0 } };
+        }
+        if (s.startsWith("DELETE FROM entry_versions WHERE entry_id IN ( SELECT v.entry_id")) return { meta: { changes: 0 } };
         // Track 2 (T-0089.2.1): the supersede batch's statements, numbered placeholders throughout.
         const numbered = (n: string) => args[Number(n) - 1];
         const windowClosed = /AND EXISTS \(SELECT 1 FROM entries x WHERE x\.id = \?(\d+) AND x\.valid_until = \?(\d+)\)/.exec(s);

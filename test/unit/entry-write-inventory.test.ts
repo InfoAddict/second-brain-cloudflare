@@ -88,8 +88,9 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/entry.ts', line: 452, kind: 'exempt' },
   { file: 'src/capture/entry.ts', line: 486, kind: 'exempt' },
   { file: 'src/capture/entry.ts', line: 503, kind: 'exempt' },
-  { file: 'src/capture/lifecycle.ts', line: 128, kind: 'snapshot' },
-  { file: 'src/capture/lifecycle.ts', line: 196, kind: 'snapshot' },
+  // MOVED (T-0089.2.4): lifecycle.ts, actions.ts, trash.ts and undo.ts shift for the retraction hooks; same sites.
+  { file: 'src/capture/lifecycle.ts', line: 152, kind: 'snapshot' },
+  { file: 'src/capture/lifecycle.ts', line: 229, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
   // MOVED 56 -> 60 and every later store.ts site (T-0089.1.1 round 5): storeEntry's CAS pins the
   // workspace, StoredEntry gains `committed`, and settleLostVectorCommit is new; same sites.
@@ -108,24 +109,31 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED 591 -> 592 (T-0089.2.1): the retraction-exempt marker above it.
   { file: 'src/lib/team-admin.ts', line: 592, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
-  { file: 'src/memory/actions.ts', line: 64, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 107, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 119, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 173, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 184, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 66, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 109, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 121, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 133, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 175, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 187, kind: 'snapshot' },
   // MOVED 218 -> 220, 605 -> 607 (T-0089.1.1 round 2): the trash insert is a plain INSERT, with a comment saying why.
   // MOVED 220 -> 221, 607 -> 608 (T-0089.1.1 round 3): trash.ts imports the shared edge readability guard.
-  { file: 'src/memory/trash.ts', line: 221, kind: 'trash' },
-  { file: 'src/memory/trash.ts', line: 588, kind: 'exempt' },
+  { file: 'src/memory/trash.ts', line: 228, kind: 'trash' },
+  { file: 'src/memory/trash.ts', line: 611, kind: 'exempt' },
   // REMOVED trash.ts:760 (T-0089.1.1 close-out): deleteForever no longer deletes a live entry at all;
   // it acts only on a trash row pinned by nonce.
   // MOVED 312 -> 316, 348 -> 352 (T-0089.1.1 round 2): revertEntry takes an optional trash nonce; same sites.
   // MOVED 320 -> 336, 356 -> 372 (T-0089.2.1): revertEntry restores the validity window too.
-  { file: 'src/memory/undo.ts', line: 336, kind: 'snapshot' },
-  { file: 'src/memory/undo.ts', line: 372, kind: 'exempt' },
+  { file: 'src/memory/undo.ts', line: 344, kind: 'snapshot' },
+  { file: 'src/memory/undo.ts', line: 380, kind: 'exempt' },
   // NEW (T-0089.2.1): the supersede UPDATE (validity window closed; its validity snapshot rides in the same batch).
-  { file: 'src/memory/validity.ts', line: 122, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 125, kind: 'snapshot' },
+  // NEW (T-0089.2.4): the retraction restore and un-retraction re-close UPDATEs (D-RET), and the
+  // cascade's flag and unflag UPDATEs; each rides after its own derived snapshot in the same batch,
+  // and lands only on the rows that snapshot versioned (nonce).
+  { file: 'src/memory/validity.ts', line: 261, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 330, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 373, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 417, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },

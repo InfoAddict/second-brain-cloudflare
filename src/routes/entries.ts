@@ -222,7 +222,7 @@ export async function handleEntriesRoutes(
       entryId: id, actorId: auth.userId, event: "deleted",
       payload: { deletedVectors: result.vectorCount, channel: "rest", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
     });
-    return json({ ok: true, id, deletedVectors: result.vectorCount, trash: result.trashed, retention_days: cfg.TRASH_RETENTION_DAYS });
+    return json({ ok: true, id, deletedVectors: result.vectorCount, trash: result.trashed, retention_days: cfg.TRASH_RETENTION_DAYS, validity: result.validity });
   }
 
   // POST /restore — bring a memory back from the trash, with its links and index.
@@ -253,7 +253,7 @@ export async function handleEntriesRoutes(
       entryId: id, actorId: auth.userId, event: "restored",
       payload: { channel: "rest", edgesRestored: result.edgesRestored, trashedReason: result.trashedReason },
     });
-    return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount });
+    return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount, validity: result.validity });
   }
 
   // POST /undo — reverse the most recent change to a memory (or a specific earlier version, with
@@ -294,7 +294,7 @@ export async function handleEntriesRoutes(
     switch (result.status) {
       case "reverted":
         return json({
-          ok: true, id, status: "reverted", targetSeq: result.targetSeq, message: revertedMessage(id, result),
+          ok: true, id, status: "reverted", targetSeq: result.targetSeq, message: revertedMessage(id, result), validity: result.validity,
           ...(result.recreatedIncomingId ? { recreatedIncomingId: result.recreatedIncomingId } : {}),
           ...(result.incomingTruncated ? { incomingTruncated: true } : {}),
           ...(result.keptIncoming ? { keptIncoming: result.keptIncoming } : {}),
@@ -302,7 +302,7 @@ export async function handleEntriesRoutes(
         });
       case "restored":
         return json({
-          ok: true, id, status: "restored", message: restoredMessage(id, result),
+          ok: true, id, status: "restored", message: restoredMessage(id, result), validity: result.validity,
           ...(result.mirrorSource ? { mirrorWarning: true } : {}),
         });
       case "no_change":
@@ -517,7 +517,7 @@ export async function handleEntriesRoutes(
     }
 
     auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { status, channel: "rest" } });
-    return json({ ok: true, id, status, indexed: result.indexed });
+    return json({ ok: true, id, status, indexed: result.indexed, validity: result.validity });
   }
 
   return null;

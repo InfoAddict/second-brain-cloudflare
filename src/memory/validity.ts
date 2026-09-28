@@ -7,12 +7,15 @@
  * through Params, and every writer compare-and-sets the values it read.
  */
 import type { Env } from "../env";
-import type { ChangeContext } from "../lib/audit";
+import { writeAuditEvents, type AuditEventInput, type ChangeContext } from "../lib/audit";
 import type { Config } from "../config";
 import type { MemoryStatus } from "./status";
 import { zonedTimeMs } from "../when/timezone";
 import { edgeEndpointsReadableSql } from "../graph/edges";
-import { Params, pruneStatement, snapshotStatement } from "./versions";
+import { RETRACTED_SOURCE_TAG } from "../tags/system";
+
+export { RETRACTED_SOURCE_TAG };
+import { buildDerivedSnapshot, Params, pruneStatement, snapshotStatement } from "./versions";
 
 /**
  * A stated start of "unknown": a fact told only with its end ("I lived in Boston until 2020"),
@@ -146,6 +149,339 @@ export function supersedeStatements(
 export function windowClosedSql(p: Params, id: string, at: number): string {
   // scope-exempt: by-id: the row this batch's own guarded UPDATE just wrote
   return `EXISTS (SELECT 1 FROM entries x WHERE x.id = ${p.add(id)} AND x.valid_until = ${p.add(at)})`;
+}
+
+// ── Retraction: restore rule and un-retraction (T-0089.2.4, D-RET; spec 14 5.6) ──
+//
+// Invariant: a closed window needs a live, non-deprecated closer (P3). When a row that closed others
+// is retracted (marked wrong, dismissed, forgotten, trashed, reverted to wrong), the rows it closed
+// at its own start reopen, or inherit its end when it had itself been closed; undoing the retraction
+// closes them again. The hooks are set-based SQL keyed by the retracted ids, appended to the entry
+// point's own batch after its write, so they cost no extra execution and land only with it: the
+// first statement carries the entry point's "landed" guard over the retracted row `x`, and every
+// later one keys off the per-hook nonce the first wrote into each row's new version.
+
+/** A retracted (or un-retracted) row, pinned to the workspace its caller authorized. */
+export interface HookRow { id: string; workspaceId: string }
+/** SQL over the retracted row aliased `x`: true once the entry point's own write has landed. */
+export type LandedGuard = (p: Params) => string;
+export interface ValidityChange { id: string; preview: string; by: string; until: number | null }
+/** A memory built on a retracted one (T-0089.2.4 cascade), flagged or unflagged by a hook. */
+export interface DependentChange { id: string; by: string; demoted: boolean }
+/** What one hook changed, read back from its batch results. */
+export interface HookResult { restored: ValidityChange[]; reclosed: ValidityChange[]; flagged: DependentChange[]; unflagged: DependentChange[] }
+export interface ValidityHook {
+  statements: D1PreparedStatement[];
+  /** What this hook changed; `offset` is where its statements start in the batch. */
+  read(results: D1Result[], offset: number): HookResult;
+}
+
+const DEPRECATED = `'%"status:deprecated"%'`;
+const EMPTY_RESULT: HookResult = { restored: [], reclosed: [], flagged: [], unflagged: [] };
+/** The newest version's meta of the row aliased `a`. */
+const NEWEST_META = (a: string) =>
+  // scope-exempt: by-id: versions of a row the enclosing statement already pinned
+  `(SELECT v.meta FROM entry_versions v WHERE v.entry_id = ${a}.id ORDER BY v.seq DESC LIMIT 1)`;
+const NEWEST_REASON = (a: string) =>
+  // scope-exempt: by-id: versions of a row the enclosing statement already pinned
+  `(SELECT v.reason FROM entry_versions v WHERE v.entry_id = ${a}.id ORDER BY v.seq DESC LIMIT 1)`;
+/** Rows some retracted id closed: the indexed pre-filter every restore statement starts from. */
+const closedBy = (p: Params, pairs: string) =>
+  // scope-exempt: by-id: supersedes targets of the caller's authorized rows; each statement pins the workspace
+  `(SELECT g.target_id FROM edges g WHERE g.type = 'supersedes' AND g.source_id IN (SELECT json_extract(k.value, '$[0]') FROM json_each(${pairs}) k))`;
+const authorized = (pairs: string, x: string) =>
+  `EXISTS (SELECT 1 FROM json_each(${pairs}) k WHERE json_extract(k.value, '$[0]') = ${x}.id AND json_extract(k.value, '$[1]') = ${x}.workspace_id)`;
+const ids = (pairs: string) => `(SELECT json_extract(k.value, '$[0]') FROM json_each(${pairs}) k)`;
+
+/** The digest a source's "[Digest: <id>]" marker names (compression/digest.ts markSourcesRolledUp), or NULL. */
+const digestOf = (x: string) =>
+  `CASE WHEN instr(${x}.content, '[Digest: ') > 0 THEN substr(${x}.content, instr(${x}.content, '[Digest: ') + 9, instr(substr(${x}.content, instr(${x}.content, '[Digest: ') + 9), ']') - 1) END`;
+/** Memories built on the retracted rows: insights drawn from them, memories caused by them, their digests. */
+const dependentsOf = (pairs: string) =>
+  // scope-exempt: by-id: dependents of the caller's authorized rows; each statement pins the workspace
+  `(SELECT g.source_id FROM edges g WHERE g.type IN ('drawn_from', 'caused_by') AND g.target_id IN ${ids(pairs)}
+     UNION SELECT ${digestOf("xd")} FROM entries xd WHERE xd.id IN ${ids(pairs)})`;
+/** The retracted row the dependent `d` was built on, when the entry point's write landed. */
+const builtOn = (p: Params, pairs: string, d: string, landed: LandedGuard) =>
+  // scope-checked: x is one of the caller's authorized rows (pairs pin id and workspace), d shares its workspace
+  `(SELECT x.id FROM entries x
+     WHERE x.id IN ${ids(pairs)} AND ${authorized(pairs, "x")} AND x.workspace_id = ${d}.workspace_id AND x.id <> ${d}.id
+       AND (EXISTS (SELECT 1 FROM edges g WHERE g.source_id = ${d}.id AND g.target_id = x.id AND g.type IN ('drawn_from', 'caused_by'))
+            OR ${d}.id = ${digestOf("x")})
+       AND (${landed(p)})
+     ORDER BY x.id LIMIT 1)`;
+/** System-derived and not canonical: its only reason to exist was its inputs (D2.4), so it is demoted. */
+const systemDerived = (d: string) =>
+  `((${d}.tags LIKE '%"auto-insight"%' OR ${d}.tags LIKE '%"synthesized"%') AND COALESCE(${d}.actor_id, '') = '' AND ${d}.tags NOT LIKE '%"status:canonical"%')`;
+const CASCADE_VERSION = (v: string) => `${v}.reason = 'status' AND json_extract(${v}.meta, '$.cause') = 'retraction'`;
+export const CASCADE_LIMIT = 25;
+
+// RETURNING cannot name the UPDATE's alias, so its correlated reads use the table name (`entries`).
+function readChanged(results: D1Result[], index: number): ValidityChange[] {
+  const rows = (results[index]?.results ?? []) as { id: string; preview: string | null; by_id: string | null; until_ms: number | null }[];
+  return rows.map(r => ({ id: r.id, preview: r.preview ?? "", by: r.by_id ?? "", until: r.until_ms ?? null }));
+}
+function readDependents(results: D1Result[], index: number): DependentChange[] {
+  const rows = (results[index]?.results ?? []) as { id: string; by_id: string | null; demoted: number | null }[];
+  return rows.map(r => ({ id: r.id, by: r.by_id ?? "", demoted: r.demoted === 1 }));
+}
+
+/**
+ * Restore rule. For each row y a retracted x closed at x's own start (y.valid_until = x's effective
+ * start, same workspace, x not an empty window): y's window reopens to x's own end (NULL when x was
+ * current), recorded as a validity version (cause retraction), and when x had itself been closed by
+ * a live z, the edge z supersedes y keeps "replaced by" true. A y whose end was changed since is left
+ * alone. Four statements: [snapshot, update, inherited edge, prune], then with `cascade` three more
+ * that flag what was built on x (flagStatements).
+ */
+export function retractionHook(
+  env: Env, xs: HookRow[], landed: LandedGuard, change: ChangeContext, cfg: Readonly<Config>, now: number,
+  opts: { cascade?: boolean } = {},
+): ValidityHook {
+  const nonce = crypto.randomUUID();
+  const pairsJson = JSON.stringify(xs.map(x => [x.id, x.workspaceId]));
+  const closer = (p: Params, pairs: string) =>
+    // scope-checked: x is one of the caller's authorized rows (pairs pin id and workspace), y shares its workspace
+    `(SELECT x.id FROM edges g JOIN entries x ON x.id = g.source_id
+       WHERE g.target_id = e.id AND g.type = 'supersedes' AND ${authorized(pairs, "x")} AND x.workspace_id = e.workspace_id
+         AND e.valid_until = COALESCE(x.valid_from, x.created_at)
+         AND (x.valid_until IS NULL OR x.valid_until > COALESCE(x.valid_from, x.created_at))
+         AND (${landed(p)})
+       ORDER BY x.id LIMIT 1)`;
+  const snapshot = buildDerivedSnapshot({
+    reason: "validity", change, now,
+    meta: p => { const pairs = p.add(pairsJson); return `json_object('cause', 'retraction', 'retracted', ${closer(p, pairs)}, 'nonce', ${p.add(nonce)})`; },
+    where: p => { const pairs = p.add(pairsJson); return `WHERE e.id IN ${closedBy(p, pairs)} AND ${closer(p, pairs)} IS NOT NULL`; },
+  });
+  const mine = (p: Params, a: string) => `${a}.id IN ${closedBy(p, p.add(pairsJson))} AND json_extract(${NEWEST_META(a)}, '$.nonce') = ${p.add(nonce)}`;
+
+  const up = new Params();
+  // versioning: snapshot
+  // scope-checked: only rows whose newest version is this hook's own (nonce), found through the authorized pairs
+  const updateSql = `UPDATE entries AS e SET valid_until = (SELECT x.valid_until FROM entries x WHERE x.id = json_extract(${NEWEST_META("e")}, '$.retracted'))
+     WHERE ${mine(up, "e")}
+     RETURNING id, substr(content, 1, 60) AS preview, json_extract(${NEWEST_META("entries")}, '$.retracted') AS by_id, valid_until AS until_ms`;
+
+  const ep = new Params();
+  const at = ep.add(now);
+  // scope-checked: y is this hook's own restored row; x its retracted closer; z x's live closer in the same workspace
+  const inheritFrom = `FROM entries y, entries x, entries z
+      WHERE ${mine(ep, "y")}
+        AND x.id = json_extract(${NEWEST_META("y")}, '$.retracted')
+        AND z.id = (SELECT g2.source_id FROM edges g2, entries z2
+                     WHERE z2.id = g2.source_id AND g2.target_id = x.id AND g2.type = 'supersedes' AND z2.workspace_id = x.workspace_id
+                       AND z2.id <> y.id AND z2.tags NOT LIKE ${DEPRECATED}
+                       AND COALESCE(z2.valid_from, z2.created_at) = x.valid_until
+                     ORDER BY z2.id LIMIT 1)`;
+  const edgeSql =
+    // scope-exempt: by-id: see inheritFrom; both endpoints re-checked readable in y's workspace
+    `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
+     SELECT lower(hex(randomblob(16))), z.id, y.id, 'supersedes', 1.0, 'system', '{}', ${at}, ${at}, y.workspace_id
+       ${inheritFrom} AND ${edgeEndpointsReadableSql("z.id", "y.id", "json_array(y.workspace_id)")}
+     ON CONFLICT(source_id, target_id, type) DO NOTHING`;
+
+  const flag = opts.cascade ? flagStatements(env, pairsJson, landed, change, cfg, now) : null;
+  return {
+    statements: [
+      env.DB.prepare(snapshot.sql).bind(...snapshot.bindings),
+      env.DB.prepare(updateSql).bind(...up.values()),
+      env.DB.prepare(edgeSql).bind(...ep.values()),
+      hookPrune(env, closedBy, pairsJson, nonce, cfg),
+      ...(flag ?? []),
+    ],
+    read: (results, offset) => ({ ...EMPTY_RESULT, restored: readChanged(results, offset + 1), flagged: flag ? readDependents(results, offset + 5) : [] }),
+  };
+}
+
+/**
+ * The cascade (T-0089.2.4, D2.4): every memory built on a retracted row, one hop, same workspace, at
+ * most CASCADE_LIMIT, gets the `retracted-source` tag; a system-derived one is also demoted to draft.
+ * Flag, never block. One status version per (dependent, retracted source), cause retraction, so undo
+ * knows every source a flag stands for. [snapshot, update, prune].
+ */
+function flagStatements(env: Env, pairsJson: string, landed: LandedGuard, change: ChangeContext, cfg: Readonly<Config>, now: number): D1PreparedStatement[] {
+  const nonce = crypto.randomUUID();
+  const snapshot = buildDerivedSnapshot({
+    reason: "status", change, now,
+    meta: p => {
+      const pairs = p.add(pairsJson);
+      return `json_object('cause', 'retraction', 'retracted', ${builtOn(p, pairs, "e", landed)}, 'demoted', CASE WHEN ${systemDerived("e")} AND e.tags NOT LIKE '%"status:draft"%' THEN 1 ELSE 0 END, 'nonce', ${p.add(nonce)})`;
+    },
+    where: p => {
+      const pairs = p.add(pairsJson);
+      // scope-checked: d is a dependent of the caller's authorized rows, pinned to their workspace by builtOn
+      return `WHERE e.id IN (SELECT d.id FROM entries d
+         WHERE d.id IN ${dependentsOf(pairs)} AND d.tags NOT LIKE ${DEPRECATED}
+           AND ${builtOn(p, pairs, "d", landed)} IS NOT NULL
+           AND (d.tags NOT LIKE '%"${RETRACTED_SOURCE_TAG}"%'
+                OR (${systemDerived("d")} AND d.tags NOT LIKE '%"status:draft"%')
+                OR NOT EXISTS (SELECT 1 FROM entry_versions v WHERE v.entry_id = d.id AND ${CASCADE_VERSION("v")}
+                                AND json_extract(v.meta, '$.retracted') = ${builtOn(p, pairs, "d", landed)}))
+         ORDER BY d.id LIMIT ${p.add(CASCADE_LIMIT)})`;
+    },
+  });
+  const up = new Params();
+  const pairs = up.add(pairsJson);
+  const flagged = `json_insert(e.tags, '$[#]', '${RETRACTED_SOURCE_TAG}')`;
+  const drafted = `(SELECT json_group_array(value) FROM (SELECT value FROM json_each(e.tags) WHERE value NOT LIKE 'status:%' AND value <> '${RETRACTED_SOURCE_TAG}'
+                      UNION ALL SELECT 'status:draft' UNION ALL SELECT '${RETRACTED_SOURCE_TAG}'))`;
+  // versioning: snapshot
+  // scope-checked: only rows whose newest version is this cascade's own (nonce), found through the authorized pairs
+  const updateSql = `UPDATE entries AS e SET tags = CASE
+         WHEN json_extract(${NEWEST_META("e")}, '$.demoted') = 1 THEN ${drafted}
+         WHEN e.tags LIKE '%"${RETRACTED_SOURCE_TAG}"%' THEN e.tags
+         ELSE ${flagged} END
+     WHERE e.id IN ${dependentsOf(pairs)} AND json_extract(${NEWEST_META("e")}, '$.nonce') = ${up.add(nonce)}
+     RETURNING id, json_extract(${NEWEST_META("entries")}, '$.retracted') AS by_id, json_extract(${NEWEST_META("entries")}, '$.demoted') AS demoted`;
+  return [
+    env.DB.prepare(snapshot.sql).bind(...snapshot.bindings),
+    env.DB.prepare(updateSql).bind(...up.values()),
+    hookPrune(env, (_p, pairs) => dependentsOf(pairs), pairsJson, nonce, cfg),
+  ];
+}
+
+/**
+ * Un-retraction (undo of Wrong, leaving deprecated, restore from the trash). For each row y the
+ * un-retracted x had reopened (y still ends where x ends, and y's newest version is x's retraction
+ * version, so nothing has changed y since), y closes again at x's start (cause unretraction).
+ * Three statements: [snapshot, update, prune], then with `cascade` three that unflag (unflagStatements).
+ */
+export function unretractionHook(
+  env: Env, xs: HookRow[], landed: LandedGuard, change: ChangeContext, cfg: Readonly<Config>, now: number,
+  opts: { cascade?: boolean } = {},
+): ValidityHook {
+  const nonce = crypto.randomUUID();
+  const pairsJson = JSON.stringify(xs.map(x => [x.id, x.workspaceId]));
+  const retractedBy = (p: Params, pairs: string) =>
+    // scope-checked: x is one of the caller's authorized rows (pairs pin id and workspace), y shares its workspace
+    `(SELECT x.id FROM edges g JOIN entries x ON x.id = g.source_id
+       WHERE g.target_id = e.id AND g.type = 'supersedes' AND ${authorized(pairs, "x")} AND x.workspace_id = e.workspace_id
+         AND e.valid_until IS x.valid_until
+         AND ${NEWEST_REASON("e")} = 'validity'
+         AND json_extract(${NEWEST_META("e")}, '$.cause') = 'retraction'
+         AND json_extract(${NEWEST_META("e")}, '$.retracted') = x.id
+         AND (${landed(p)})
+       ORDER BY x.id LIMIT 1)`;
+  const snapshot = buildDerivedSnapshot({
+    reason: "validity", change, now,
+    meta: p => { const pairs = p.add(pairsJson); return `json_object('cause', 'unretraction', 'by', ${retractedBy(p, pairs)}, 'nonce', ${p.add(nonce)})`; },
+    where: p => { const pairs = p.add(pairsJson); return `WHERE e.id IN ${closedBy(p, pairs)} AND ${retractedBy(p, pairs)} IS NOT NULL`; },
+  });
+  const up = new Params();
+  // versioning: snapshot
+  // scope-checked: only rows whose newest version is this hook's own (nonce), found through the authorized pairs
+  const updateSql = `UPDATE entries AS e SET valid_until = (SELECT COALESCE(x.valid_from, x.created_at) FROM entries x WHERE x.id = json_extract(${NEWEST_META("e")}, '$.by'))
+     WHERE e.id IN ${closedBy(up, up.add(pairsJson))} AND json_extract(${NEWEST_META("e")}, '$.nonce') = ${up.add(nonce)}
+     RETURNING id, substr(content, 1, 60) AS preview, json_extract(${NEWEST_META("entries")}, '$.by') AS by_id, valid_until AS until_ms`;
+  const unflag = opts.cascade ? unflagStatements(env, pairsJson, landed, change, cfg, now) : null;
+  return {
+    statements: [
+      env.DB.prepare(snapshot.sql).bind(...snapshot.bindings),
+      env.DB.prepare(updateSql).bind(...up.values()),
+      hookPrune(env, closedBy, pairsJson, nonce, cfg),
+      ...(unflag ?? []),
+    ],
+    read: (results, offset) => ({ ...EMPTY_RESULT, reclosed: readChanged(results, offset + 1), unflagged: unflag ? readDependents(results, offset + 4) : [] }),
+  };
+}
+
+/**
+ * Undo of the cascade. The marker comes off a dependent of the un-retracted x only when every source
+ * its cascade versions record is live and not wrong again, and its history reaches back unpruned
+ * (seq 1 kept), so no recorded source can be missing; otherwise it stays, and Keep clears it. A
+ * dependent the cascade demoted, and still draft, gets its status from before the first cascade.
+ */
+function unflagStatements(env: Env, pairsJson: string, landed: LandedGuard, change: ChangeContext, cfg: Readonly<Config>, now: number): D1PreparedStatement[] {
+  const nonce = crypto.randomUUID();
+  const snapshot = buildDerivedSnapshot({
+    reason: "status", change, now,
+    meta: p => { const pairs = p.add(pairsJson); return `json_object('cause', 'unretraction', 'by', ${builtOn(p, pairs, "e", landed)}, 'nonce', ${p.add(nonce)})`; },
+    where: p => {
+      const pairs = p.add(pairsJson);
+      // scope-exempt: by-id: versions of the dependent the enclosing statement already pinned
+      return `WHERE e.id IN ${dependentsOf(pairs)} AND e.tags LIKE '%"${RETRACTED_SOURCE_TAG}"%'
+         AND ${builtOn(p, pairs, "e", landed)} IS NOT NULL
+         AND EXISTS (SELECT 1 FROM entry_versions v WHERE v.entry_id = e.id AND ${CASCADE_VERSION("v")})
+         AND NOT EXISTS (SELECT 1 FROM entry_versions v WHERE v.entry_id = e.id AND ${CASCADE_VERSION("v")}
+                          AND NOT EXISTS (SELECT 1 FROM entries c WHERE c.id = json_extract(v.meta, '$.retracted') AND c.workspace_id = e.workspace_id AND c.tags NOT LIKE ${DEPRECATED}))
+         AND (SELECT MIN(v.seq) FROM entry_versions v WHERE v.entry_id = e.id) = 1`;
+    },
+  });
+  const up = new Params();
+  const pairs = up.add(pairsJson);
+  // scope-exempt: by-id: versions of the row the enclosing UPDATE already pinned
+  const priorStatus = `(SELECT value FROM json_each((SELECT v.tags FROM entry_versions v WHERE v.entry_id = e.id AND ${CASCADE_VERSION("v")} ORDER BY v.seq ASC LIMIT 1)) WHERE value LIKE 'status:%' LIMIT 1)`;
+  const restoreStatus = `(e.tags LIKE '%"status:draft"%' AND COALESCE(${priorStatus}, '') <> 'status:draft')`;
+  // versioning: snapshot
+  // scope-checked: only rows whose newest version is this unflag's own (nonce), found through the authorized pairs
+  const updateSql = `UPDATE entries AS e SET tags = (SELECT json_group_array(value) FROM (
+         SELECT value FROM json_each(e.tags) WHERE value <> '${RETRACTED_SOURCE_TAG}' AND NOT (${restoreStatus} AND value LIKE 'status:%')
+         UNION ALL SELECT ${priorStatus} WHERE ${restoreStatus} AND ${priorStatus} IS NOT NULL))
+     WHERE e.id IN ${dependentsOf(pairs)} AND json_extract(${NEWEST_META("e")}, '$.nonce') = ${up.add(nonce)}
+     RETURNING id, json_extract(${NEWEST_META("entries")}, '$.by') AS by_id, 0 AS demoted`;
+  return [
+    env.DB.prepare(snapshot.sql).bind(...snapshot.bindings),
+    env.DB.prepare(updateSql).bind(...up.values()),
+    hookPrune(env, (_p, pairs) => dependentsOf(pairs), pairsJson, nonce, cfg),
+  ];
+}
+
+/** Prunes only the rows this hook versioned (its nonce): never another row's history. */
+function hookPrune(env: Env, candidates: (p: Params, pairs: string) => string, pairsJson: string, nonce: string, cfg: Readonly<Config>): D1PreparedStatement {
+  const p = new Params();
+  // scope-exempt: by-id: rows this hook's own versions name (nonce), found through the caller's authorized pairs
+  const sql = `DELETE FROM entry_versions WHERE entry_id IN (
+       SELECT v.entry_id FROM entry_versions v WHERE v.entry_id IN ${candidates(p, p.add(pairsJson))} AND json_extract(v.meta, '$.nonce') = ${p.add(nonce)})
+     AND seq <= (SELECT MAX(w.seq) FROM entry_versions w WHERE w.entry_id = entry_versions.entry_id) - ${p.add(cfg.VERSION_KEEP)}`;
+  return env.DB.prepare(sql).bind(...p.values());
+}
+
+/** `validity_changed` and `flagged` events for what hooks changed. */
+export function validityEvents(change: ChangeContext, ...hooks: HookResult[]): AuditEventInput[] {
+  const channel = change.channel;
+  return hooks.flatMap(h => [
+    ...h.restored.map(c => ({ entryId: c.id, actorId: change.actorId, event: "validity_changed" as const, payload: { cause: "retraction", retracted: c.by, until: c.until, channel } })),
+    ...h.reclosed.map(c => ({ entryId: c.id, actorId: change.actorId, event: "validity_changed" as const, payload: { cause: "unretraction", by: c.by, until: c.until, channel } })),
+    ...h.flagged.map(d => ({ entryId: d.id, actorId: change.actorId, event: "flagged" as const, payload: { cause: "retraction", retracted: d.by, demoted: d.demoted, channel } })),
+    ...h.unflagged.map(d => ({ entryId: d.id, actorId: change.actorId, event: "flagged" as const, payload: { action: "unflag", cause: "unretraction", by: d.by, channel } })),
+  ]);
+}
+
+/** The same events as one audit batch, written only when a hook changed something. */
+export async function auditValidity(env: Env, change: ChangeContext, ...hooks: HookResult[]): Promise<void> {
+  const events = validityEvents(change, ...hooks);
+  if (events.length) await writeAuditEvents(env, events);
+}
+
+/** Result field every retraction entry point returns (spec 14 5.6). */
+export interface ValidityOutcome { restored: { id: string; preview: string }[]; reclosed: { id: string; preview: string }[]; flagged: number; unflagged: number }
+export const NO_VALIDITY_CHANGE: ValidityOutcome = { restored: [], reclosed: [], flagged: 0, unflagged: 0 };
+export function outcomeOf(...hooks: HookResult[]): ValidityOutcome {
+  return {
+    restored: hooks.flatMap(h => h.restored.map(c => ({ id: c.id, preview: c.preview }))),
+    reclosed: hooks.flatMap(h => h.reclosed.map(c => ({ id: c.id, preview: c.preview }))),
+    flagged: hooks.reduce((n, h) => n + h.flagged.length, 0),
+    unflagged: hooks.reduce((n, h) => n + h.unflagged.length, 0),
+  };
+}
+
+/**
+ * The sentences a retraction entry point appends to its reply (spec 14 5.9; the forget wording is the
+ * director's Q1 copy). `subject` is the memory the call acted on. Empty when nothing changed.
+ */
+export function validityReplySuffix(v: ValidityOutcome, subject: string, kind: "status" | "forget" | "undo"): string {
+  let text = "";
+  if (v.restored.length === 1) {
+    const [r] = v.restored;
+    text += kind === "forget" ? ` The older memory ${r.id} is current again.` : ` Entry ${r.id} ("${r.preview}") is current again.`;
+  } else if (v.restored.length > 1) {
+    text += ` ${v.restored.length} older memories are current again: ${v.restored.map(r => r.id).join(", ")}.`;
+  }
+  if (v.reclosed.length === 1) text += ` Entry ${v.reclosed[0].id} is replaced by ${subject} again.`;
+  else if (v.reclosed.length > 1) text += ` Entries ${v.reclosed.map(r => r.id).join(", ")} are replaced by ${subject} again.`;
+  if (v.flagged === 1) text += " 1 memory built on it was flagged for a check.";
+  else if (v.flagged > 1) text += ` ${v.flagged} memories built on it were flagged for a check.`;
+  return text;
 }
 
 // ── Date grammar ─────────────────────────────────────────────────────────────
