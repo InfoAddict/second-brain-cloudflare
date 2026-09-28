@@ -21,6 +21,8 @@ const MIGRATION: [column: string, alter: string][] = [
   ["when_kind", `ALTER TABLE entries ADD COLUMN when_kind TEXT`],
   ["when_source", `ALTER TABLE entries ADD COLUMN when_source TEXT`],
   ["when_label", `ALTER TABLE entries ADD COLUMN when_label TEXT`],
+  ["valid_from", `ALTER TABLE entries ADD COLUMN valid_from INTEGER`],
+  ["valid_until", `ALTER TABLE entries ADD COLUMN valid_until INTEGER`],
 ];
 // Tenancy (v3) ALTERs exist for upgraded brains, but on fresh brains these columns
 // ship inside the base CREATE (see BASE_COLUMNS), so unlike MIGRATION they are not
@@ -84,8 +86,10 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "idx_entries_ledger", "idx_entries_standing",
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
+  // Sampled recall log (T-0089.5.2 Part A).
+  "recall_log", "idx_recall_log_ws",
   // Content history and soft delete (T-0089.1.1, T-0089.1.2).
-  "entry_versions", "idx_entry_versions_entry", "entries_trash", "idx_entries_trash_deleted",
+  "entry_versions", "idx_entry_versions_entry", "entries_trash", "idx_entries_trash_deleted", "idx_entries_trash_workspace_deleted",
   "entries_fts",
   "entry_counts",
   ...PROMPT_CAPSULE_TRIGGERS,
@@ -289,11 +293,14 @@ describe("initializeDatabase updated_at migration", () => {
       // dedicated batch mirroring entries_fts's ownership rule.
       // MOVED 61 -> 62 (T-0089.4.4) by idx_entries_conflict_held, the partial index behind the digest's held-draft check.
       // MOVED 62 -> 66 (T-0089.6.1) by the four partial indexes behind the agent brief.
-      // MOVED 66 -> 70 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
-      // MOVED 70 -> 71 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER.
-      // MOVED 71 -> 72 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER.
-      // MOVED 72 -> 74 (T-0089.7.1, T-0089.7.2) by idx_entries_ledger and idx_entries_standing.
-      expect(migrated).toBe(74); // 31 base objects + 20 ALTERs + 17 post-column objects + the email-index CREATE
+      // MOVED 66 -> 68 (T-0089.5.2) by the recall_log table and idx_recall_log_ws.
+      // MOVED 68 -> 72 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
+      // MOVED 72 -> 73 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER.
+      // MOVED 73 -> 74 (R5, budget audit) by idx_entries_trash_workspace_deleted.
+      // MOVED 74 -> 75 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER.
+      // MOVED 75 -> 77 (T-0089.2.1, merge with v4/t5-log) by the valid_from and valid_until ALTERs; measured.
+      // MOVED 77 -> 79 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
+      expect(migrated).toBe(79); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs + T7 ledger/standing indexes)
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -654,12 +661,15 @@ describe("initializeDatabase against real SQLite", () => {
     // GROUP BY seed, created together in ONE batch — same +1, not +5.
     // MOVED 55 -> 56 (T-0089.4.4) by idx_entries_conflict_held.
     // MOVED 56 -> 60 (T-0089.6.1) by the four partial indexes behind the agent brief.
-    // MOVED 60 -> 64 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
-    // MOVED 64 -> 65 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER — wasted on a fresh brain
+    // MOVED 60 -> 62 (T-0089.5.2) by the recall_log table and idx_recall_log_ws.
+    // MOVED 62 -> 66 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
+    // MOVED 66 -> 67 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER — wasted on a fresh brain
     // (the CREATE above already has the column), same as every other ALTER a fresh CREATE subsumes.
-    // MOVED 65 -> 66 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER, wasted the same way.
-    // MOVED 66 -> 68 (T-0089.7.1, T-0089.7.2) by idx_entries_ledger and idx_entries_standing.
-    expect(cold).toBe(68); // one probe, then the 67 statements a new brain needs
+    // MOVED 67 -> 68 (R5, budget audit) by idx_entries_trash_workspace_deleted.
+    // MOVED 68 -> 69 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER, wasted the same way.
+    // MOVED 69 -> 71 (T-0089.2.1, merge with v4/t5-log) by the valid_from and valid_until ALTERs; measured.
+    // MOVED 71 -> 73 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
+    expect(cold).toBe(73); // one probe, then the 72 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
@@ -680,6 +690,8 @@ describe("initializeDatabase against real SQLite", () => {
       `ALTER TABLE entries ADD COLUMN when_kind TEXT`,
       `ALTER TABLE entries ADD COLUMN when_source TEXT`,
       `ALTER TABLE entries ADD COLUMN when_label TEXT`,
+      `ALTER TABLE entries ADD COLUMN valid_from INTEGER`,
+      `ALTER TABLE entries ADD COLUMN valid_until INTEGER`,
     ]);
     // schema.sql ships the whole v3 tenancy set — users (with default_share,
     // removed_at and last_used_at), workspaces, memberships, entry_events,

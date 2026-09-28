@@ -46,8 +46,9 @@ export async function handleLedgerRoutes(
     const scope = scopeWhere(auth);
     const actionable = decisionsActionable(auth);
     const state = stateParam as DecisionState;
-    const list = decisionsListQuery(scope, actionable, { state, limit, offset });
-    const count = decisionsCountQuery(scope, actionable, state);
+    const now = Date.now();
+    const list = decisionsListQuery(scope, actionable, { state, limit, offset }, now);
+    const count = decisionsCountQuery(scope, actionable, state, now);
     const [{ results }, totalRow] = await Promise.all([
       env.DB.prepare(list.sql).bind(...list.bindings).all(),
       env.DB.prepare(count.sql).bind(...count.bindings).first() as Promise<{ total: number } | null>,
@@ -103,7 +104,10 @@ export async function handleLedgerRoutes(
       env, ctx, auth, body.id.trim(), body.result as DecisionOutcomeResult, body.note, { actorId: auth.userId, channel: "rest" },
     );
     if (!outcome.ok) return json({ ok: false, error: outcome.error }, outcome.status);
-    return json({ ok: true, id: outcome.id, message: outcome.reply });
+    // review_at/reviews_done (18-copy-deck.md 8.4): structured next-review data for the dashboard,
+    // built from the same tag transition `message`'s English already describes. MCP and REST both
+    // keep reading `message` as-is; only this REST reply also carries the structured pair.
+    return json({ ok: true, id: outcome.id, message: outcome.reply, review_at: outcome.reviewAt, reviews_done: outcome.reviewsDone });
   }
 
   return null;

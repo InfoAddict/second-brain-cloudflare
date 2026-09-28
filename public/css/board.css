@@ -1191,6 +1191,17 @@
   font-size: 14px;
   line-height: 1.35;
   color: var(--text-primary);
+  /* A flex item's default min-width is its content's intrinsic width, not 0,
+   * so a narrow panel squeezed the action button's own label into wrapping
+   * instead of shrinking this side - the label reads fine wrapped, "Index
+   * now" split across three lines does not. */
+  min-width: 0;
+}
+
+/* The action itself: full width, one line, never the side that gives. */
+.task > .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .task-t span {

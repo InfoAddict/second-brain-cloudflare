@@ -57,6 +57,7 @@ describe("expandGraph with an Identity", () => {
   beforeEach(() => {
     resetDatabaseInit();
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     // The seed lives in the caller's personal workspace; one neighbour is shared via
     // the company workspace (legitimate — must stay reachable), one belongs to a
     // stranger's personal workspace (must never be returned).
@@ -98,6 +99,7 @@ describe("buildGraph with an Identity", () => {
   beforeEach(() => {
     resetDatabaseInit();
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   });
 
   afterEach(() => sqlite.close());
@@ -123,6 +125,7 @@ describe("tag vocabulary scoping", () => {
   beforeEach(() => {
     resetDatabaseInit();
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     seedEntry(sqlite, "a1", "ws-a", ["alpha-only", "common"]);
     seedEntry(sqlite, "b1", "ws-b", ["beta-only"]);
     seedEntry(sqlite, "c1", "ws-co", ["company", "common"]);
@@ -165,6 +168,7 @@ describe("digest rollup partitioning", () => {
     resetDatabaseInit();
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   });
 
   afterEach(() => {

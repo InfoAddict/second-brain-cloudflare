@@ -741,42 +741,12 @@
         gap: 9px;
       }
 
-      #recall-welcome {
-        gap: 10px;
-      }
-
       /* ============================================================
        CONVERSATION: .ex-q a user bubble, .ex-a an answer on paper
        ============================================================ */
       #recall-messages {
         gap: 14px;
         padding: 20px 20px 10px;
-      }
-
-      /* opening hero */
-      .recall-hero {
-        padding: 6px 0 2px;
-        animation: bubble-in 0.4s var(--ease) both;
-      }
-
-      .recall-hero .eyebrow {
-        font-size: 11px;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-        color: var(--accent-ink);
-        margin-bottom: 13px;
-      }
-
-      .recall-hero .hero-line {
-        font-family: var(--font-sans);
-        font-size: 19px;
-        line-height: 1.5;
-        color: var(--text-primary);
-        max-width: 26em;
-      }
-
-      .recall-hero .hero-line .hashtag {
-        color: var(--accent-ink);
       }
 
       /* The user's own message: a bubble with one square lower corner (the
@@ -1707,21 +1677,6 @@
         color: var(--text-secondary);
       }
 
-      .first-run-steps {
-        margin: 14px 0 0;
-        padding-left: 20px;
-        text-align: left;
-        font-family: var(--font-sans);
-        font-size: 14px;
-        line-height: 1.65;
-        color: var(--text-secondary);
-        max-width: 460px;
-      }
-
-      .first-run-steps li {
-        margin-bottom: 8px;
-      }
-
       /* ============ BOTTOM SHEETS ============ */
       #confirm-dialog,
       #append-sheet,
@@ -2551,6 +2506,22 @@
         font-size: 14px;
         line-height: 1.5;
         color: var(--text-primary);
+      }
+
+      /* Track 7 lane B's decision rows: a small localized cue, not text baked
+         into the stored label. */
+      .due-review-cue {
+        display: inline-block;
+        font-size: 10.5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--accent-ink);
+        background: var(--accent-soft);
+        border-radius: var(--r-chip);
+        padding: 2px 6px;
+        margin-right: 6px;
+        vertical-align: middle;
       }
 
       .due-tags {
@@ -4737,6 +4708,21 @@
       .app-toast.visible {
         opacity: 1;
         pointer-events: auto;
+        transform: translateX(-50%) translateY(0);
+      }
+
+      /* UI review: on a narrow screen with a bottom sheet open, the toast
+         moves to the top of the viewport instead of fighting the sheet's own
+         fixed action row for the bottom edge. The safe-area offset keeps it
+         clear of a notch/status bar; env() with a fallback degrades to a
+         plain 12px on a browser that does not support it. */
+      .app-toast--top {
+        top: calc(env(safe-area-inset-top, 0px) + 12px);
+        bottom: auto;
+        transform: translateX(-50%) translateY(-12px);
+      }
+
+      .app-toast--top.visible {
         transform: translateX(-50%) translateY(0);
       }
 

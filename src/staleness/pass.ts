@@ -4,6 +4,7 @@ import { getStatus } from "../memory/status";
 import { getVolatility, withVolatility } from "../memory/volatility";
 import { hasStaleAsOf, withStaleAsOf, withoutStaleAsOf } from "../memory/stale";
 import { classifyVolatility, shouldFlagStale } from "./heuristic";
+import { currentValidityAt } from "../memory/validity";
 
 export const STALENESS_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -200,12 +201,14 @@ export async function runStalenessPass(
     const sliceSql = workspaceId != null ? `\n         AND workspace_id = ?` : "";
     const { results } = await env.DB.prepare(
       // scope-exempt: cron: nightly staleness pass, narrowed by the workspace slice in sliceSql
+      // validity: current: a replaced or ended row is history, not stale (T-0089.2.1, 5.5)
       `SELECT id, content, tags FROM entries
        WHERE COALESCE(updated_at, created_at) < ?
-         AND ${SYSTEM_TAG_EXCLUSIONS}${sliceSql}
+         AND ${SYSTEM_TAG_EXCLUSIONS}
+         AND ${currentValidityAt("", "?")}${sliceSql}
        ORDER BY COALESCE(staleness_checked_at, 0) ASC
        LIMIT ${STALENESS_PASS_LIMIT}`,
-    ).bind(...(workspaceId != null ? [cutoff, workspaceId] : [cutoff]))
+    ).bind(...(workspaceId != null ? [cutoff, now, workspaceId] : [cutoff, now]))
       .all() as { results: { id: string; content: string; tags: string }[] };
     candidates = results.map(r => ({ id: r.id, tags: r.tags ?? "[]", content: r.content }));
   } catch (e) {

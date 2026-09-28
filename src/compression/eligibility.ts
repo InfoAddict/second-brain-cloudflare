@@ -6,6 +6,7 @@ import { STATUS_PREFIX } from "../memory/status";
 import { KIND_PREFIX } from "../memory/kind";
 import { VOLATILITY_PREFIX } from "../memory/volatility";
 import { STALE_AS_OF } from "../memory/stale";
+import { RETRACTED_SOURCE_TAG } from "../tags/system";
 import { CAPSULE_SLOT_TAG_PREFIX, CAPSULE_TAG_PREFIX, PROJECT_TAG_PREFIX } from "../tags/system";
 import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX } from "../quarantine/tags";
 import { T7_TAG_PREFIXES, OWED_TO_ME_TAG } from "../tags/t7";
@@ -56,7 +57,7 @@ export const RESERVED_TAG_PREFIXES = [
 const RESERVED_TAGS = [STALE_AS_OF];
 
 /** Bookkeeping tags that mark an entry's role in compression rather than its subject. */
-const NON_TOPIC_TAGS = ["synthesized", "auto-pattern", "auto-insight", "duplicate-candidate", "contradiction-resolved", "rolled-up", "user-edited", "conflict-held", OWED_TO_ME_TAG];
+const NON_TOPIC_TAGS = ["synthesized", "auto-pattern", "auto-insight", "duplicate-candidate", "contradiction-resolved", "rolled-up", "user-edited", "conflict-held", OWED_TO_ME_TAG, RETRACTED_SOURCE_TAG];
 
 export function isReservedTag(tag: string): boolean {
   const t = tag.toLowerCase();

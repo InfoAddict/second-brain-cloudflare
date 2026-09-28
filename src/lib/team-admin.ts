@@ -588,6 +588,7 @@ export async function cleanupMemberData(
       `DELETE FROM edges WHERE source_id IN (SELECT id FROM entries WHERE workspace_id = ?) OR target_id IN (SELECT id FROM entries WHERE workspace_id = ?)`,
     ).bind(personalWid, personalWid),
     // versioning: hard-delete: member removal
+    // validity: retraction-exempt: the member's own rows go together, closers and the rows they closed alike
     env.DB.prepare(`DELETE FROM entries WHERE workspace_id = ?`).bind(personalWid),
     env.DB.prepare(`DELETE FROM entries_trash WHERE workspace_id = ?`).bind(personalWid),
     env.DB.prepare(`DELETE FROM memberships WHERE user_id = ?`).bind(userId),

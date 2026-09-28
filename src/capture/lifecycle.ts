@@ -7,11 +7,14 @@ import type { ChangeContext } from "../lib/audit";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
 import { TRASH_PURGE_ON_FORGET, FORGET_PURGE_ROWS } from "../constants";
-import { planTrash, purgeLimit, purgeTrash, readTrashCandidates, trashManyStatements, type TrashReason } from "../memory/trash";
+import { planTrash, purgeLimit, purgeTrash, readTrashCandidates, trashHookOffset, trashManyStatements, type TrashReason } from "../memory/trash";
+import {
+  auditValidity, NO_VALIDITY_CHANGE, outcomeOf, retractionHook, unretractionHook, type ValidityOutcome,
+} from "../memory/validity";
 
 export type ForgetResult =
   | { status: "not_found" }
-  | { status: "deleted"; vectorCount: number; trashed: boolean; edgesDropped: boolean };
+  | { status: "deleted"; vectorCount: number; trashed: boolean; edgesDropped: boolean; validity: ValidityOutcome };
 
 export interface ForgetOptions {
   reason: TrashReason;
@@ -43,10 +46,15 @@ export async function forgetEntry(
 
   const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
   const plan = planTrash([row], opts.budget);
-  const stmts = trashManyStatements(env, plan, { reason: opts.reason, change, now: Date.now() });
-  const results = await env.DB.batch(stmts);
+  const now = Date.now();
+  // D-RET: the rows this one closed reopen, in the same batch, before its edges and row are deleted.
+  // The dependent cascade runs for a person's forget only; bulk integration removals apply the restore rule alone (P10).
+  const hook = retractionHook(env, [{ id, workspaceId: row.workspace_id ?? "" }], () => "1", change, opts.config, now, { cascade: opts.reason === "forget" });
+  const results = await env.DB.batch(trashManyStatements(env, plan, { reason: opts.reason, change, now, hook: hook.statements }));
   // A racing deleter removed it between the read and the batch: it owns the cleanup and the audit.
   if (changesOf(results[results.length - 1]) === 0) return { status: "not_found" };
+  const done = hook.read(results, trashHookOffset(plan));
+  await auditValidity(env, change, done);
 
   try {
     if (vectorIds.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds }]);
@@ -65,7 +73,7 @@ export async function forgetEntry(
     }
   }
 
-  return { status: "deleted", vectorCount: vectorIds.length, trashed: plan.tier3.length === 0, edgesDropped: plan.tier2.length > 0 };
+  return { status: "deleted", vectorCount: vectorIds.length, trashed: plan.tier3.length === 0, edgesDropped: plan.tier2.length > 0, validity: outcomeOf(done) };
 }
 
 /**
@@ -99,6 +107,18 @@ export async function deprecateEntry(
   workspaceId: string,
   opts: { meta?: Record<string, unknown> } = {},
 ): Promise<boolean> {
+  return (await deprecateWithValidity(id, env, change, config, workspaceId, opts)).ok;
+}
+
+/** deprecateEntry, reporting what the retraction hook (D-RET) reopened. */
+export async function deprecateWithValidity(
+  id: string,
+  env: Env,
+  change: ChangeContext,
+  config: Readonly<Config>,
+  workspaceId: string,
+  opts: { meta?: Record<string, unknown> } = {},
+): Promise<{ ok: boolean; validity: ValidityOutcome }> {
   // A route's own scoped read can carry workspace_id as null/undefined for a legacy row; SQL NULL
   // never equals another NULL via `=`, so an un-normalized pin would fail this read and every
   // later write forever, even against the row's own real state. Coalesce to "" like every other
@@ -107,17 +127,21 @@ export async function deprecateEntry(
   const row = await env.DB.prepare(
     `SELECT tags, vector_ids FROM entries WHERE id = ? AND workspace_id = ?`
   ).bind(id, pinnedWorkspaceId).first() as Record<string, any> | null;
-  if (!row) return false;
+  if (!row) return { ok: false, validity: NO_VALIDITY_CHANGE };
 
   const tags: string[] = JSON.parse(row.tags ?? "[]");
   const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
+  // validity: retraction-hooked
   const deprecatedTags = withStatus(tags, "deprecated");
   // vector_ids pinned too (round 6): the ids deleted below are exactly the ones this clear removed.
   const casColumns = { workspace_id: pinnedWorkspaceId, vector_ids: row.vector_ids ?? null };
+  const now = Date.now();
+  // D-RET: lands only once this row reads as deprecated, in the same batch.
+  const hook = retractionHook(env, [{ id, workspaceId: pinnedWorkspaceId }], () => `x.tags LIKE '%"status:deprecated"%'`, change, config, now, { cascade: true });
 
   const results = await env.DB.batch([
     snapshotStatement(env, {
-      entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags: deprecatedTags, meta: opts.meta, now: Date.now(),
+      entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags: deprecatedTags, meta: opts.meta, now,
       guard: p => buildCasGuard(p, casColumns),
     }),
     (() => {
@@ -128,19 +152,22 @@ export async function deprecateEntry(
       return env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}, vector_ids = '[]' WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values());
     })(),
     pruneStatement(env, id, config.VERSION_KEEP),
+    ...hook.statements,
   ]);
-  if (changesOf(results[1]) === 0) return false;
+  if (changesOf(results[1]) === 0) return { ok: false, validity: NO_VALIDITY_CHANGE };
+  const done = hook.read(results, 3);
+  await auditValidity(env, change, done);
 
   try {
     if (vectorIds.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds }]);
   } catch (e) {
     console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e);
   }
-  return true;
+  return { ok: true, validity: outcomeOf(done) };
 }
 
 export type ApplyStatusResult =
-  | { status: "ok"; indexed: boolean }
+  | { status: "ok"; indexed: boolean; validity: ValidityOutcome }
   | { status: "not_found" }
   /** A transient embed failure while leaving "deprecated": nothing below was written, the entry
    * is unchanged. Vectorize being unreachable is NOT this — that degrades to keyword-only instead
@@ -149,8 +176,8 @@ export type ApplyStatusResult =
 
 export async function applyStatus(id: string, status: MemoryStatus, env: Env, change: ChangeContext, config: Readonly<Config>, workspaceId: string): Promise<ApplyStatusResult> {
   if (status === "deprecated") {
-    const ok = await deprecateEntry(id, env, change, config, workspaceId, { meta: { status } });
-    return ok ? { status: "ok", indexed: false } : { status: "not_found" };
+    const r = await deprecateWithValidity(id, env, change, config, workspaceId, { meta: { status } });
+    return r.ok ? { status: "ok", indexed: false, validity: r.validity } : { status: "not_found" };
   }
   // R2-3: pinned to the caller's authorized workspace, same reasoning as deprecateEntry above
   // (including its null/undefined normalization for a legacy row's column value).
@@ -167,7 +194,8 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
   // keyword-only, same as restoreEntry's own P8 fallback.
   let newVectorIdsJson: string | undefined;
   let indexed = (JSON.parse(row.vector_ids ?? "[]") as unknown[]).length > 0;
-  if (getStatus(currentTags) === "deprecated") {
+  const leavingDeprecated = getStatus(currentTags) === "deprecated";
+  if (leavingDeprecated) {
     const writeCtx: WriteContext = { workspaceId: pinnedWorkspaceId, actorId: change.actorId || OWNER_WRITE_CONTEXT.actorId };
     let stored;
     try {
@@ -187,19 +215,27 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
   const tagsIdx = p.add(JSON.stringify(nextTags));
   const idIdx = p.add(id);
   const vectorIdsSet = newVectorIdsJson !== undefined ? `, vector_ids = ${p.add(newVectorIdsJson)}` : "";
+  const now = Date.now();
+  // D-RET undone: leaving deprecated closes again what this row's retraction reopened.
+  const hook = leavingDeprecated
+    ? unretractionHook(env, [{ id, workspaceId: pinnedWorkspaceId }], () => `x.tags NOT LIKE '%"status:deprecated"%'`, change, config, now, { cascade: true })
+    : null;
   const results = await env.DB.batch([
     snapshotStatement(env, {
-      entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { status }, now: Date.now(),
+      entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { status }, now,
       guard: p2 => buildCasGuard(p2, casColumns),
     }),
     // versioning: snapshot
     env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}${vectorIdsSet} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values()),
     pruneStatement(env, id, config.VERSION_KEEP),
+    ...(hook?.statements ?? []),
   ]);
   if (changesOf(results[1]) === 0) {
     // This call's own upload never became the row's: delete it (its ids are this upload's alone).
     if (newVectorIdsJson !== undefined) await discardUpload(env, id, JSON.parse(newVectorIdsJson) as string[]);
     return { status: "not_found" };
   }
-  return { status: "ok", indexed };
+  const done = hook ? [hook.read(results, 3)] : [];
+  await auditValidity(env, change, ...done);
+  return { status: "ok", indexed, validity: outcomeOf(...done) };
 }

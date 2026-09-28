@@ -19,7 +19,7 @@ describe("forgetEntry", () => {
   it("reports deleted when the batch removed the row", async () => {
     t = await makeTrashEnv();
     t.seed("x", { vector_ids: '["v1"]' });
-    expect(await forget("x")).toEqual({ status: "deleted", vectorCount: 1, trashed: true, edgesDropped: false });
+    expect(await forget("x")).toEqual({ status: "deleted", vectorCount: 1, trashed: true, edgesDropped: false, validity: expect.any(Object) });
   });
 
   it("reports not_found, and touches no vectors, when a racing deleter got there first", async () => {

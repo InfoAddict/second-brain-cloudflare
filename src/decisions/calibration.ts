@@ -60,6 +60,8 @@ export interface CalibrationNotReady {
   line: string;
 }
 
+export type CalibrationLineKind = "rate" | "in_line" | "no_range";
+
 export interface CalibrationReady {
   ready: true;
   n: number;
@@ -76,6 +78,15 @@ export interface CalibrationReady {
   line: string;
   /** Design 7.4 item 4, present only when a topic was named. */
   topicLine: string | null;
+  /** Which of `line`'s three templates was used (18-copy-deck.md 8.6): picks the dashboard's
+   * ledger.line* key for building the Italian sentence client-side from stated/hit/n below. */
+  kind: CalibrationLineKind;
+  /** The headline bucket's own mean confidence, as a percentage — the exact number `line` cites.
+   * Null unless kind is "rate": the other two kinds have no single bucket's rate to name. */
+  stated: number | null;
+  /** The headline bucket's own hit rate, as a percentage — the exact number `line` cites.
+   * Null unless kind is "rate", for the same reason as `stated`. */
+  hit: number | null;
 }
 
 export type CalibrationResult = CalibrationNotReady | CalibrationReady;
@@ -218,6 +229,11 @@ function findTopic(scored: readonly ScoredRow[], minTopicN: number): Calibration
   return candidates[0];
 }
 
+/** "1 decision" vs "14 decisions" (18-copy-deck.md 8.6: "{n} counts need the one/other plural"). */
+function decisionWord(n: number): string {
+  return n === 1 ? "decision" : "decisions";
+}
+
 /**
  * The headline sentence cites the HEADLINE BUCKET's own n and inferred
  * count, never the overall n (18-copy-deck.md section 5.3, honesty bug): a
@@ -226,24 +242,27 @@ function findTopic(scored: readonly ScoredRow[], minTopicN: number): Calibration
  *
  * When no bucket clears CALIBRATION_MIN_BUCKET_N, there is no single rate
  * honest to show (the disclosure gate exists for exactly this), so the line
- * says so instead of picking one anyway.
+ * says so instead of picking one anyway. Wording is 18-copy-deck.md 8.6: the
+ * confidence sits in the subject ("when you were about X% sure"), not the
+ * object ("your X% calls"), which read as "X% of your calls" instead of "you,
+ * about X% sure".
  */
-function mainLine(direction: CalibrationDirection, headline: CalibrationBucket | null, overallN: number): string {
+function mainLine(direction: CalibrationDirection, headline: CalibrationBucket | null, overallN: number, minBucketN: number): string {
   if (direction === "in_line") {
-    return `So far, your confidence roughly matches how things turned out, based on ${overallN} decisions.`;
+    return `So far, how sure you were roughly matches how things turned out, based on ${overallN} ${decisionWord(overallN)}.`;
   }
   if (!headline) {
-    return `You'll see a rate once one confidence range has at least 5 decisions. You have ${overallN} so far.`;
+    return `You'll see how often you're right once ${minBucketN} decisions share a similar confidence. You have ${overallN} so far.`;
   }
-  const rate = `So far, your ${pct(headline.meanStated)}% calls came true ${pct(headline.hitRate)}% of the time, `
-    + `based on ${headline.n} decisions.`;
+  const rate = `So far, when you were about ${pct(headline.meanStated)}% sure, you were right ${pct(headline.hitRate)}% of the time, `
+    + `based on ${headline.n} ${decisionWord(headline.n)}.`;
   if (headline.nInferred === 0) return rate;
-  return `${rate} For ${headline.nInferred} of them, the confidence was estimated from your wording.`;
+  return `${rate} For ${headline.nInferred} of them, that figure was estimated from your wording.`;
 }
 
 function topicLineOf(topic: CalibrationTopic): string {
   const phrase = topic.direction === "over" ? "less often than you expected" : "more often than you expected";
-  return `On ${topic.name}, your calls have come true ${phrase} so far, based on ${topic.n} decisions.`;
+  return `On ${topic.name}, you've been right ${phrase} so far, based on ${topic.n} ${decisionWord(topic.n)}.`;
 }
 
 /** Calibration for one caller's decisions, already read and scoped by the queries module. Pure: no I/O. */
@@ -269,6 +288,10 @@ export function calibrate(rows: readonly DecisionOutcomeRow[], gates: Calibratio
   const buckets = buildBuckets(scored, gates.minBucketN);
   const headlineBucket = headlineBucketOf(buckets);
   const topic = findTopic(scored, gates.minTopicN);
+  // 18-copy-deck.md 8.6: which of mainLine's three templates fired, and the exact numbers it
+  // cites — a headline built from one bucket must expose THAT bucket's own stated/hit, not the
+  // overall ones above, so the dashboard's Italian sentence matches the English `line` exactly.
+  const kind: CalibrationLineKind = direction === "in_line" ? "in_line" : headlineBucket ? "rate" : "no_range";
 
   return {
     ready: true,
@@ -281,7 +304,10 @@ export function calibrate(rows: readonly DecisionOutcomeRow[], gates: Calibratio
     buckets,
     headlineBucket: headlineBucket?.bucket ?? null,
     topic,
-    line: mainLine(direction, headlineBucket, n),
+    line: mainLine(direction, headlineBucket, n, gates.minBucketN),
     topicLine: topic ? topicLineOf(topic) : null,
+    kind,
+    stated: kind === "rate" ? pct(headlineBucket!.meanStated) : null,
+    hit: kind === "rate" ? pct(headlineBucket!.hitRate) : null,
   };
 }

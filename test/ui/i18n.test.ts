@@ -461,7 +461,6 @@ describe("dashboard i18n", () => {
     "common.sourceChat",
     "common.sourceBrowser",
     "common.sourceDashboard",
-    "common.sourceClaudeCode",
     "integrations.nounEmail.one",
     // FORMAT ONLY — URLs the user pastes, and punctuation around a placeholder.
     "integrations.urlPlaceholder",
@@ -563,6 +562,22 @@ describe("dashboard i18n", () => {
       by: "activityEventLabel() in public/js/activity.js, keyed by the audit event name",
     },
     {
+      prefix: "history.reason",
+      by: "historyReasonLabel() in public/js/history-view.js, keyed by HISTORY_REASON_KEYS[item.reason]",
+    },
+    {
+      keys: ["status.trustedHelp", "status.unconfirmedHelp", "status.wrongHelp"],
+      by: "renderViewStatus() in public/js/memory-crud.js, keyed by STATUS_HELP_KEYS[status]",
+    },
+    {
+      keys: ["undo.done", "undo.dateRemoved"],
+      by: "resolveDue()'s undo toast in public/js/due.js, keyed by whether the resolve went to /loops/resolve or /due/clear",
+    },
+    {
+      keys: ["undo.done", "undo.notTask"],
+      by: "resolveLoop()'s undo toast in public/js/loops.js, keyed by the 'done'/'not-task' action",
+    },
+    {
       prefix: "common.source",
       by: "public/utils.js t(key), through the SOURCE_LABELS map keyed by the capture's `source` value",
     },
@@ -573,6 +588,13 @@ describe("dashboard i18n", () => {
     {
       prefix: "home.pinned",
       by: "public/js/home.js renderCaptureHint(), which picks the key into `key` and calls t(key)",
+    },
+    {
+      // NOT a prefix: showDailyLimitBanner() in public/js/daily-limit-banner.js
+      // picks exactly one of these two literals (branching on whether the 429's
+      // `limit` names a write or a read) and calls t(key).
+      keys: ["limits.bannerWrite", "limits.bannerRead"],
+      by: "showDailyLimitBanner() in public/js/daily-limit-banner.js, via t(key)",
     },
     {
       // NOT a prefix: installGuideStepKeys(platform) in
@@ -756,6 +778,7 @@ describe("dashboard i18n", () => {
       // form for this indirection is what keeps this list readable.
       "public/js/activity.js t(keys[event])",
       "public/js/board.js t(`patterns.shapes.${shape}`)",
+      "public/js/daily-limit-banner.js t(key)",
       "public/js/brief.js t(`patterns.shapes.${shape}`)",
       // Both of these resolve through captureDefaultKey() in public/utils.js, which
       // returns one of exactly four literals — home.auto{Shared,Personal}{Yours,Org}.
@@ -775,6 +798,14 @@ describe("dashboard i18n", () => {
       "public/js/memory-crud.js t(keys[event])",
       "public/js/patterns.js t(`patterns.shapes.${shape}`)",
       "public/utils.js t(key)",
+      // historyReasonLabel()'s two returns: the plain reason label, and the
+      // reasonStatus one with a {status} interpolation. Same template
+      // literal, so the scanner sees one identity twice.
+      "public/js/history-view.js t(`history.${key}`)",
+      "public/js/history-view.js t(`history.${key}`)",
+      "public/js/memory-crud.js t(STATUS_HELP_KEYS[status] || '')",
+      "public/js/due.js t(wentToLoops ? 'undo.done' : 'undo.dateRemoved')",
+      "public/js/loops.js t(action === 'done' ? 'undo.done' : 'undo.notTask')",
     ].sort();
 
     function dynamicIdentity(file: string, fn: string, snippet: string): string {
@@ -815,33 +846,25 @@ describe("dashboard i18n", () => {
     expect(actualDynamicIdentities).toEqual([...EXPECTED_DYNAMIC_CALL_SITES].sort());
   });
 
-  // T7-E (Track 7 lane E, Task 13): every key the loops direction split and
-  // the Due sheet's decision outcomes added, in en and it, with no em dash
-  // (U+2014). Scoped to just these new keys rather than a whole-catalog
-  // sweep, since this branch does not carry one yet.
-  it("every new key from the loops/due split exists in en and it, with no em dash", () => {
+  // T-0101.10 (CP): the copy pass swept every key that was ever in this
+  // allowlist, so it is empty now - any em dash in either catalog fails the
+  // build immediately rather than waiting for review.
+  const ALLOWED_EM_DASH_KEYS = new Set<string>([]);
+
+  it("has no em dash (U+2014) outside the known allowlist, in either catalog", () => {
     const { ctx } = loadI18n("en");
-    const en = flattenCatalog(vm.runInContext("I18N_EN", ctx));
-    const it = flattenCatalog(vm.runInContext("I18N_IT", ctx));
-    const NEW_KEYS = [
-      "loops.youOwe", "loops.owedToYou", "loops.received", "loops.receivedFailed",
-      "loops.doneToast", "loops.notTaskToast", "loops.receivedToast", "loops.undo",
-      "loops.undoFailed", "loops.fromName", "loops.dueDate", "loops.wasDueDate",
-      "due.reviewLabel", "due.right", "due.wrong", "due.mixed", "due.cantTellYet",
-      "due.addNote", "due.notePlaceholder", "due.outcomeFailed", "due.outcomeToastRight",
-      "due.outcomeToastWrong", "due.outcomeToastMixed", "due.undo", "due.undoFailed",
-      "due.owedToYou",
-    ];
     const EM_DASH = "—";
-    const missing: string[] = [];
-    const emDash: string[] = [];
-    for (const key of NEW_KEYS) {
-      if (typeof en[key] !== "string") missing.push(`en:${key}`);
-      else if ((en[key] as string).includes(EM_DASH)) emDash.push(`en:${key}`);
-      if (typeof it[key] !== "string") missing.push(`it:${key}`);
-      else if ((it[key] as string).includes(EM_DASH)) emDash.push(`it:${key}`);
+    const catalogs = {
+      en: flattenCatalog(vm.runInContext("I18N_EN", ctx)),
+      it: flattenCatalog(vm.runInContext("I18N_IT", ctx)),
+    };
+    const unexpected: string[] = [];
+    for (const [locale, flat] of Object.entries(catalogs)) {
+      for (const [key, value] of Object.entries(flat)) {
+        if (typeof value !== "string" || !value.includes(EM_DASH)) continue;
+        if (!ALLOWED_EM_DASH_KEYS.has(`${locale}:${key}`)) unexpected.push(`${locale}:${key}`);
+      }
     }
-    expect(missing, "keys missing from a catalog").toEqual([]);
-    expect(emDash, "em dash (U+2014) found in a new key's value").toEqual([]);
+    expect(unexpected, "new em dash outside ALLOWED_EM_DASH_KEYS").toEqual([]);
   });
 });

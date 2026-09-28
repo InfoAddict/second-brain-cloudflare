@@ -95,7 +95,7 @@ describe("captureEntry() system-job contradiction protection (D2)", () => {
     expect(userRow.contradiction_losses).toBe(0);
   });
 
-  it("a system job still deprecates its own untouched system row", async () => {
+  it("a system job still supersedes its own untouched system row", async () => {
     const env = {
       DB: d1.db as unknown as Env["DB"],
       VECTORIZE: makeVectorizeMock({
@@ -110,14 +110,16 @@ describe("captureEntry() system-job contradiction protection (D2)", () => {
     await initializeDatabase(env);
     // source "system", no actor_id (defaults to '' per db/schema.sql): a real
     // system-authored row, the way runWeeklyInsights and compressTag write one.
-    d1.seed({ id: "old-insight", content: "An older insight, now stale", createdAt: Date.now(), tags: ["auto-insight"], source: "system" });
+    d1.seed({ id: "old-insight", content: "An older insight, now stale", createdAt: Date.now() - 1000, tags: ["auto-insight"], source: "system" });
 
     const result = await captureEntry("A fresher insight", ["auto-insight"], "system", env, makeCtx(), undefined, undefined, undefined, { systemWrite: "insight", channel: "system:insight" });
 
     expect(result.status).toBe("contradiction");
     if (result.status !== "contradiction") return;
-    const deprecated = d1.rows().find(r => r.id === "old-insight")! as { tags: string; contradiction_losses: number };
-    expect(JSON.parse(deprecated.tags)).toContain("status:deprecated");
-    expect(deprecated.contradiction_losses).toBe(1);
+    // T-0089.2.1: superseded, not deprecated: its window closes and it stays as history.
+    const superseded = d1.rows().find(r => r.id === "old-insight")! as { tags: string; valid_until: number | null; contradiction_losses: number };
+    expect(JSON.parse(superseded.tags)).not.toContain("status:deprecated");
+    expect(superseded.valid_until).not.toBeNull();
+    expect(superseded.contradiction_losses).toBe(1);
   });
 });

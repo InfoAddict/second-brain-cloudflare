@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { h } from "./shared";
 import { LOCALE_CHANGE_EVENT, getLocale, initI18n, t } from "./i18n";
+import { roleFromDetailsProbe, type ConnectionRole } from "./connection-role";
 import "./style.css";
 
 type ControlView = {
@@ -48,15 +49,19 @@ type Staged = { kind: "level"; id: string } | { kind: "reset" };
  * "matching" is last because it is the only pane that can start something
  * destructive.
  */
-type SectionId = "recall" | "remember" | "ai" | "matching";
+type SectionId = "recall" | "remember" | "history" | "ai" | "matching";
 
 const SECTIONS: {
   id: SectionId;
-  labelKey: "sectionRecall" | "sectionRemember" | "sectionAi" | "sectionMatching";
+  labelKey: "sectionRecall" | "sectionRemember" | "sectionHistory" | "sectionAi" | "sectionMatching";
   controls: string[];
 }[] = [
   { id: "recall", labelKey: "sectionRecall", controls: ["recency", "variety", "connections", "detail"] },
   { id: "remember", labelKey: "sectionRemember", controls: ["duplicates", "compression"] },
+  // Trash retention and versions kept (4.0, UX-D.2). A search-log toggle
+  // (RECALL_LOG) joins this section once T-0089.5.5 lands the config key on
+  // the Worker; there is nothing to render yet, so it is not stubbed here.
+  { id: "history", labelKey: "sectionHistory", controls: ["trash", "versions"] },
   { id: "ai", labelKey: "sectionAi", controls: [] },
   { id: "matching", labelKey: "sectionMatching", controls: [] },
 ];
@@ -74,6 +79,9 @@ let stagedModel: string | null = null;
 let stagedInsightModel: string | null = null;
 let busy = false;
 let message: { text: string; kind: "ok" | "error" } | null = null;
+/** Determined once at boot (4.0, UX-D.2). PATCH /config is admin-only on the
+ * Worker, so a member can see History and trash but not edit it. */
+let connectionRole: ConnectionRole = "owner";
 
 /** Tauri hands string errors through as strings and everything else as objects. */
 function errorText(e: unknown): string {
@@ -973,7 +981,13 @@ function migrationCard(): HTMLElement {
   return card;
 }
 
-function controlCard(c: ControlView): HTMLElement {
+/**
+ * `readOnly` is separate from `locked()`: locked is a temporary, whole-window
+ * state (a save or rebuild in flight), while read-only is per-control and
+ * durable for the session - a member can see History and trash the entire
+ * time this window is open, never just while something else is busy.
+ */
+function controlCard(c: ControlView, readOnly = false): HTMLElement {
   // Typed so the dotted keys below still satisfy t()'s Path type rather
   // than widening to a bare string.
   const base: `settingsPanel.${string}` = `settingsPanel.${c.id}`;
@@ -995,19 +1009,26 @@ function controlCard(c: ControlView): HTMLElement {
 
   const group = h("div", { class: "settings-levels", role: "radiogroup" });
   group.setAttribute("aria-label", t(`${base}.label`));
+  // Screen readers get this from the group; a sighted member gets it from the
+  // banner above the section (render()) plus the non-interactive pill style
+  // below - the pointer cursor a disabled <input> leaves on its label was the
+  // part that still read as clickable.
+  if (readOnly) group.setAttribute("aria-readonly", "true");
 
   for (const levelId of c.levels) {
     const input = h("input", { type: "radio", name: `sb-${c.id}`, value: levelId });
     (input as HTMLInputElement).checked = shown === levelId;
-    (input as HTMLInputElement).disabled = locked();
+    (input as HTMLInputElement).disabled = locked() || readOnly;
     input.addEventListener("change", () => stage(c.id, { kind: "level", id: levelId }, c));
-    const label = h("label", { class: "settings-level" }, [
+    const label = h("label", { class: `settings-level${readOnly ? " settings-level-readonly" : ""}` }, [
       input,
       t(`${base}.levels.${levelId}.name`),
     ]);
-    // Hovering previews that level's notice; leaving restores the shown one.
-    label.addEventListener("mouseenter", () => paint(levelId));
-    label.addEventListener("mouseleave", () => paint(shown));
+    if (!readOnly) {
+      // Hovering previews that level's notice; leaving restores the shown one.
+      label.addEventListener("mouseenter", () => paint(levelId));
+      label.addEventListener("mouseleave", () => paint(shown));
+    }
     group.append(label);
   }
   card.append(group);
@@ -1024,13 +1045,19 @@ function controlCard(c: ControlView): HTMLElement {
     card.append(h("div", { class: "settings-forward-note" }, [`ⓘ ${t(`${base}.note`)}`]));
   }
 
-  const reset = h("button", { class: "btn-secondary settings-reset", type: "button" }, [
-    t("settingsPanel.reset"),
-  ]);
-  // Reset is itself staged, so it can be cancelled like any other edit.
-  (reset as HTMLButtonElement).disabled = locked() || shown === c.defaultLevel;
-  reset.addEventListener("click", () => stage(c.id, { kind: "reset" }, c));
-  card.append(reset);
+  // Hidden, not disabled, in both cases it has nothing to do: a read-only
+  // member has nothing on this card to change, and a value already at its
+  // default has nothing to reset. An inert button under "The default. ..."
+  // is a control with no purpose, not a clearly unavailable one.
+  if (!readOnly && shown !== c.defaultLevel) {
+    const reset = h("button", { class: "btn-secondary settings-reset", type: "button" }, [
+      t("settingsPanel.reset"),
+    ]);
+    // Reset is itself staged, so it can be cancelled like any other edit.
+    (reset as HTMLButtonElement).disabled = locked();
+    reset.addEventListener("click", () => stage(c.id, { kind: "reset" }, c));
+    card.append(reset);
+  }
 
   return card;
 }
@@ -1175,23 +1202,41 @@ function render(): void {
   pane.append(
     h("h2", { class: "pane-title" }, [t(`settingsPanel.${section.labelKey}`)]),
     h("p", { class: "settings-lede" }, [
-      // The shared lede promises "applies to your next search", which is not
-      // what a rebuild does. That pane says what it actually does.
-      active === "matching" ? t("settingsPanel.migration.lede") : t("settingsPanel.lede"),
+      // The shared lede promises "applies to your next search", which is
+      // true for neither of these panes: a rebuild has its own sequence, and
+      // trash length and versions kept take effect on different schedules
+      // (tonight's cleanup vs. a memory's next edit) - so each states its own.
+      active === "matching"
+        ? t("settingsPanel.migration.lede")
+        : active === "history"
+          ? t("settingsPanel.historyLede")
+          : t("settingsPanel.lede"),
     ]),
   );
+
+  // Members can see History and trash but PATCH /config is admin-only on the
+  // Worker, so their controls render read-only with a line saying why.
+  const historyReadOnly = section.id === "history" && connectionRole === "member";
+  if (historyReadOnly) {
+    pane.append(h("p", { class: "settings-notice" }, [t("settingsPanel.historyReadOnly")]));
+  }
 
   const byId = new Map(saved.controls.map(c => [c.id, c]));
   for (const id of section.controls) {
     const c = byId.get(id);
     // Skip silently rather than throwing: a Worker running an older version
     // may not expose every control yet.
-    if (c) pane.append(controlCard(c));
+    if (c) pane.append(controlCard(c, historyReadOnly));
   }
   if (active === "ai") pane.append(modelCard(saved), insightModelCard(saved));
   if (active === "matching") pane.append(migrationCard());
 
-  app.append(h("div", { class: "panel" }, [rail, pane]), actionBar());
+  // A member has nothing to save on a fully read-only section. The bar stays
+  // if something IS staged (on another section they can edit), since it
+  // would otherwise hide a real pending change - "nothing to save" only
+  // holds when that is actually true.
+  const nothingToSaveHere = historyReadOnly && !isDirty();
+  app.append(h("div", { class: "panel" }, [rail, pane]), ...(nothingToSaveHere ? [] : [actionBar()]));
   // Re-render replaces the whole tree; without this, staging an edit near the
   // bottom would jump the view back to the top.
   window.scrollTo({ top: scroll });
@@ -1214,6 +1259,16 @@ async function boot(): Promise<void> {
   app.replaceChildren(h("p", { class: "settings-lede" }, [t("settingsPanel.saving")]));
   try {
     saved = await invoke<SettingsView>("get_brain_settings");
+    try {
+      const details = await invoke<{ teamMode: boolean }>("get_connection_details");
+      const probe = details.teamMode ? await invoke<unknown>("connection_role").catch(() => null) : null;
+      connectionRole = roleFromDetailsProbe(details.teamMode, probe);
+    } catch {
+      // Role could not be determined. Read-only is the safer wrong guess:
+      // hiding an edit control from someone allowed to use it is a smaller
+      // mistake than letting a member stage a change the Worker will 403.
+      connectionRole = "member";
+    }
     render();
   } catch (e) {
     app.replaceChildren(

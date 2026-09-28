@@ -164,6 +164,27 @@ describe("the due sheet", () => {
     expect(html).toContain("resolveDue('e1', 'clear', false");
   });
 
+  // Track 7 lane B stores a decision row's bare label, without the "Review:"
+  // prefix it used to bake into the stored text; the sheet supplies its own
+  // localized cue instead.
+  it("shows a review cue for a row tagged ledger:decision", async () => {
+    const ctx = load([
+      dueResponse({
+        overdue: [{ id: "e1", content: "Postgres or SQLite for the analytics store", label: "Postgres or SQLite for the analytics store", tags: ["ledger:decision"], when_at: Date.UTC(2027, 0, 15) }],
+      }),
+    ]);
+    await ctx.loadDueQueue();
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toContain('<span class="due-review-cue">Review</span>');
+    expect(html).not.toContain("Review: Postgres");
+  });
+
+  it("shows no review cue for a plain due row", async () => {
+    const ctx = load([dueResponse()]);
+    await ctx.loadDueQueue();
+    expect(ctx.__els.get("due-list").innerHTML).not.toContain("due-review-cue");
+  });
+
   it("shows full content and tags only for the highlighted (deep-linked) row", async () => {
     const ctx = load([dueResponse({
       overdue: [

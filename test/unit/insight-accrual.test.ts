@@ -75,6 +75,7 @@ describe("runInsightAccrual()", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     sqlite.seed({
       id: "seed-1", content: SEED_TEXT, createdAt: NOW,
       tags: ["pricing"], source: "claude-desktop",
@@ -261,6 +262,7 @@ describe("runInsightAccrual()", () => {
   it("writes the cursor as the newest examined seed's own timestamp, not the wall clock", async () => {
     sqlite.close();
     sqlite = makeSqliteD1();
+    sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     const earlier = NOW - 2 * DAY;
     const later = NOW - DAY;
     sqlite.seed({
@@ -450,6 +452,7 @@ describe("runInsightAccrual()", () => {
       // subset, on that path too.
       sqlite.close();
       sqlite = makeSqliteD1();
+      sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
       sqlite.seed({
         id: "too-short", content: "short.", createdAt: NOW,
         tags: ["pricing"], source: "claude-desktop", vectorIds: ["vec-too-short"], importanceScore: 0,
@@ -461,6 +464,7 @@ describe("runInsightAccrual()", () => {
     it("is zero when the window itself is empty", async () => {
       sqlite.close();
       sqlite = makeSqliteD1();
+      sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
       const summary = await runInsightAccrual(makeEnv(sqlite, []), ctx);
       expect(summary).toEqual({ seedsExamined: 0 });
     });

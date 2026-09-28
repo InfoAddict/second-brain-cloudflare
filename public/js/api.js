@@ -6,20 +6,6 @@ let TEAM_MODE = false
 /** The composer's capture target: null = Auto (server-side member/org default decides). */
 let homeLayer = null
 
-async function apiMcp(toolName, args) {
-  const res = await fetch(`${WORKER_URL}/mcp`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Authorization: `Bearer ${AUTH_TOKEN}` },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: toolName, arguments: args } }),
-  })
-  const text = await res.text()
-  const match = text.match(/data: ({.+})/s)
-  if (!match) throw new Error(t('common.invalidResponse'))
-  const json = JSON.parse(match[1])
-  if (json.error) throw new Error(json.error.message || t('common.mcpError'))
-  return json.result?.content?.[0]?.text ?? ''
-}
-
 async function apiCapture(content, tags, source, workspace, project) {
   const res = await fetch(`${WORKER_URL}/capture`, {
     method: 'POST',

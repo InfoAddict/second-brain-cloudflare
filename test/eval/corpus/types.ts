@@ -72,6 +72,8 @@ export interface CorpusSpec {
   queries: GoldenQuery[];
   /** sha256 of each golden-data file the spec was built from; copied into every report. Absent for corpora with no committed data. */
   dataFingerprint?: Record<string, string>;
+  /** Absolute bars gate.ts enforces mechanically (T-0089.2.6): fail if the candidate's mean for `scope` (a delta row name, e.g. "temporal [subset:control-not-asof]") is below `min` on `metric`. */
+  floors?: { scope: string; metric: "recall10" | "mrr10"; min: number }[];
 }
 
 export function needleToEntry(row: NeedleRow): CorpusEntry {

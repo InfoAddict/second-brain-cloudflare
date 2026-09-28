@@ -211,4 +211,28 @@ describe("REST and MCP parity", () => {
 
     expect(await rowTags("p1")).toEqual(await rowTags("p2"));
   });
+
+  it("POST /decisions/outcome returns review_at: null and reviews_done: false for a definitive outcome", async () => {
+    seedRow("p3", { tags: ["ledger:decision"] });
+    const res = await worker.fetch(req("POST", "/decisions/outcome", { body: { id: "p3", result: "right" } }), env, ctx as ExecutionContext);
+    const body = await res.json() as any;
+    expect(body.review_at).toBeNull();
+    expect(body.reviews_done).toBe(false);
+  });
+
+  it("POST /decisions/outcome returns a review_at date while 'unknown' keeps re-arming", async () => {
+    seedRow("p4", { tags: ["ledger:decision"] });
+    const res = await worker.fetch(req("POST", "/decisions/outcome", { body: { id: "p4", result: "unknown" } }), env, ctx as ExecutionContext);
+    const body = await res.json() as any;
+    expect(typeof body.review_at).toBe("number");
+    expect(body.reviews_done).toBe(false);
+  });
+
+  it("POST /decisions/outcome returns review_at: null and reviews_done: true once re-arming stops", async () => {
+    seedRow("p5", { tags: ["ledger:decision", "outcome:unknown", "review-rearms:2"] });
+    const res = await worker.fetch(req("POST", "/decisions/outcome", { body: { id: "p5", result: "unknown" } }), env, ctx as ExecutionContext);
+    const body = await res.json() as any;
+    expect(body.review_at).toBeNull();
+    expect(body.reviews_done).toBe(true);
+  });
 });

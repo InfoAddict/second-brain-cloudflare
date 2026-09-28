@@ -28,7 +28,7 @@ export class UsageError extends Error {}
 interface Common { llmTags: LlmTagsArm; corpus: string; d1: "sqlite" | "workerd"; isolate: "warm" | "cold"; model: string; hash: boolean; limit?: number; json?: string }
 export type CliCommand =
   | ({ kind: "run"; variant: string } & Common)
-  | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; targetGaps: string[]; allowUnmeasuredRows: boolean; excludeNeedles: string[] } & Common)
+  | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; targetGaps: string[]; targetSubsets: string[]; allowUnmeasuredRows: boolean; excludeNeedles: string[] } & Common)
   | ({ kind: "prepare"; variant: string; maxNeurons: number; concurrency: number; excludeNeedles: string[] } & Common)
   | ({ kind: "lock"; acceptDataChange?: string } & Common)
   | ({ kind: "export-cache" } & Common)
@@ -116,8 +116,9 @@ export function parseCli(argv: string[]): CliCommand {
     const target = (values.target ?? "").split(",").filter(Boolean);
     for (const t of target) if (!(ALL_QUERY_CATEGORIES as readonly string[]).includes(t)) throw new UsageError(`--target: unknown category "${t}"`);
     const targetGaps = (values["target-gaps"] ?? "").split(",").map(x => x.trim()).filter(Boolean);
+    const targetSubsets = (values["target-subsets"] ?? "").split(",").map(x => x.trim()).filter(Boolean);
     const excludeNeedles = parseExcludeNeedles(values["exclude-needles"]);
-    return { kind: "compare", variants: [parts[0], parts[1]], target: target as QueryCategory[], targetGaps, allowUnmeasuredRows: values["allow-unmeasured-rows"]!, excludeNeedles, ...common };
+    return { kind: "compare", variants: [parts[0], parts[1]], target: target as QueryCategory[], targetGaps, targetSubsets, allowUnmeasuredRows: values["allow-unmeasured-rows"]!, excludeNeedles, ...common };
   }
   if (values.variant) return { kind: "run", variant: values.variant, ...common };
   throw new UsageError("nothing to do: pass --variant, --compare, prepare, lock, export-cache, stamp-cache, or --list");
@@ -131,7 +132,7 @@ function parse(argv: string[]) {
       variant: { type: "string" }, compare: { type: "string" }, corpus: { type: "string", default: "core-1k" },
       json: { type: "string" }, d1: { type: "string", default: "sqlite" }, isolate: { type: "string", default: "warm" },
       "embedding-model": { type: "string" }, "llm-tags": { type: "string", default: "stand-in" }, model: { type: "string" }, "producer-from": { type: "string" }, layer: { type: "string", default: "local" }, "i-recorded-this": { type: "boolean", default: false }, "hash-embeddings": { type: "boolean", default: false },
-      limit: { type: "string" }, target: { type: "string" }, "exclude-needles": { type: "string" }, "target-gaps": { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
+      limit: { type: "string" }, target: { type: "string" }, "exclude-needles": { type: "string" }, "target-gaps": { type: "string" }, "target-subsets": { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
       "max-neurons": { type: "string", default: "4000" }, concurrency: { type: "string", default: "8" }, list: { type: "boolean", default: false }, "accept-data-change": { type: "string" },
     },
   });
@@ -357,7 +358,7 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
   const declared = (() => { try { return getVariant(candidate.variant); } catch { return undefined; } })();
   const targets = cmd.target.length ? cmd.target : [...(declared?.targetCategories ?? [])];
   const targetGaps = cmd.targetGaps.length ? cmd.targetGaps : [...(declared?.targetGaps ?? [])];
-  const gate = evaluateGate(baseline, candidate, { targetCategories: targets, targetGaps, allowUnmeasuredRowsRead: cmd.allowUnmeasuredRows });
+  const gate = evaluateGate(baseline, candidate, { targetCategories: targets, targetGaps, targetSubsets: cmd.targetSubsets, floors: spec.floors, allowUnmeasuredRowsRead: cmd.allowUnmeasuredRows });
   console.log(`${describeVerdict(gate)}\n${formatGate(gate)}`);
   const without = cmd.excludeNeedles.length ? await runWithoutNeedles(cmd, spec) : undefined;
   if (without) console.log(`\n${without.text}`);

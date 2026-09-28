@@ -42,7 +42,11 @@ function allSourceFiles(dir: string): string[] {
  */
 const HYDRATION_EXEMPTION = {
   file: "src/recall/search.ts",
-  marker: "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN",
+  // MOVED (T-0089.2.1): valid_from, valid_until and the superseded_by
+  // subquery now sit between actor_id and FROM entries in this literal, so
+  // the marker stops short of "FROM entries WHERE id IN" rather than
+  // spanning it.
+  marker: "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id, valid_from, valid_until",
 };
 
 /**

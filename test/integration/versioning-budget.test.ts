@@ -135,7 +135,7 @@ describe("status, resolve actions: baseline + 1 KV", () => {
     const cfg = await resolveConfig(t.env); // the route/MCP layer's own +1 KV, done once here, outside the ledger below
     t.sqlite.issued.length = 0;
     const result = await applyStatus("e1", "canonical", t.env, change(), cfg, t.roots.ownerPersonalWorkspaceId);
-    expect(result).toEqual({ status: "ok", indexed: false });
+    expect(result).toEqual({ status: "ok", indexed: false, validity: { restored: [], reclosed: [], flagged: 0, unflagged: 0 } });
     expect(t.sqlite.issued).toHaveLength(2);
     expect(t.sqlite.issued[1]).toBe("BATCH");
   });

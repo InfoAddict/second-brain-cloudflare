@@ -181,6 +181,9 @@ export interface SqliteD1 {
     vectorIds?: string[];
     /** Drives the compression and resurfacing rules; defaults to 0. */
     importanceScore?: number;
+    /** Stated validity window (T-0089.2.1); both default to NULL (open, since created_at). */
+    validFrom?: number | null;
+    validUntil?: number | null;
   }): void;
   /** Every row, for assertions about what the code under test wrote. */
   rows(): Record<string, unknown>[];
@@ -378,7 +381,20 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
       return (raw.prepare(`SELECT name FROM pragma_table_info('entries')`).all() as { name: string }[])
         .map(r => r.name);
     },
-    seed({ id, content, createdAt, tags = [], source = "api", vectorIds = [], importanceScore = 0 }) {
+    seed({ id, content, createdAt, tags = [], source = "api", vectorIds = [], importanceScore = 0, validFrom = null, validUntil = null }) {
+      // Some callers use makeSqliteD1() straight off db/schema.sql's CREATE, with
+      // no initializeDatabase() migration run — validity, like every other
+      // runtime-ALTERed column (e.g. when_label), exists only after that runs.
+      const hasValidity = raw.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'valid_from'`).get() !== undefined;
+      if (hasValidity) {
+        raw
+          .prepare(
+            `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, recall_count, importance_score, valid_from, valid_until)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+          )
+          .run(id, content, JSON.stringify(tags), source, createdAt, JSON.stringify(vectorIds), importanceScore, validFrom, validUntil);
+        return;
+      }
       raw
         .prepare(
           `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, recall_count, importance_score)

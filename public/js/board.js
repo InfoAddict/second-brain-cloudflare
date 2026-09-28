@@ -1117,6 +1117,7 @@ async function renderRailNote() {
   const indexOk = !!(body.vectorize && body.vectorize.ok)
   el.innerHTML = `<b>${escHtml(t('board.railVersion', { v: body.version || '' }))}</b>${escHtml(indexOk ? t('board.railIndexOk') : t('board.railIndexDegraded'))}` +
     (hostLine ? `<br>${escHtml(hostLine)}` : '')
+  return body
 }
 
 async function renderBoard(brief) {
@@ -1155,5 +1156,7 @@ async function renderBoard(brief) {
     try { await fn(board, brief) } catch (e) { console.error('board panel failed:', e) }
   }
   if (token !== _boardRenderToken) return
-  try { await renderRailNote() } catch (e) { console.error('rail note failed:', e) }
+  let health
+  try { health = await renderRailNote() } catch (e) { console.error('rail note failed:', e) }
+  if (typeof renderWhatsNewLine === 'function') renderWhatsNewLine(health)
 }

@@ -9,6 +9,7 @@ import type { ScopeClause } from "../lib/scope";
 import { CONFIDENCE_TAG_PREFIX, CONFIDENCE_SOURCE_TAG_PREFIX, LEDGER_DECISION_TAG, type ConfidenceSource } from "./capture";
 import type { DecisionOutcome, DecisionOutcomeRow } from "./calibration";
 import { REVIEW_REARMS_TAG_PREFIX } from "../tags/t7";
+import { currentValidityAt } from "../memory/validity";
 
 // Same instr(lower(tags), ...) shape idx_entries_ledger is defined on (Task 6,
 // db/schema.sql / src/db/init.ts), so the read stays index-eligible once that
@@ -97,9 +98,13 @@ function decisionStateFilter(state: DecisionState): string {
  * a window function only ever counts the rows this statement itself returns, so a page past the
  * last match returns zero rows and the window count would report 0 even though real rows exist
  * on an earlier page — a paging client reads that as "no data" (review finding, MINOR 3).
+ *
+ * validity: current: a decision a later capture superseded is not part of the caller's live log
+ * (T-0089.2.1, 5.5) — unlike calibrationQuery, which deliberately scores every decision that ever
+ * had an outcome, including a replaced one, because calibration is about historical accuracy.
  */
 export function decisionsListQuery(
-  scope: ScopeClause, actionable: ScopeClause, opts: { state: DecisionState; limit: number; offset: number },
+  scope: ScopeClause, actionable: ScopeClause, opts: { state: DecisionState; limit: number; offset: number }, now: number,
 ): SqlWithBindings {
   const bounded = boundedScope(scope);
   // scope-exempt: by-id: correlated to entries.id, which the outer WHERE below already scopes —
@@ -108,22 +113,22 @@ export function decisionsListQuery(
       EXISTS(SELECT 1 FROM entry_versions v WHERE v.entry_id = entries.id) AS edited_since_recorded
     FROM entries
     WHERE ${LEDGER_INDEXED} AND tags NOT LIKE '%"status:deprecated"%' ${decisionStateFilter(opts.state)}
-      AND ${bounded.clause} AND ${actionable.clause}
+      AND ${bounded.clause} AND ${actionable.clause} AND ${currentValidityAt("", "?")}
     ORDER BY created_at DESC, id DESC
     LIMIT ? OFFSET ?`;
-  return { sql, bindings: [...bounded.bindings, ...actionable.bindings, opts.limit, opts.offset] };
+  return { sql, bindings: [...bounded.bindings, ...actionable.bindings, now, opts.limit, opts.offset] };
 }
 
 /** The true total for decisionsListQuery's own filter, independent of paging (MINOR 3). */
-export function decisionsCountQuery(scope: ScopeClause, actionable: ScopeClause, state: DecisionState): SqlWithBindings {
+export function decisionsCountQuery(scope: ScopeClause, actionable: ScopeClause, state: DecisionState, now: number): SqlWithBindings {
   const bounded = boundedScope(scope);
   // scope-checked: bounded rewrites scope's IN-list into a json_each form when it has more than
   // one binding (same helper and reasoning as calibrationQuery above); both shapes still scope
   // by workspace_id, only the placeholder count changes.
   const sql = `SELECT COUNT(*) AS total FROM entries
     WHERE ${LEDGER_INDEXED} AND tags NOT LIKE '%"status:deprecated"%' ${decisionStateFilter(state)}
-      AND ${bounded.clause} AND ${actionable.clause}`;
-  return { sql, bindings: [...bounded.bindings, ...actionable.bindings] };
+      AND ${bounded.clause} AND ${actionable.clause} AND ${currentValidityAt("", "?")}`;
+  return { sql, bindings: [...bounded.bindings, ...actionable.bindings, now] };
 }
 
 export interface DecisionListRow {

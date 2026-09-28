@@ -119,7 +119,7 @@ describe("structural: every edge insert checks endpoint readability in the same 
   });
 
   it("finds the reviewed edge-insert sites", () => {
-    expect(sites.map((s) => s.file).sort()).toEqual(["entries/import.ts", "graph/edges.ts", "graph/edges.ts", "memory/trash.ts"]);
+    expect(sites.map((s) => s.file).sort()).toEqual(["entries/import.ts", "graph/edges.ts", "graph/edges.ts", "memory/trash.ts", "memory/validity.ts", "memory/validity.ts"]);
   });
 
   it("each one carries the shared readability guard", () => {
@@ -132,7 +132,9 @@ describe("structural: every edge insert checks endpoint readability in the same 
       for (const m of f.src.matchAll(/(?<!function )\b(?:createEdge|edgeInsertStatement)\(([^;]*?)\},\s*env\s*,?\s*\)/g)) calls.push({ file: f.file, args: m[1] });
     }
     const explicit = new Set(["routes/graph.ts", "mcp/server.ts"]);
-    expect(calls.length).toBeGreaterThanOrEqual(7);
+    // MOVED 7 -> 6 (T-0089.2.1): capture's supersedes edge now rides in the supersede batch
+    // (src/memory/validity.ts supersedeStatements), which carries the same readability guard.
+    expect(calls.length).toBeGreaterThanOrEqual(6);
     for (const c of calls) {
       if (explicit.has(c.file)) expect(c.args, c.file).toMatch(/readableWorkspaceIds: identity \? readableWorkspaces\(identity\)|readableWorkspaceIds: readableWorkspaces\(auth\)/);
       else expect(c.args, `${c.file}: ${c.args.slice(0, 120)}`).toMatch(/\.\.\.sameWorkspaceEdge\(/);

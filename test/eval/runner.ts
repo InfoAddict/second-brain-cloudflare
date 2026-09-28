@@ -17,6 +17,15 @@ import type { VariantSpec } from "./variants";
 /** Metrics need the top 10; recall@5 is read from its first five (Decision 9). */
 export const EVAL_TOP_K = 10;
 
+/**
+ * What Track 2's `asOf` recall param will receive (T-0089.2.6), once B3 adds it to RecallInternalOptions: only a
+ * query that carries asOfParam gets one. asOf (the pre-filter, subset:prefiltered only) is unrelated and untouched.
+ * A pure function so it is unit-testable without a live recall call, ahead of the param existing to receive it.
+ */
+export function asOfFor(q: GoldenQuery): number | undefined {
+  return q.asOfParam;
+}
+
 export { RUNNER_VERSION };
 
 /** Outcomes a healthy reranker step may end in; anything else means the model did not run when it should have. */
@@ -151,8 +160,12 @@ export async function runVariant(o: {
       const restoreQueryClock = q.asOf === undefined ? undefined : freezeClock(q.asOf);
       activeQueryId = q.id;
       try {
+        // Not yet a field on recallEntries' params (RecallInternalOptions gains `asOf` in B3): building it through a
+        // variable, not an inline literal, means this compiles today and starts working the moment B3 lands, with
+        // no call-site change. Until then it is inert extra data recallEntries does not look at.
+        const params = { query: q.text, topK: o.topK ?? EVAL_TOP_K, hops: q.hops, synthesize: false, ...(q.asOf !== undefined && { before: q.asOf + 1 }), ...(asOfFor(q) !== undefined && { asOf: asOfFor(q) }) };
         result = await corpus.replay.scope(q.id, () => recallEntries(
-          { query: q.text, topK: o.topK ?? EVAL_TOP_K, hops: q.hops, synthesize: false, ...(q.asOf !== undefined && { before: q.asOf + 1 }) },
+          params,
           env, ctx, cfg,
           { ...variant.internal, identity: IDENTITIES[q.viewer], workspaceFilter: q.layer, diagnostics },
         ));
@@ -197,7 +210,7 @@ export async function runVariant(o: {
         results.push({
           ...base,
           rankedIds,
-          metrics: scoreQuery(rankedIds, q.gold),
+          metrics: scoreQuery(rankedIds, q.gold, q.forbidden),
           cost: {
             d1Statements: ops.d1Statements, d1RowsRead: ops.d1RowsRead, aiCalls: ops.aiCalls, embeddingCalls: ops.embeddingCalls,
             vectorizeQueries: ops.vectorizeQueries, kvReads: ops.kvReads, neurons: calls.reduce((s, c) => s + c.neurons, 0), neuronsEstimated: calls.some(c => c.neuronsEstimated), wallMs,
@@ -218,7 +231,7 @@ export async function runVariant(o: {
         if (rankedIds.length && intercepted === 0) throw new RecallCountDrift(q.id);
       } catch (e) {
         if (e instanceof RecallCountDrift) throw e;
-        results.push({ ...base, rankedIds: [], metrics: scoreQuery([], q.gold), cost: ZERO_COST, leaked: [], error: e instanceof Error ? e.message : String(e) });
+        results.push({ ...base, rankedIds: [], metrics: scoreQuery([], q.gold, q.forbidden), cost: ZERO_COST, leaked: [], error: e instanceof Error ? e.message : String(e) });
       }
       o.onProgress?.(results.length, o.queries.length);
     }

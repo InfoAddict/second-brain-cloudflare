@@ -15,6 +15,13 @@ export interface OutcomeUpdate {
   nextWhen: { when_at: number | null; when_kind: string | null; when_source: string | null };
   /** The reply when no note was given, or the note appended without incident. */
   reply: string;
+  /** Structured next-review data for POST /decisions/outcome (lane E's dashboard), independent of
+   * `reply`'s English wording, which MCP and REST callers keep reading as-is. Set when "can't tell
+   * yet" (unknown) moves the review date; null once a definitive outcome lands or re-arming stops. */
+  reviewAt: number | null;
+  /** True only when re-arming has stopped (the third "unknown" call) — distinct from a definitive
+   * right/wrong/mixed outcome, which is also reviewAt: null but was never asking in the first place. */
+  reviewsDone: boolean;
 }
 
 /** True when the row carries the ledger:decision marker — the outcome/received/stop_standing precondition. */
@@ -41,6 +48,8 @@ export function buildOutcomeUpdate(
       nextTags: [...withoutOutcomeAndRearms, `${OUTCOME_TAG_PREFIX}${result}`],
       nextWhen: { when_at: null, when_kind: null, when_source: "cleared" },
       reply: `Recorded: ${shortDecision(content)} went ${result}. Undo is available.`,
+      reviewAt: null,
+      reviewsDone: false,
     };
   }
 
@@ -51,12 +60,16 @@ export function buildOutcomeUpdate(
       nextTags: [...withoutOutcomeAndRearms, `${OUTCOME_TAG_PREFIX}unknown`, `${REVIEW_REARMS_TAG_PREFIX}${n + 1}`],
       nextWhen: { when_at: at, when_kind: "due", when_source: "explicit" },
       reply: `OK, I'll ask again around ${formatMonthDayYear(at, cfg.timezone)}.`,
+      reviewAt: at,
+      reviewsDone: false,
     };
   }
   return {
     nextTags: [...withoutOutcomeAndRearms, `${OUTCOME_TAG_PREFIX}unknown`],
     nextWhen: { when_at: null, when_kind: null, when_source: "cleared" },
     reply: "OK, no more reviews for this one.",
+    reviewAt: null,
+    reviewsDone: true,
   };
 }
 

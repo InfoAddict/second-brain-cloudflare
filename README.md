@@ -82,13 +82,13 @@ Search now finds the hard things: exact names, ticket numbers, versions, and phr
 | `brief` | Show due items, open commitments, stale memories, and pending insights |
 | `resolve` | Settle one tracked task, date, insight, or stale fact |
 | `digest` | Read the latest existing automatic summary for a project or tag |
-| `history` | Read a memory’s change events and supersedes links |
+| `history` | Read a memory's recorded changes, with the text before each one |
 | `list_recent` | Browse recently saved memories |
 | `list_teams` | List shared teams you belong to (names and ids). In v3.0.0 this is one team; used by MCP clients for future multi-team support |
 | `list_projects` | List projects in scope, with display names, descriptions, and memory counts |
 | `get_prompt_capsule` | Read a deterministic core or project context projection for a gateway-controlled prompt prefix |
 | `get` | Read one memory by ID |
-| `forget` | Permanently delete a memory |
+| `forget` | Move a memory to the trash (undo brings it back) |
 | `undo` | Reverse the most recent change to a memory, or restore one from the trash |
 | `set_status` | Mark a memory `canonical`, `draft`, or `deprecated` |
 | `link` | Add an explicit relationship between two memories |
@@ -250,6 +250,8 @@ https://YOUR-WORKER-URL/mcp
 ```
 
 Use OAuth where the client supports it, or an `Authorization: Bearer <token>` header for static clients. Query-string token authentication was removed in v3 because URLs can leak through browser history and logs.
+
+Add `?client=<name>` to the MCP URL so the dashboard can name the tool that made each change.
 
 Having connection issues? See [Connect to AI Clients → Troubleshooting](https://github.com/rahilp/second-brain-cloudflare/wiki/Connect-to-AI-Clients#troubleshooting) (Opera warnings, Cursor OAuth, Claude Code tool visibility).
 

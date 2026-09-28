@@ -138,7 +138,7 @@ describe("a shared brain: every tool says the same thing about a memory", () => 
     const member = (await resolveIdentityFromToken(bob.token, env))!;
     await withClient(member, async (client) => {
       expect(textOf(await client.callTool({ name: "get", arguments: { id: "legacy" } })))
-        .toContain("No entry found");
+        .toContain("No memory found");
     });
   });
 

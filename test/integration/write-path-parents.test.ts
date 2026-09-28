@@ -37,6 +37,9 @@ const longNote = (tag: string) =>
 
 function makeEnv() {
   const d1 = makeSqliteD1();
+  // Validity columns are runtime ALTERs (src/db/init.ts), not in schema.sql; the duplicate check reads valid_until.
+  d1.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+  d1.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   const vectorize = new ExactVectorize({ dimensions: DIMS });
   const embeds: string[] = [];
   const env = {
