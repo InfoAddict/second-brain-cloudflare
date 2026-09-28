@@ -315,10 +315,24 @@ CREATE TABLE IF NOT EXISTS entries_trash (
   deleted_at   INTEGER NOT NULL,
   deleted_by   TEXT NOT NULL DEFAULT '',
   channel      TEXT NOT NULL DEFAULT '',
-  reason       TEXT NOT NULL DEFAULT 'forget' -- forget | mirror | disconnect
+  reason       TEXT NOT NULL DEFAULT 'forget', -- forget | mirror | disconnect
+  nonce        TEXT NOT NULL DEFAULT ''        -- per-row identity (adv-final MAJOR 1): a
+                                                -- purge can free `id` and a fresh forget can
+                                                -- reuse it, with SQLite reusing its own rowid
+                                                -- on top; every trash mutation pins to this,
+                                                -- not to id (or rowid) alone. '' means this row
+                                                -- predates the column: no mutation may treat an
+                                                -- empty nonce as a match, only as "conflict".
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_trash_deleted ON entries_trash(deleted_at);
+
+-- R5 (budget audit, MINOR, 20-free-tier-ledger.md): listTrash's WHERE clause (src/memory/
+-- trash-list.ts) scopes by workspace_id and orders by deleted_at DESC. Without this, the only
+-- index available (deleted_at above) makes SQLite walk the whole table in deleted_at order,
+-- filtering every row for a workspace match — 1,193 rows read for one 50-row page at 2,000 trash
+-- rows, 5% visible. This lets it seek directly to the reader's own readable workspaces instead.
+CREATE INDEX IF NOT EXISTS idx_entries_trash_workspace_deleted ON entries_trash(workspace_id, deleted_at DESC);
 
 -- Lexical recall index (FTS5, trigram). Plain table, not external-content: entries
 -- has a TEXT PK, so triggers mirror entries.rowid into entries_fts.rowid and sync

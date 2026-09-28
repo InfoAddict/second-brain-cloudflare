@@ -9,14 +9,18 @@ import { parseExplicitWhen } from "../when/input";
 import { resolveConfig } from "../config";
 import { withStatus, getStatus } from "./status";
 import { withKind } from "./kind";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors, type OwnedVectors } from "../vectorize/batch";
 import { buildCasGuard, changesOf, Params, pruneManyStatement, pruneStatement, snapshotStatement, type WhenChange } from "./versions";
 
 export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true";
 export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number } | { ok: false; error: string; status: number };
 
 type AuditContext = { waitUntil(promise: Promise<unknown>): void };
-const channelPayload = (change: ChangeContext) => ({ channel: change.channel });
+/** BE-5/BE-6 (T-0101.5.1/T-0101.5.2): every audit event this file writes carries the same
+ * channel-and-client pair a version's own meta does, so the history and trash surfaces can name
+ * the client without a special case for resolve/forget/set_status. `client` is spread only when
+ * present, so an old event payload's shape (channel alone) is unchanged for REST and system writes. */
+const channelPayload = (change: ChangeContext) => ({ channel: change.channel, ...(change.client ? { client: change.client } : {}) });
 
 /** The REST routes and MCP resolve tool use this same read, guard, write and audit path. */
 export async function resolveEntryAction(
@@ -155,7 +159,8 @@ export async function applyInsightResolution(
   for (const row of found) {
     const tags: string[] = JSON.parse(row.tags ?? "[]");
     if (!tags.includes("auto-insight") || getStatus(tags) === "deprecated") continue;
-    const casColumns = { tags: row.tags ?? "[]", workspace_id: row.workspace_id };
+    // vector_ids pinned too (round 6): a dismiss clears them and deletes exactly the ids it read.
+    const casColumns = { tags: row.tags ?? "[]", workspace_id: row.workspace_id, vector_ids: row.vector_ids ?? null };
     if (action === "confirm") {
       const promoted = withStatus(withKind(tags.filter(t => t !== "auto-insight"), "semantic"), "canonical");
       statements.push(snapshotStatement(env, {
@@ -182,7 +187,7 @@ export async function applyInsightResolution(
   }
   const resolved: string[] = [];
   const auditRows: AuditEventInput[] = [];
-  const vectorsToDrop: string[] = [];
+  const vectorsToDrop: OwnedVectors[] = [];
   if (statements.length) {
     statements.push(pruneManyStatement(env, rows.map(r => r.id), cfg.VERSION_KEEP));
     const results = await env.DB.batch(statements);
@@ -190,12 +195,12 @@ export async function applyInsightResolution(
       if (changesOf(results[r.updateAt]) === 0) continue;
       resolved.push(r.id);
       auditRows.push({ entryId: r.id, actorId: change.actorId, event: action === "confirm" ? "insight_confirmed" : "insight_dismissed", payload: { prior: { tags: r.tags }, ...channelPayload(change) } });
-      if (action === "dismiss") vectorsToDrop.push(...r.vectorIds);
+      if (action === "dismiss") vectorsToDrop.push({ entryId: r.id, vectorIds: r.vectorIds });
     }
   }
   auditEvents(env, ctx, auditRows);
   if (vectorsToDrop.length) {
-    try { await deleteVectorIds(env, vectorsToDrop); }
+    try { await deleteEntryVectors(env, vectorsToDrop); }
     catch (e) { console.error("Vectorize deleteByIds failed during bulk dismiss (non-fatal):", e); }
   }
   return { resolved, skipped: requestedCount - resolved.length };

@@ -14,7 +14,9 @@ export interface EntryAccessRow {
 
 export type EntryAccessDenied = { code: "forbidden"; message: string };
 
-const FORBIDDEN_MSG = "Only the entry's author or an admin can modify a shared company memory";
+/** Exported so callers that build their own EntryAccessDenied-shaped result (revertEntry's
+ * canRevert, undo.ts) can quote the identical wording rather than drifting from it. */
+export const FORBIDDEN_MSG = "Only the entry's author or an admin can modify a shared company memory";
 
 /**
  * Fetch an entry only if it is readable by the caller.

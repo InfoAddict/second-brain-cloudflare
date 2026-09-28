@@ -101,14 +101,14 @@ describe("ADV-U8 (MAJOR, superseded by the round-3 simplification): redo never t
     // Bob's company capture merges into Alice's company memory.
     expect((await captureEntry("Incoming fact", [], "api", e, ctx, undefined, { workspaceId: roots.companyWorkspaceId, actorId: bob.userId }, undefined, { channel: "rest" })).status).toBe("merged");
     // Alice undoes: Bob's fact comes back as its own company row, authored by Bob.
-    const undo = await revertEntry(e, alice, "old", change(alice), DEFAULTS);
+    const undo = await revertEntry(e, alice, "old", change(alice), DEFAULTS, undefined, roots.companyWorkspaceId);
     const x = (undo as any).recreatedIncomingId as string;
     expect(row(x)).toMatchObject({ actor_id: bob.userId, workspace_id: roots.companyWorkspaceId });
     // Bob takes his memory private.
     expect((await moveEntry(x, "personal", env, bob, change(bob))).status).toBe("unshared");
 
     // Alice redoes. Redo never touches x at all, so it does not matter that she cannot even read it.
-    const redo = await revertEntry(e, alice, "old", change(alice), DEFAULTS);
+    const redo = await revertEntry(e, alice, "old", change(alice), DEFAULTS, undefined, roots.companyWorkspaceId);
     expect(redo.status).toBe("reverted");
     expect(row(x)).toBeDefined();
     expect(row(x).workspace_id).toBe(bob.personalWorkspaceId);
@@ -123,12 +123,12 @@ describe("ADV-U8 (MAJOR, superseded by the round-3 simplification): redo never t
     const e = mergeEnv("old");
     await seed("old", { content: "Old text", tags: ["work"], workspaceId: roots.companyWorkspaceId, actorId: alice.userId });
     await captureEntry("Incoming fact", [], "api", e, ctx, undefined, { workspaceId: roots.companyWorkspaceId, actorId: bob.userId }, undefined, { channel: "rest" });
-    const x = ((await revertEntry(e, alice, "old", change(alice), DEFAULTS)) as any).recreatedIncomingId as string;
+    const x = ((await revertEntry(e, alice, "old", change(alice), DEFAULTS, undefined, roots.companyWorkspaceId)) as any).recreatedIncomingId as string;
     // Bob builds on his re-created memory. Alice could not forget it herself (author lock).
     await updateEntryContent(e, x, "Incoming fact, with Bob's follow-up notes", DEFAULTS, undefined, undefined, { workspaceId: roots.companyWorkspaceId, actorId: bob.userId }, change(bob), roots.companyWorkspaceId);
     expect(row(x).content).toContain("follow-up");
 
-    const redo = await revertEntry(e, alice, "old", change(alice), DEFAULTS);
+    const redo = await revertEntry(e, alice, "old", change(alice), DEFAULTS, undefined, roots.companyWorkspaceId);
     expect(redo.status).toBe("reverted");
     expect(row(x)?.content).toContain("follow-up");
     expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "re-created earlier" }]);
@@ -140,16 +140,16 @@ describe("ADV-U9 (MINOR, superseded by the round-3 simplification): a merge's in
     const e = mergeEnv("old");
     await seed("old", { content: "Old text", tags: ["work"] });
     await captureEntry("Incoming fact", [], "api", e, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, { channel: "rest" });
-    const undo1 = await revertEntry(e, owner, "old", change(), DEFAULTS);
+    const undo1 = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     const x = (undo1 as any).recreatedIncomingId as string;
     expect(row(x).content).toBe("Incoming fact");
 
-    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS); // redo: merged text restored, x kept
+    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId); // redo: merged text restored, x kept
     expect(redo.status).toBe("reverted");
     expect(row(x)).toBeDefined();
     expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "re-created earlier" }]);
 
-    const undo2 = await revertEntry(e, owner, "old", change(), DEFAULTS); // undo again
+    const undo2 = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId); // undo again
     expect(undo2.status).toBe("reverted");
     expect(row("old").content).toBe("Old text");
     // Exactly one live copy of the fact throughout: no re-creation happens twice.
@@ -167,7 +167,7 @@ describe("ADV-U10 (MINOR): to_version re-creation covers only a target that IS t
     const beforeMerge = (await versions("old"))[0].seq; // the state "Old"
     await captureEntry("Incoming fact", [], "api", e, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, { channel: "rest" });
     expect(row("old").content).toBe("Old text. Incoming fact.");
-    expect((await revertEntry(e, owner, "old", change(), DEFAULTS, beforeMerge)).status).toBe("reverted");
+    expect((await revertEntry(e, owner, "old", change(), DEFAULTS, beforeMerge, owner.personalWorkspaceId)).status).toBe("reverted");
     expect(row("old").content).toBe("Old");
     expect(sqlite.rows().some((r: any) => r.content === "Incoming fact")).toBe(true); // actual: false
   });
@@ -178,9 +178,9 @@ describe("ADV-U10 (MINOR): to_version re-creation covers only a target that IS t
     await captureEntry("Incoming fact", [], "api", e, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, { channel: "rest" });
     const mergeSeq = (await versions("old"))[0].seq;
     await updateEntryContent(e, "old", "Old text. Incoming fact. Edited.", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
-    expect((await revertEntry(e, owner, "old", change(), DEFAULTS, mergeSeq)).status).toBe("reverted");
+    expect((await revertEntry(e, owner, "old", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("reverted");
     await updateEntryContent(e, "old", "Old text, edited again", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
-    expect((await revertEntry(e, owner, "old", change(), DEFAULTS, mergeSeq)).status).toBe("reverted");
+    expect((await revertEntry(e, owner, "old", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("reverted");
     expect(sqlite.rows().filter((r: any) => r.content === "Incoming fact")).toHaveLength(1); // actual: 2
   });
 });
@@ -193,7 +193,7 @@ describe("ADV-U11 (MINOR): vector_ids is still rebound from the undo's stale rea
       // the pending re-index (storeEntry's unversioned vector_ids write) lands while the undo is in flight
       await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ?`).bind(JSON.stringify(["vi1"]), "vi1").run();
     });
-    expect((await revertEntry(racing, owner, "vi1", change(), DEFAULTS)).status).toBe("reverted");
+    expect((await revertEntry(racing, owner, "vi1", change(), DEFAULTS, undefined, owner.personalWorkspaceId)).status).toBe("reverted");
     expect(JSON.parse(row("vi1").tags)).not.toContain("status:canonical");
     expect(row("vi1").vector_ids).toBe(JSON.stringify(["vi1"])); // actual: "[]"
   });
@@ -212,9 +212,11 @@ describe("ADV-U12 (MINOR): a lost revert deletes the row's live vectors before i
       if (sql.startsWith("SELECT 1 AS ok FROM entries")) throw new Error("D1_ERROR: Network connection lost.");
       return raw.prepare(sql);
     } } } as unknown as Env;
-    await expect(revertEntry(flaky, owner, "lv1", change(), DEFAULTS)).rejects.toThrow();
-    expect(row("lv1")).toMatchObject({ content: "three", vector_ids: JSON.stringify(["lv1"]) });
-    // undo.ts:206 deleted "lv1" (the winner's live vector) before the read that tells stale from not_found.
-    expect(store.get("lv1")?.metadata.content).toBe("three"); // actual: undefined — the row names a vector that no longer exists
+    await expect(revertEntry(flaky, owner, "lv1", change(), DEFAULTS, undefined, owner.personalWorkspaceId)).rejects.toThrow();
+    expect(row("lv1")).toMatchObject({ content: "three" });
+    // Per-upload vector ids (T-0089.1.1): whatever the lost undo deleted, the winner's listed vector is intact.
+    const listed = JSON.parse(row("lv1").vector_ids) as string[];
+    expect(listed).toHaveLength(1);
+    expect(store.get(listed[0])?.metadata.content).toBe("three");
   });
 });

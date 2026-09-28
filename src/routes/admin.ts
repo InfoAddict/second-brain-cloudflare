@@ -1,5 +1,5 @@
 import { hasCapsuleTag } from "../tags/system";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
@@ -12,7 +12,7 @@ import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { graceMs } from "../lib/ai";
 import { classifyEntry } from "../capture/classify";
-import { storeEntry } from "../capture/store";
+import { PENDING_WHERE, indexPendingRow, type PendingRow } from "../vectorize/pending";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
@@ -269,7 +269,7 @@ export async function handleAdminRoutes(
       });
       if (result.vectorIds.length) {
         try {
-          await deleteVectorIds(env, result.vectorIds);
+          await deleteEntryVectors(env, result.ownedVectors);
         } catch (e) {
           // The D1 rows and the audit row are already committed: the removal
           // succeeded. A failed index delete only leaves dead vectors behind,
@@ -1464,47 +1464,40 @@ export async function handleAdminRoutes(
     const { results: toProcess } = await env.DB.prepare(
       // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
       `SELECT id, content, tags, source, created_at, workspace_id, actor_id FROM entries
-       WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}
+       WHERE ${PENDING_WHERE}
        ORDER BY created_at DESC LIMIT 25`
-    ).bind(graceCutoff).all();
+    ).bind(graceCutoff).all<PendingRow>();
 
     let processed = 0;
     let failed = 0;
 
-    for (const row of toProcess as Record<string, any>[]) {
+    for (const row of toProcess) {
       try {
-        await storeEntry(
-          env,
-          row.id as string,
-          row.content as string,
-          JSON.parse(row.tags as string),
-          row.source as string,
-          row.created_at as number,
-          // Without this the backfill embeds with DEFAULTS.EMBEDDING_MODEL while
-          // capture and recall use the configured one, writing vectors from the
-          // wrong model into the index, scores go quietly wrong, nothing throws.
-          cfg,
-          // This route repairs OTHER members' rows by design, the context comes
-          // from the row, never from `auth`. Stamping the admin's workspace here
-          // would move every repaired vector into the admin's own space.
-          { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
-        );
-        processed++;
+        // cfg carries the configured embedding model; indexPendingRow stamps the ROW's own
+        // workspace and author, never the admin's.
+        // False: the row changed content or workspace mid-embed; it stays pending for the next call.
+        if (await indexPendingRow(env, row, cfg)) processed++; else failed++;
       } catch (e) {
         console.error("Re-embed failed for entry", row.id, e);
         failed++;
       }
     }
 
-    // Same filter as the select above, or the loop never reaches zero: the
-    // dashboard presses this until `remaining` is 0, so counting rows the select
-    // refuses to process would spin until the batch-made-no-progress guard.
+    // Every still-unindexed row, not just the past-grace ones the select above can touch (adv-final
+    // MAJOR 2): a row inside its grace window is genuinely pending, not done, so reporting
+    // `remaining: 0` while it sits there would tell a caller — including the undo reply this
+    // backs — that indexing finished when it has not even started. oldest, of that same set,
+    // drives retryAfterMs: 0 once nothing is left, otherwise how long until the longest-waiting
+    // row leaves its grace window and this endpoint can actually make progress on it.
     const remaining = await env.DB.prepare(
-      // scope-exempt: admin repair backlog: must match the SELECT above or the loop never reaches zero
-      `SELECT COUNT(*) as count FROM entries WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}`
-    ).bind(graceCutoff).first() as Record<string, any> | null;
+      // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
+      `SELECT COUNT(*) as count, MIN(created_at) as oldest FROM entries WHERE vector_ids = '[]' AND ${INDEXABLE_SQL}`
+    ).first() as Record<string, any> | null;
+    const remainingCount = (remaining?.count as number) ?? 0;
+    const oldestCreatedAt = remaining?.oldest as number | null;
+    const retryAfterMs = remainingCount === 0 ? 0 : Math.max(0, (oldestCreatedAt as number) + graceMs(env) - Date.now());
 
-    return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+    return json({ processed, failed, remaining: remainingCount, retryAfterMs });
   }
 
   // POST /classify-pending

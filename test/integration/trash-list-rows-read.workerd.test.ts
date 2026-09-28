@@ -1,14 +1,15 @@
 /**
- * BE-1 (T-0101.2.1): listTrash's statement count and rows_read, on a real
- * workerd D1 (local wrangler only, no Cloudflare account). Opt in with
- * EVAL_WORKERD=1. The window-function events query is also new SQL this
- * codebase has not run against real D1 before, so this is the compatibility
- * check as much as the budget pin.
+ * BE-1/R5 (T-0101.2.1, budget audit): listTrash's statement count and
+ * rows_read, on a real workerd D1 (local wrangler only, no Cloudflare
+ * account). Opt in with EVAL_WORKERD=1. The window-function events query is
+ * also new SQL this codebase has not run against real D1 before, so this is
+ * the compatibility check as much as the budget pin.
  *
- * Honest limit (trash-list.ts's own comment): the only index on entries_trash
- * is on deleted_at, so a listing walks the whole brain's trash regardless of
- * how much of it any one reader can see. 300 rows across 3 workspaces here,
- * one of them unreadable to the caller.
+ * R5 fixed the whole-trash scan this file originally measured: listTrash now
+ * runs one indexed query per readable workspace
+ * (idx_entries_trash_workspace_deleted, db/schema.sql), so rows_read scales
+ * with the reader's OWN readable trash, never with the whole brain's. 300 rows
+ * across 3 workspaces here, one of them unreadable to the caller.
  */
 import { describe, it, expect, afterAll } from "vitest";
 import { openD1 } from "../eval/d1";
@@ -87,9 +88,20 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("listTrash rows_read on workerd
       const { items } = await listTrash(meteredEnv, identity, { limit, config: DEFAULTS });
       expect(items.length).toBeGreaterThan(0);
 
-      expect(log.length).toBeLessThanOrEqual(3);
+      // R5: one statement per readable workspace (2: personal + the one company here), plus
+      // the deleting-client lookup and, since this identity's page can include a company row
+      // authored by someone else, the actor-label lookup — up to 4, not the brain-wide "at most 3"
+      // a single combined scan claimed.
+      expect(log.length).toBeLessThanOrEqual(4);
       const totalRows = log.reduce((n, e) => n + e.rows, 0);
-      expect(totalRows).toBeLessThanOrEqual(TRASH_ROWS + limit);
+      // Bounded by this reader's own two workspaces (200 of the 300 rows), never the third,
+      // unreadable workspace's 100 rows — this fixture's actor split (half the company rows
+      // belong to a colleague the caller cannot restore) means the company query's index seek
+      // still has to skip non-matching rows within its own workspace to fill the page. Measured
+      // 226; only a third of this fixture's trash is unreadable (vs. 95% in the ux-be budget
+      // fixture), so the savings here are real but smaller — bounded well short of TRASH_ROWS.
+      expect(totalRows).toBeLessThan(TRASH_ROWS);
+      expect(totalRows).toBeLessThanOrEqual(260);
     } finally {
       await d1.close();
     }

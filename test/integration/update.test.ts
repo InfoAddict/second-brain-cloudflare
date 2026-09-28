@@ -1,3 +1,4 @@
+import { parentIdOfVectorId } from "../../src/vectorize/ids";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import worker from "../../src/index";
 import { makeTestDb, makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
@@ -235,10 +236,9 @@ describe("POST /update", () => {
     expect(db.entries[0].content).toBe("Original content");
   });
 
-  it("re-embeds on update via upsert (overwrites the reused vector id)", async () => {
-    // The re-embed must use upsert, not insert: a single-chunk entry's vector
-    // id equals the entry id, and Vectorize insert() skips ids that already
-    // exist, so insert would leave the old embedding in place.
+  // Per-upload vector ids (T-0089.1.1): an update uploads under fresh ids, points the row at them in its
+  // compare-and-set, and only then retires the ids the row listed before.
+  it("re-embeds on update via upsert, under fresh ids the row then lists", async () => {
     const upsertMock = vi.fn().mockResolvedValue({ mutationId: "m" });
     const insertMock = vi.fn().mockResolvedValue({ mutationId: "m" });
     env = makeTestEnv(db, {
@@ -251,16 +251,14 @@ describe("POST /update", () => {
     );
     expect(upsertMock).toHaveBeenCalledOnce();
     const upsertedVectors = upsertMock.mock.calls[0][0] as any[];
-    expect(upsertedVectors[0].id).toBe("entry-abc");
-    expect(upsertedVectors[0].metadata.content).toBe("Brand new content");
+    expect(upsertedVectors[0].id).not.toBe("entry-abc");
+    expect(parentIdOfVectorId(upsertedVectors[0].id)).toBe("entry-abc");
+    expect(upsertedVectors[0].metadata).toMatchObject({ content: "Brand new content", parentId: "entry-abc" });
+    expect(JSON.parse(db.entries.find((e: any) => e.id === "entry-abc").vector_ids)).toEqual([upsertedVectors[0].id]);
     expect(insertMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes the stored single-chunk vector on update (regression #208)", async () => {
-    // Reproduces the reported bug end-to-end against a store with real
-    // insert/upsert semantics. The entry already has a vector keyed by its id
-    // (as `remember` would have created); updating must overwrite it. With the
-    // old insert() call the write is skipped and the stale content survives.
+  it("the vector the row lists after an update holds the new content, and the old one is gone (regression #208)", async () => {
     const { store, mock } = makeStatefulVectorize([
       {
         id: "entry-abc",
@@ -276,16 +274,15 @@ describe("POST /update", () => {
       env, ctx
     );
 
-    // The vector the entry is keyed by must now hold the new content.
-    expect(store.get("entry-abc")?.metadata.content).toBe("Brand new content");
+    const listed = JSON.parse(db.entries.find((e: any) => e.id === "entry-abc").vector_ids) as string[];
+    expect(listed).toHaveLength(1);
+    expect(store.get(listed[0])?.metadata.content).toBe("Brand new content");
+    expect(store.has("entry-abc")).toBe(false);
   });
 
   // ── Vector orphan prevention ────────────────────────────────────────────────
 
-  it("deletes only stale vectors, preserving the re-embedded (reused) id", async () => {
-    // Entry previously had 2 chunks. The short update re-embeds to a single
-    // chunk keyed by the entry id ("entry-abc"), which must NOT be deleted —
-    // only the now-orphaned "entry-abc-chunk-1" should be removed.
+  it("retires every id the row listed before (3.7's deterministic ids included)", async () => {
     const deleteByIdsMock = vi.fn().mockResolvedValue({ mutationId: "m" });
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({ deleteByIds: deleteByIdsMock }),
@@ -298,12 +295,10 @@ describe("POST /update", () => {
     );
 
     expect(deleteByIdsMock).toHaveBeenCalledOnce();
-    expect(deleteByIdsMock.mock.calls[0][0]).toEqual(["entry-abc-chunk-1"]);
+    expect(deleteByIdsMock.mock.calls[0][0]).toEqual(["entry-abc", "entry-abc-chunk-1"]);
   });
 
-  it("does NOT delete the re-embedded single-chunk vector (id-reuse regression)", async () => {
-    // Single-chunk entry: vector id == entry id. The re-embed reuses that id,
-    // so there is nothing stale — deleting it would make the entry unsearchable.
+  it("never deletes the id the row now lists (the entry stays searchable)", async () => {
     const deleteByIdsMock = vi.fn().mockResolvedValue({ mutationId: "m" });
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({ deleteByIds: deleteByIdsMock }),
@@ -315,7 +310,10 @@ describe("POST /update", () => {
       env, ctx
     );
 
-    expect(deleteByIdsMock).not.toHaveBeenCalled();
+    const listed = JSON.parse(db.entries.find((e: any) => e.id === "entry-abc").vector_ids) as string[];
+    expect(listed).toHaveLength(1);
+    expect(deleteByIdsMock.mock.calls.flat(2)).not.toContain(listed[0]);
+    expect(deleteByIdsMock.mock.calls.flat(2)).toContain("entry-abc");
   });
 
   it("does not call deleteByIds when vector_ids is empty", async () => {

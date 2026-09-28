@@ -1,9 +1,15 @@
-import type { RecallMatch } from "./types";
+import type { RecallMatch, WhyTrace } from "./types";
 import { formatAsOfQualifier } from "../memory/stale";
+import { getStatus } from "../memory/status";
 import { DEFAULTS, type Config } from "../config";
 import { allowanceFor, snippetOf, truncationNote, type Snippet } from "./snippet";
 import { computeCompoundStale } from "./compound-stale";
 import type { CompoundStaleSignal } from "./types";
+import { sourceClass } from "./source-trust";
+import { editedCanonicalAt } from "../quarantine/tags";
+
+/** How long the canonical-edit label shows after the dated tag (5.7). Expiry is by date at render time; there is no job. */
+export const EDITED_CANONICAL_LABEL_DAYS = 7;
 
 /**
  * The bracketed header every memory-returning MCP tool prints.
@@ -36,8 +42,16 @@ export function memoryHeader(m: {
   const layer = m.workspace === "company"
     ? ` · shared${m.actorName ? ` · ${m.actorName}` : ""}`
     : "";
+  // The AI-edit label (5.7): a canonical row edited through MCP within the
+  // last EDITED_CANONICAL_LABEL_DAYS. Recall names no tool (Q-I) — the
+  // dashboard, brief and history read the newest version's client instead.
+  const editedAt = getStatus(m.tags) === "canonical" ? editedCanonicalAt(m.tags) : null;
+  const editedAgeDays = editedAt ? (Date.now() - Date.parse(`${editedAt}T12:00:00Z`)) / 86_400_000 : Infinity;
+  const editedLabel = editedAt && editedAgeDays <= EDITED_CANONICAL_LABEL_DAYS
+    ? ` · edited via an AI tool on ${new Date(`${editedAt}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    : "";
   const tagList = m.tags.length ? ` [${m.tags.join(", ")}]` : "";
-  return `${date}${src}${layer}${tagList}`;
+  return `${date}${src}${layer}${editedLabel}${tagList}`;
 }
 
 export function renderRecallText(
@@ -61,12 +75,21 @@ export function renderRecallText(
     const updateLabel = m.isUpdate ? " [updated]" : "";
     const hopLabel = m.hop > 0 ? ` [related · ${hopProvenance(m, contentById)}]` : "";
     const staleLabel = m.staleAsOf ? ` · ${formatAsOfQualifier(m.updatedAt)}` : "";
+    // Recurring notices the collapse absorbed into this one (4.4): named on
+    // the header line, then listed by id so an agent can fetch one directly.
+    const similarLabel = m.similar?.length
+      ? ` · and ${m.similar.length} similar (${m.similar.map(s => shortDate(s.createdAt)).join(", ")})`
+      : "";
+    const similarIdsLine = m.similar?.length ? `similar ids: ${m.similar.map(s => s.id).join(", ")}\n` : "";
 
     const s: Snippet = opts.full
       ? { text: (m.content ?? "").trim(), truncated: false, fullLength: (m.content ?? "").length }
       : snippetOf(m.content, allowanceFor(i, m.score, cfg), { queryTokens: opts.queryTokens });
     const body = s.truncated ? `${s.text}${truncationNote(m.id, s)}` : s.text;
-    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}\nID: ${m.id}\n${body}`;
+    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}${similarLabel}\nID: ${m.id}\n${body}`;
+    // The why line rides outside the budget: asking for an explanation must not change which memories come back.
+    const whyLine = m.why ? `why: ${whyText(m, m.why, contentById)}\n` : "";
+    const extraLines = `${whyLine}${similarIdsLine}`;
 
     // Stop once the budget is spent, but always return at least one match.
     if (!opts.full && blocks.length && used + block.length > cfg.RECALL_OUTPUT_BUDGET) {
@@ -75,7 +98,7 @@ export function renderRecallText(
     }
     used += block.length;
     renderedMatches.push(m);
-    blocks.push(block);
+    blocks.push(extraLines ? block.replace(`\nID: ${m.id}\n`, `\nID: ${m.id}\n${extraLines}`) : block);
   }
 
   const compoundStale = opts.compoundStale ?? computeCompoundStale(renderedMatches);
@@ -91,6 +114,45 @@ export function renderRecallText(
   }
   const body = insight ? `**Insight:** ${insight}\n\n---\n\n${text}` : text;
   return prefix ? prefix + body : body;
+}
+
+// A term is "rare" once its idf clears this (about one note in twenty holds it).
+const RARE_IDF = 3;
+const WHY_MAX_TERMS = 3;
+
+const shortDate = (ms: number) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+/** One plain line saying why a memory came back, from the trace recall already computed. */
+function whyText(m: RecallMatch, why: WhyTrace, contentById: Map<string, string>): string {
+  const parts: string[] = [];
+  if (why.dense_rank !== null) parts.push(`meaning #${why.dense_rank}`);
+  if (why.keyword_terms.length) {
+    const shown = why.keyword_terms.slice(0, WHY_MAX_TERMS).map(t => {
+      const notes = [t.level === 2 && t.idf >= RARE_IDF ? "rare" : "", t.level === 1 ? "inside a longer word" : ""].filter(Boolean);
+      return `"${t.term}"${notes.length ? ` (${notes.join(", ")})` : ""}`;
+    });
+    const more = why.keyword_terms.length - shown.length;
+    parts.push(`keywords ${shown.join(", ")}${more > 0 ? ` +${more} more` : ""}`);
+  }
+  if (getStatus(m.tags) === "canonical") parts.push("canonical");
+  const mult = why.multipliers;
+  if (mult) {
+    if (why.age_known === false) parts.push("age unknown");
+    else if (mult.recency >= 0.95) parts.push(`recent (${shortDate(m.createdAt)})`);
+    if (mult.importance > 1) parts.push("high importance");
+    else if (mult.importance < 1) parts.push("low importance");
+    if (mult.tag_boost > 1) parts.push("tag match");
+    if (mult.frequency > 1) parts.push("recalled before");
+    if (mult.source_weight < 1) parts.push(`${sourceClass(m.source, m.tags)} source ×${mult.source_weight}`);
+  }
+  if (why.rerank_move) parts.push(`reranked ${why.rerank_move}`);
+  if (why.graph) {
+    const from = contentById.get(why.graph.from);
+    parts.push(`linked from ${from ? `"${snippet(from)}"` : why.graph.from}`);
+  }
+  if (why.slot === "evidence") parts.push("evidence slot");
+  else if (why.slot === "deeper") parts.push("deeper list");
+  return parts.length ? parts.join(" · ") : "ranked on its combined score";
 }
 
 // For a graph-expanded match, describe why it surfaced: who formed the edge

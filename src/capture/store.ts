@@ -1,11 +1,12 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
 import { CHUNK_MAX_CHARS, MIRRORED_SOURCES, VECTORIZE_UPSERT_BATCH, WRITE_CAS_ATTEMPTS } from "../constants";
-import { embed } from "../lib/ai";
+import { embed, embedMany } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
 import { chunkText } from "../text/chunk";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors } from "../vectorize/batch";
+import { newVectorIds as mintVectorIds } from "../vectorize/ids";
 import { rememberTags } from "../tags/vocabulary";
 import { applyTagReplacement, withUserEditMarker } from "../tags/system";
 import { extractHashtags } from "../text/hashtags";
@@ -30,6 +31,9 @@ export function embedContextForRow(row: { workspace_id?: unknown }, writeCtx: Wr
 export interface StoredEntry {
   vectorIds: string[];
   values: number[] | null;
+  /** storeEntry only: false when the vector_ids write lost its compare-and-set (content or
+   * workspace changed during the embed), so these vectors are not the row's. */
+  committed?: boolean;
 }
 
 export async function storeEntry(
@@ -40,7 +44,9 @@ export async function storeEntry(
   source: string,
   now: number,
   config: Readonly<Config> = DEFAULTS,
-  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
+  writeCtx: WriteContext = OWNER_WRITE_CONTEXT,
+  /** The vector_ids the caller read for this row (JSON, e.g. '[]' for a new or pending row). */
+  commit: { expectedVectorIds: string } = { expectedVectorIds: "[]" },
 ): Promise<StoredEntry> {
   const stored = await upsertEntryVectors(env, id, content, tags, source, now, config, writeCtx);
 
@@ -48,12 +54,30 @@ export async function storeEntry(
   // deliberately does NOT touch workspace_id: an update edits a row in place and
   // must never move it between workspaces — that is share/unshare's job alone.
   // Restamping here would let any context-less caller silently reset a row to ''.
+  // Compare-and-set on the content AND the workspace these vectors were stamped for (R4-2, round 5),
+  // AND the vector_ids the caller read (round 6): the row alone decides which upload won, and an
+  // upload that lost is this call's own ids, deleted here and nowhere else.
   // versioning: exempt: vector bookkeeping
-  await env.DB.prepare(
-    `UPDATE entries SET vector_ids = ? WHERE id = ?`
-  ).bind(JSON.stringify(stored.vectorIds), id).run();
+  const result = await env.DB.prepare(
+    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ? AND vector_ids = ?`
+  ).bind(JSON.stringify(stored.vectorIds), id, content, writeCtx.workspaceId, commit.expectedVectorIds).run();
 
-  return stored;
+  if (changesOf(result) === 0) {
+    await discardUpload(env, id, stored.vectorIds);
+    return { ...stored, committed: false };
+  }
+
+  return { ...stored, committed: true };
+}
+
+/**
+ * An upload that did not become the row's vector_ids (a lost compare-and-set, a thrown batch, a
+ * superseded attempt). Its ids were minted for this upload alone (newVectorIds), so deleting them can
+ * never touch another writer's vectors, and the row's own listed vectors were never overwritten.
+ */
+export async function discardUpload(env: Env, entryId: string, uploadedIds: string[] | null | undefined): Promise<void> {
+  if (!uploadedIds?.length) return;
+  try { await deleteEntryVectors(env, [{ entryId, vectorIds: uploadedIds }]); } catch (e) { console.error("Deleting a discarded vector upload failed (non-fatal):", e); }
 }
 
 /**
@@ -69,7 +93,9 @@ export async function upsertEntryVectors(
   source: string,
   now: number,
   config: Readonly<Config> = DEFAULTS,
-  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
+  writeCtx: WriteContext = OWNER_WRITE_CONTEXT,
+  /** Embed chunks embedBatchSize() per AI call (the nightly backfill), rather than one call each. */
+  opts: { batchEmbeds?: boolean } = {},
 ): Promise<StoredEntry> {
   // A mirrored record is indexed by its first chunk only. `chunkText` splits at
   // CHUNK_MAX_CHARS and every chunk below gets its own vector, so a long one from
@@ -86,6 +112,9 @@ export async function upsertEntryVectors(
   const allChunks = chunkText(content);
   const chunks = MIRRORED_SOURCES.has(source) ? allChunks.slice(0, 1) : allChunks;
 
+  const batched = opts.batchEmbeds ? await embedMany(chunks, env, config) : null;
+  // Fresh ids for this upload alone (round 6): never the deterministic ids 3.7 used.
+  const ids = mintVectorIds(id, chunks.length);
   const vectors = await Promise.all(
     chunks.map(async (chunk, i) => {
       const metadata: Record<string, any> = {
@@ -107,8 +136,8 @@ export async function upsertEntryVectors(
       });
 
       return {
-        id: chunks.length === 1 ? id : `${id}-chunk-${i}`,
-        values: await embed(chunk, env, config),
+        id: ids[i],
+        values: batched ? batched[i] : await embed(chunk, env, config),
         metadata,
       };
     })
@@ -126,11 +155,11 @@ export async function upsertEntryVectors(
   return { vectorIds, values: vectors[0]?.values ?? null };
 }
 
-export async function deleteStaleVectors(env: Env, oldIds: string[], newIds: string[]): Promise<void> {
+export async function deleteStaleVectors(env: Env, entryId: string, oldIds: string[], newIds: string[]): Promise<void> {
   if (!newIds.length) return;
   const keep = new Set(newIds);
   const stale = oldIds.filter(v => !keep.has(v));
-  if (stale.length) await deleteVectorIds(env, stale);
+  if (stale.length) await deleteEntryVectors(env, [{ entryId, vectorIds: stale }]);
 }
 
 /**
@@ -138,8 +167,8 @@ export async function deleteStaleVectors(env: Env, oldIds: string[], newIds: str
  * reembedOrThrow/reembedOrDegrade commits vector_ids itself, inside its own compare-and-set batch
  * (update, append, merge, undo). storeEntry's own unconditional `vector_ids = ?` write, if it ran
  * here too, would race ahead of that guarded batch and could overwrite a concurrent short append's
- * json_insert with a vector_ids list that never saw it (ADV-4, residual). restoreRowVectors is the
- * one caller that has no batch of its own to fold this into, so it writes vector_ids explicitly.
+ * json_insert with a vector_ids list that never saw it (ADV-4, residual). storeEntry is the one
+ * writer without such a batch; it compare-and-sets vector_ids on its own.
  */
 export async function reembedOrThrow(env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config> = DEFAULTS, writeCtx: WriteContext = OWNER_WRITE_CONTEXT): Promise<StoredEntry> {
   const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx);
@@ -166,65 +195,6 @@ export async function reembedOrDegrade(env: Env, id: string, content: string, ta
   }
 }
 
-/**
- * A writer re-embedded a row and then lost the compare-and-set to a concurrent edit: the vectors under
- * that id now describe the loser's text. Re-embed the row as it stands now and retire any
- * extra chunks the merge wrote. Best effort: the edit itself is safe in D1 either way.
- */
-export async function restoreRowVectors(
-  env: Env, id: string, oldVectorIds: string[], mergedVectorIds: string[], source: string,
-  cfg: Readonly<Config>, writeCtx: WriteContext,
-): Promise<void> {
-  try {
-    const current = await env.DB.prepare(
-      // scope-exempt: by-id: a faithful repair of the row's OWN vectors to match its OWN current
-      // content is harmless regardless of which workspace it moved to since the merge's failed CAS
-      // — unlike the destructive fallback below, this never touches content this call did not read.
-      `SELECT content, tags, workspace_id, vector_ids FROM entries WHERE id = ?`
-    ).bind(id).first() as Record<string, any> | null;
-    if (!current) {
-      // Forgotten during the merge's re-embed: nothing owns the merge's vectors any more.
-      await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
-      return;
-    }
-    const restored = await reembedOrThrow(env, id, current.content as string, JSON.parse(current.tags ?? "[]"), source, cfg, embedContextForRow(current, writeCtx));
-    // R3-3: the row's OWN current vector_ids (read moments ago, above), not the caller's
-    // oldVectorIds/mergedVectorIds, is the stale-deletion candidate set. A short append that won
-    // between this call's callers reading THEIR OWN vector_ids and this read adds a fresh
-    // `id-update-<ts>` chunk this call never heard of; the caller's sets do not name it, so the old
-    // unconditional overwrite below dropped it from vector_ids without ever handing it to
-    // deleteVectorIds — an orphan in Vectorize under no row's list, forget and Delete forever
-    // could never find it again. Reading it from the row itself catches every such chunk, won or
-    // lost, since the fresh re-embed's restored.vectorIds already covers the row's current content
-    // (this same append's text included) and supersedes it either way.
-    const staleCandidates = [...new Set([...JSON.parse(current.vector_ids ?? "[]") as string[], ...oldVectorIds, ...mergedVectorIds])];
-    // Conditional on the content this call actually re-embedded (R3-3): a write here with no guard
-    // at all could still overwrite a vector_ids column describing content ANOTHER write already
-    // moved past, in the gap between the read above and this statement.
-    // versioning: exempt: vector bookkeeping (L5) — reembedOrThrow no longer writes this itself.
-    const written = await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ?`)
-      .bind(JSON.stringify(restored.vectorIds), id, current.content).run();
-    // The stale set is only ever safe to delete once the row's own vector_ids column actually
-    // points at restored.vectorIds instead: a missed guard means some OTHER write's vectors are
-    // live under ids this call still thinks are stale, and deleting them would be exactly the
-    // "delete a live deterministic vector" mistake this whole repair path exists to avoid.
-    if (changesOf(written) > 0) await deleteStaleVectors(env, staleCandidates, restored.vectorIds);
-  } catch (e) {
-    console.error("Restoring vectors after a lost write failed (non-fatal):", e);
-    // The row's vector_ids now names vectors holding the loser's text. Emptying them makes
-    // /vectorize-pending re-index the row from its own content, and the vectors go best-effort.
-    try {
-      // versioning: exempt: vector bookkeeping (L5)
-      await env.DB.prepare(
-        // Pinned to the write's workspace: a destructive clear must not touch a row that moved (recheck ownership).
-        `UPDATE entries SET vector_ids = '[]' WHERE id = ? AND workspace_id = ?`
-      ).bind(id, writeCtx.workspaceId).run();
-      await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
-    } catch (e2) {
-      console.error("Emptying vector_ids after a lost write failed (non-fatal):", e2);
-    }
-  }
-}
 
 /**
  * What `updateEntryContent` did, in the terms its callers have to answer in.
@@ -292,20 +262,16 @@ export async function updateEntryContent(
   // keep it as written in that case and let the tags be extracted anyway.
   const finalContent = cleanContent || newContent;
 
-  // The row this write embedded from. The commit compares-and-sets on it: a second writer that
-  // committed (and upserted its own vectors under the same deterministic ids) in between must not be
-  // overwritten in D1 while its vectors win in the index.
+  // The row this write embedded from. The commit compares-and-sets on it (and on the vector_ids read),
+  // so a second writer that committed in between is never overwritten in D1.
   let embeddedFrom: string | null = null;
   let reembedded: StoredEntry | null = null;
   let last: { row: Record<string, any>; vectorIds: string[]; embedCtx: WriteContext } | null = null;
-  // R2-2: a lost or failed attempt's own embed shares a DETERMINISTIC vector id with the row's real
-  // live vectors (the id, or id-chunk-i) — deleting it outright can delete a WINNING concurrent
-  // write's vector, not just this attempt's own. Re-embed the row as it now stands instead, which
-  // self-heals regardless of who actually won; never delete an attempt's vectors directly.
+  // A lost, failed or superseded attempt's own upload: its ids are this attempt's alone (round 6),
+  // so it is deleted outright; the row's own listed vectors were never overwritten by it.
   const recoverFromLostAttempt = async () => {
-    if (!reembedded?.vectorIds.length) return;
-    if (last) await restoreRowVectors(env, id, last.vectorIds, reembedded.vectorIds, last.row.source as string, config, last.embedCtx);
-    else { try { await deleteVectorIds(env, reembedded.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
+    await discardUpload(env, id, reembedded?.vectorIds);
+    reembedded = null;
   };
 
   for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
@@ -366,9 +332,7 @@ export async function updateEntryContent(
     // writer may have upserted over these ids); a tags-only change keeps the vectors already made.
     if (attempt === 1 || embeddedFrom !== readContent) {
       // A previous attempt's embed is being abandoned for this fresh one (content moved again since
-      // it ran): recover it now (R2-2), or its deterministic ids sit in vector_ids for the next
-      // commit — whichever branch it takes — to build on top of, the exact orphan the short-append
-      // json_insert case hit.
+      // it ran): delete its upload now, before embedding again.
       await recoverFromLostAttempt();
       try {
         reembedded = await reembedOrDegrade(env, id, finalContent, mergedTags, source, config, embedCtx);
@@ -392,7 +356,9 @@ export async function updateEntryContent(
     // to storeEntry's own unconditional write, which a losing attempt would otherwise leave behind
     // for the next attempt's statement to build on top of.
     const now = Date.now();
-    const casColumns = { content: readContent, tags: readTags, workspace_id: pinnedWorkspaceId };
+    // vector_ids too (round 6): the row decides which upload won, and old ids retired below are
+    // exactly the ones this commit replaced.
+    const casColumns = { content: readContent, tags: readTags, workspace_id: pinnedWorkspaceId, vector_ids: row.vector_ids ?? null };
     const p = new Params();
     const contentIdx = p.add(finalContent);
     const tagsIdx = p.add(JSON.stringify(committedTags));
@@ -435,7 +401,7 @@ export async function updateEntryContent(
 
     if (newVectorIds) {
       try {
-        await deleteStaleVectors(env, oldVectorIds, newVectorIds);
+        await deleteStaleVectors(env, id, oldVectorIds, newVectorIds);
       } catch (e) {
         console.error("Old vector cleanup failed (non-fatal):", e);
       }
@@ -459,9 +425,8 @@ export async function updateEntryContent(
     return { status: "updated", vectorIds: newVectorIds };
   }
 
-  // Out of attempts. The vectors just written describe text that never committed, so re-embed the
-  // row as it now stands: the last upsert in any interleaving must describe committed text.
-  if (last) await restoreRowVectors(env, id, last.vectorIds, reembedded?.vectorIds ?? [], last.row.source as string, config, last.embedCtx);
+  // Out of attempts: the last upload never became the row's, so it goes.
+  await recoverFromLostAttempt();
   return { status: "conflict" };
 }
 
@@ -518,16 +483,13 @@ export async function appendToEntry(
   let chunk: { id: string; indexed: boolean; values: number[] } | null = null;
   const retireChunk = async () => {
     if (chunk?.indexed) {
-      try { await deleteVectorIds(env, [chunk.id]); } catch (e) { console.error("Append chunk cleanup failed (non-fatal):", e); }
+      try { await deleteEntryVectors(env, [{ entryId: id, vectorIds: [chunk.id] }]); } catch (e) { console.error("Append chunk cleanup failed (non-fatal):", e); }
     }
   };
 
-  // R2-2: same reasoning as updateEntryContent's recoverFromLostAttempt — a lost attempt's own embed
-  // shares a deterministic vector id with the row's real live vectors, so deleting it outright can
-  // delete a winning concurrent write's vector. Re-embed the row as it now stands instead.
-  const recoverFromLostAttempt = async (existingVectorIds: string[], source: string, embedCtx: WriteContext, newVectorIds: string[] | null) => {
-    if (!newVectorIds?.length) return;
-    await restoreRowVectors(env, id, existingVectorIds, newVectorIds, source, config, embedCtx);
+  // A lost attempt's own upload: its ids are this attempt's alone (round 6), so it is deleted outright.
+  const recoverFromLostAttempt = async (_existingVectorIds: string[], _source: string, _embedCtx: WriteContext, uploaded: string[] | null) => {
+    await discardUpload(env, id, uploaded);
   };
 
   for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
@@ -562,7 +524,7 @@ export async function appendToEntry(
       // ADV-12: taken AFTER the embed, not before — a slow embed that lets a concurrent append commit
       // first must not stamp this later write with an earlier time than the one it lands on top of.
       const now = Date.now();
-      const longCasColumns = { content: readContent, tags: readTags, workspace_id: pinnedWorkspaceId };
+      const longCasColumns = { content: readContent, tags: readTags, workspace_id: pinnedWorkspaceId, vector_ids: row.vector_ids ?? null };
       const p = new Params();
       const contentIdx = p.add(newContent);
       const tagsIdx = p.add(JSON.stringify(refreshedTags));
@@ -598,9 +560,8 @@ export async function appendToEntry(
         // to build on top of (the short branch's json_insert reads vector_ids fresh at commit time).
         await recoverFromLostAttempt(existingVectorIds, source, embedCtx, newVectorIds);
         if (attempt < WRITE_CAS_ATTEMPTS) continue;
-        // Out of attempts: re-embed the row as it now stands, so the last upsert describes committed text.
+        // Out of attempts: this attempt's upload is already discarded above.
         await retireChunk();
-        await restoreRowVectors(env, id, existingVectorIds, [], source, config, embedCtx);
         throw new WriteConflictError();
       }
       // A short attempt earlier may have inserted a chunk this long commit re-embedded away.
@@ -609,7 +570,7 @@ export async function appendToEntry(
       // Skipped when Vectorize is unavailable: the old vectors are the entry's only remaining semantic index.
       if (newVectorIds) {
         try {
-          await deleteStaleVectors(env, existingVectorIds, newVectorIds);
+          await deleteStaleVectors(env, id, existingVectorIds, newVectorIds);
         } catch (e) {
           console.error("Old vector cleanup failed (non-fatal):", e);
         }
@@ -624,7 +585,7 @@ export async function appendToEntry(
 
     if (!chunk) {
       const values = await embed(addition, env, config);
-      const chunkId = `${id}-update-${Date.now()}`;
+      const [chunkId] = mintVectorIds(id, 1);
       const metadata: Record<string, any> = {
         content: addition, parentId: id, isUpdate: true, tags: rowTags, source, created_at: Date.now(), workspace_id: row.workspace_id ?? "",
       };

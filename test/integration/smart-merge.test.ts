@@ -135,7 +135,8 @@ describe("POST /capture — smart merge (flagged band 0.85–0.95)", () => {
 
     expect(insertMock).toHaveBeenCalledOnce();
     // Only the stale chunk is deleted; the reused "existing-id" vector survives.
-    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing-id-chunk-1"]);
+    // Per-upload vector ids (T-0089.1.1): the re-embed never reuses an old id, so every old one is retired.
+    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing-id", "existing-id-chunk-1"]);
   });
 
   it("replace: new vector is inserted before old ones are deleted (safe ordering)", async () => {

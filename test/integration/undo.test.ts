@@ -71,7 +71,7 @@ describe("undo, one case per reason", () => {
     await seed("u1", { content: "before", tags: ["a"] });
     await updateEntryContent(env, "u1", "after", DEFAULTS, undefined, ["b"], { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const beforeVectorIds = JSON.parse(String(row("u1").vector_ids));
-    const r = await revertEntry(env, owner, "u1", change(), DEFAULTS);
+    const r = await revertEntry(env, owner, "u1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r).toMatchObject({ status: "reverted" });
     expect(row("u1").content).toBe("before");
     expect(JSON.parse(String(row("u1").tags))).toEqual(["a"]);
@@ -82,7 +82,7 @@ describe("undo, one case per reason", () => {
   it("append: undo restores the delta's prior text", async () => {
     await seed("a1", { content: "base" });
     await appendToEntry(env, "a1", "base", "more", [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), undefined, owner.personalWorkspaceId);
-    const r = await revertEntry(env, owner, "a1", change(), DEFAULTS);
+    const r = await revertEntry(env, owner, "a1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(row("a1").content).toBe("base");
   });
@@ -95,7 +95,7 @@ describe("undo, one case per reason", () => {
     await seed("old", { content: "Old text", tags: ["work"] });
     const captured = await captureEntry("Incoming fact", [], "api", merged, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, { channel: "rest" });
     expect(captured.status).toBe("merged");
-    const r = await revertEntry(merged, owner, "old", change(), DEFAULTS);
+    const r = await revertEntry(merged, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect((r as any).recreatedIncomingId).toBeTruthy();
     expect(row("old").content).toBe("Old text");
@@ -111,7 +111,7 @@ describe("undo, one case per reason", () => {
     await seed("old2", { content: "Stale fact", tags: ["work"] });
     const captured = await captureEntry("Fresh fact", [], "api", replaced, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, { channel: "rest" });
     expect(captured.status).toBe("replaced");
-    const r = await revertEntry(replaced, owner, "old2", change(), DEFAULTS);
+    const r = await revertEntry(replaced, owner, "old2", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(row("old2").content).toBe("Stale fact");
   });
@@ -122,7 +122,7 @@ describe("undo, one case per reason", () => {
     const result = await compressTag("work", digestEnv, ctx);
     expect(result.synthesizedId).not.toBeNull();
     const before = row("src-0").content;
-    const r = await revertEntry(digestEnv, owner, "src-0", change(), DEFAULTS);
+    const r = await revertEntry(digestEnv, owner, "src-0", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(row("src-0").content).not.toBe(before);
     expect(row("src-0").content).not.toContain("[Digest:");
@@ -134,7 +134,7 @@ describe("undo, one case per reason", () => {
     await deprecateEntry("s1", env, change(), DEFAULTS, owner.personalWorkspaceId);
     expect(JSON.parse(String(row("s1").tags))).toContain("status:deprecated");
     expect(row("s1").vector_ids).toBe("[]");
-    const r = await revertEntry(env, owner, "s1", change(), DEFAULTS);
+    const r = await revertEntry(env, owner, "s1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(JSON.parse(String(row("s1").tags))).not.toContain("status:deprecated");
     expect(JSON.parse(String(row("s1").vector_ids)).length).toBeGreaterThan(0);
@@ -146,7 +146,7 @@ describe("undo, one case per reason", () => {
     const until = Date.now() + 86400000;
     await resolveEntryAction(env, ctx, owner, "d1", "snooze", new Date(until).toISOString(), change());
     expect(row("d1").when_at).toBe(until);
-    const r = await revertEntry(env, owner, "d1", change(), DEFAULTS);
+    const r = await revertEntry(env, owner, "d1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(row("d1")).toMatchObject({ when_at: 1000, when_kind: "event", when_label: "old", when_source: "regex" });
   });
@@ -156,7 +156,7 @@ describe("undo, one case per reason", () => {
     const mirror = makeMirrorStore(mirrorEnv, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, "notion");
     const id = await mirror.createEntry("mirror v1", ["work"], "notion");
     await mirror.updateEntry(id, "mirror v2");
-    const r = await revertEntry(mirrorEnv, owner, id, change(), DEFAULTS);
+    const r = await revertEntry(mirrorEnv, owner, id, change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(row(id).content).toBe("mirror v1");
   });
@@ -167,7 +167,7 @@ describe("undo, one case per reason", () => {
     const forgotten = await forgetEntry("trash1", env, change(), { reason: "forget", config: DEFAULTS, purge: false }, owner.personalWorkspaceId);
     expect(forgotten.status).toBe("deleted");
     expect(sqlite.rows().find((r: any) => r.id === "trash1")).toBeUndefined();
-    const r = await revertEntry(env, owner, "trash1", change(), DEFAULTS);
+    const r = await revertEntry(env, owner, "trash1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("restored");
     const restored = row("trash1");
     expect(restored.content).toBe("keep me");
@@ -186,7 +186,7 @@ describe("undo, one case per reason", () => {
     await seed("i1", { content: "an insight", tags: ["auto-insight"], vectorIds: ["v1"] });
     await applyInsightResolution(insightEnv, ctx, change(), [{ id: "i1", tags: row("i1").tags, vector_ids: row("i1").vector_ids, workspace_id: row("i1").workspace_id }], 1, "dismiss");
     expect(row("i1").vector_ids).toBe("[]");
-    const r = await revertEntry(insightEnv, owner, "i1", change(), DEFAULTS);
+    const r = await revertEntry(insightEnv, owner, "i1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(JSON.parse(String(row("i1").tags))).toContain("auto-insight");
     expect(JSON.parse(String(row("i1").vector_ids)).length).toBeGreaterThan(0);
@@ -197,10 +197,10 @@ describe("undo mechanics", () => {
   it("undo twice redoes", async () => {
     await seed("r1", { content: "v1" });
     await updateEntryContent(env, "r1", "v2", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
-    const undo1 = await revertEntry(env, owner, "r1", change(), DEFAULTS);
+    const undo1 = await revertEntry(env, owner, "r1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(undo1.status).toBe("reverted");
     expect(row("r1").content).toBe("v1");
-    const undo2 = await revertEntry(env, owner, "r1", change(), DEFAULTS);
+    const undo2 = await revertEntry(env, owner, "r1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(undo2.status).toBe("reverted");
     expect(row("r1").content).toBe("v2");
   });
@@ -212,7 +212,7 @@ describe("undo mechanics", () => {
     await updateEntryContent(env, "t1", "v3", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const vs = await versions("t1");
     const targetSeq = vs[0].seq; // the very first retired state: content v1, when_at 100
-    const r = await revertEntry(env, owner, "t1", change(), DEFAULTS, targetSeq);
+    const r = await revertEntry(env, owner, "t1", change(), DEFAULTS, targetSeq, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(row("t1").content).toBe("v1");
     expect(row("t1").when_at).toBe(100);
@@ -227,7 +227,7 @@ describe("undo mechanics", () => {
     await seed("digest1", { content: "digest v1", tags: ["synthesized", "work"], source: "system", actorId: "" });
     const captured = await captureEntry("my addition", [], "api", digestMergeEnv, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, { channel: "rest" });
     expect(captured.status).toBe("merged");
-    const r = await revertEntry(digestMergeEnv, owner, "digest1", change(owner, "rest"), DEFAULTS);
+    const r = await revertEntry(digestMergeEnv, owner, "digest1", change(owner, "rest"), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(JSON.parse(String(row("digest1").tags))).toContain("user-edited");
   });
@@ -245,7 +245,7 @@ describe("undo mechanics", () => {
     const bobSeq = chainBefore.rows[0].seq;
     await applyStatus("ci1", "canonical", env, change(carol), DEFAULTS, roots.companyWorkspaceId);
     // Bob asks for his own version specifically: rule (b) requires it still be the newest, and it no longer is.
-    const r = await revertEntry(env, bob, "ci1", change(bob), DEFAULTS, bobSeq);
+    const r = await revertEntry(env, bob, "ci1", change(bob), DEFAULTS, bobSeq, roots.companyWorkspaceId);
     expect(r.status).toBe("stale");
   });
 
@@ -257,8 +257,8 @@ describe("undo mechanics", () => {
     Date.now = () => fixed;
     try {
       const [a, b] = await Promise.all([
-        revertEntry(env, owner, "race1", change(), DEFAULTS),
-        revertEntry(env, owner, "race1", change(), DEFAULTS),
+        revertEntry(env, owner, "race1", change(), DEFAULTS, undefined, owner.personalWorkspaceId),
+        revertEntry(env, owner, "race1", change(), DEFAULTS, undefined, owner.personalWorkspaceId),
       ]);
       const results = [a, b];
       expect(results.filter(r => r.status === "reverted")).toHaveLength(1);
@@ -280,7 +280,7 @@ describe("undo mechanics", () => {
     await updateEntryContent(env, "nc1", "changed", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     await updateEntryContent(env, "nc1", "same", DEFAULTS, undefined, ["a"], { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const before = await versions("nc1");
-    const r = await revertEntry(env, owner, "nc1", change(), DEFAULTS, before[0].seq);
+    const r = await revertEntry(env, owner, "nc1", change(), DEFAULTS, before[0].seq, owner.personalWorkspaceId);
     expect(r.status).toBe("no_change");
     expect(await versions("nc1")).toEqual(before);
   });
@@ -298,7 +298,7 @@ describe("undo mechanics", () => {
       }
       return st;
     } } } as unknown as Env;
-    const r = await revertEntry(racing, owner, "gone1", change(), DEFAULTS);
+    const r = await revertEntry(racing, owner, "gone1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("not_found");
   });
 
@@ -312,13 +312,13 @@ describe("undo mechanics", () => {
     sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'h1'`).bind(roots.companyWorkspaceId).run();
     // A version made AFTER the share: visible to Bob, so the chain is not simply empty.
     await updateEntryContent(env, "h1", "company v3", DEFAULTS, undefined, undefined, { workspaceId: roots.companyWorkspaceId, actorId: owner.userId }, change(), roots.companyWorkspaceId);
-    const r = await revertEntry(env, bob, "h1", change(bob), DEFAULTS, preShareSeq);
+    const r = await revertEntry(env, bob, "h1", change(bob), DEFAULTS, preShareSeq, roots.companyWorkspaceId);
     expect(r.status).toBe("unreadable");
   });
 
   it("nothing_to_undo on a row with no versions", async () => {
     await seed("empty1");
-    const r = await revertEntry(env, owner, "empty1", change(), DEFAULTS);
+    const r = await revertEntry(env, owner, "empty1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("nothing_to_undo");
   });
 
@@ -331,7 +331,7 @@ describe("undo mechanics", () => {
     const incoming = "x".repeat(5000);
     const captured = await captureEntry(incoming, [], "api", bigEnv, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, { channel: "rest", versionRowBudgetBytes: 100 });
     expect(captured.status).toBe("merged");
-    const r = await revertEntry(bigEnv, owner, "big1", change(), DEFAULTS);
+    const r = await revertEntry(bigEnv, owner, "big1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect((r as any).incomingTruncated).toBe(true);
     expect((r as any).recreatedIncomingId).toBeUndefined();
@@ -343,7 +343,7 @@ describe("undo mechanics", () => {
     await updateEntryContent(env, "f1", "after", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const before = await versions("f1");
     const failingEnv = { ...env, AI: { run: vi.fn(async () => { throw new Error("AI down"); }) } } as unknown as Env;
-    const r = await revertEntry(failingEnv, owner, "f1", change(), DEFAULTS);
+    const r = await revertEntry(failingEnv, owner, "f1", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reembed_failed");
     expect(row("f1").content).toBe("after");
     expect(await versions("f1")).toEqual(before);

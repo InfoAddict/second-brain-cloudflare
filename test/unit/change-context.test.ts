@@ -10,8 +10,9 @@ describe("ChangeContext", () => {
     expectTypeOf<"web">().not.toExtend<AuditChannel>();
   });
 
-  it("requires both an actor and a channel, and allows an optional client label (BE-5)", () => {
+  it("requires both an actor and a channel, and allows an optional client label", () => {
     expectTypeOf<ChangeContext>().toEqualTypeOf<{ actorId: string; channel: AuditChannel; client?: string }>();
     expectTypeOf<{ actorId: string }>().not.toExtend<ChangeContext>();
+    expectTypeOf<{ actorId: string; channel: AuditChannel }>().toExtend<ChangeContext>();
   });
 });
