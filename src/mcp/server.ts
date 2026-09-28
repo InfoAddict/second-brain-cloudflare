@@ -1450,7 +1450,7 @@ export function buildMcpServer(
       // the tool describe this), so calling it twice does not repeat the first call's effect.
       annotations: { idempotentHint: false },
     },
-    async ({ id, to_version }) => {
+    async ({ id, to_version }, extra) => {
       // The workspace THIS call's own scoped read authorizes (Class 1): a live row's, or — undo of
       // a forget — a trashed row's. revertEntry reads the row again moments later on its own;
       // pinning its CAS guard to what this read found is what keeps an unshare in that gap from
@@ -1462,13 +1462,18 @@ export function buildMcpServer(
       const authorizedWorkspaceId = (liveRow?.workspace_id ?? trashedRow?.workspace_id) as string | undefined;
 
       const cfg = await resolveConfig(env);
+      const client = identity ? await resolveClient(extra) : undefined;
       const result = await revertEntry(
-        env, identity, id, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" }, cfg, to_version, authorizedWorkspaceId ?? "",
+        env, identity, id, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp", client }, cfg, to_version, authorizedWorkspaceId ?? "",
       );
 
       switch (result.status) {
         case "reverted":
           return { content: [{ type: "text", text: revertedMessage(id, result) }] };
+        // 5.6: "Say who released it" (Q-B): an agent may only reach this by the user's own words,
+        // and the reply names the id plainly, never the held text.
+        case "released":
+          return { content: [{ type: "text", text: `Released entry ${id}. It is back in recall. Undo is available.` }] };
         case "restored":
           return { content: [{ type: "text", text: restoredMessage(id, result) }] };
         case "no_change":

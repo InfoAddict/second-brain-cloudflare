@@ -4,8 +4,9 @@ import type { ChangeContext } from "../lib/audit";
 import { writeAuditEvents } from "../lib/audit";
 import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { ensureTenantBootstrap } from "../lib/tenancy";
-import { getStatus } from "./status";
+import { getStatus, withStatus } from "./status";
 import { withUserEditMarker } from "../tags/system";
+import { isHeld, QUARANTINE_TAG_PREFIX } from "../quarantine/tags";
 import { deleteEntryVectors } from "../vectorize/batch";
 import { discardUpload, upsertEntryVectors, type StoredEntry } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
@@ -16,13 +17,15 @@ import { getTrashedEntry, restoreEntry } from "./trash";
 import { isManagedMirror, mirrorRestoreWarning } from "../integrations/mirror";
 import {
   buildCasGuard, canRevert, changesOf, loadHistory, ownSnapshotLandedSql, pruneStatement, snapshotStatement, Params,
-  type StateChange, type VersionRow, type WhenChange,
+  type StateChange, type VersionChain, type VersionRow, type WhenChange,
 } from "./versions";
 import { NO_VALIDITY_CHANGE, outcomeOf, retractionHook, unretractionHook, validityEvents, validityReplySuffix, type ValidityOutcome } from "./validity";
 
 export type UndoResult =
   | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true; keptIncoming?: { id: string; reason: string }[]; deferredIncoming?: number; validity: ValidityOutcome }
   | { status: "restored"; mirrorSource?: string; validity: ValidityOutcome }
+  // Track 4 (5.6): undo on a currently-held row releases it instead of reverting a change.
+  | { status: "released" }
   | { status: "no_change" }
   | { status: "nothing_to_undo" }
   // `gone` is set whenever entry_events, read once and only for a caller who is on record as an
@@ -66,6 +69,12 @@ const isRecordedIncoming = (v: unknown): v is RecordedIncoming =>
 const asRecordedIncoming = (v: unknown): RecordedIncoming[] => Array.isArray(v) ? v.filter(isRecordedIncoming) : [];
 
 const sortedTagJson = (tags: string[]) => JSON.stringify([...new Set(tags)].sort());
+/** A `reason: "status"` version whose meta records a hold (5.4) — D4.1 means there is at most one
+ * per unbroken held streak, since an already-held row is never rescored. */
+function isHoldVersion(v: Pick<VersionRow, "reason" | "meta">): boolean {
+  if (v.reason !== "status") return false;
+  try { return !!(JSON.parse(v.meta || "{}") as Record<string, unknown>).hold; } catch { return false; }
+}
 const whenEqual = (a: WhenChange, b: WhenChange) =>
   (a.when_at ?? null) === (b.when_at ?? null)
   && (a.when_kind ?? null) === (b.when_kind ?? null)
@@ -93,6 +102,75 @@ async function reembedForRevert(
     console.error("Vectorize unavailable — committing content without re-embedding:", e);
     return null;
   }
+}
+
+/**
+ * 5.6, the "row was edited after the hold" case: the hold is not the newest version, so a plain
+ * revert-of-newest would restore the wrong thing (the tags-only state just before that LATER
+ * edit, which are still the held ones). This is a tags-only change instead: strip quarantine:*
+ * from the row's CURRENT tags (keeping whatever the later edit changed), and restore the status
+ * the hold version recorded as prior — but only if nothing else has moved the row off the draft
+ * the hold itself set. Content is never touched. Re-embeds first, fail-closed, same as leaving
+ * deprecated: a held row has no vectors, so this is the one path that adds them back.
+ */
+async function releaseHeldAfterEdit(
+  env: Env, id: string, row: EntryRow, currentTags: string[], chain: VersionChain,
+  change: ChangeContext, config: Readonly<Config>, authorizedWorkspaceId: string,
+): Promise<UndoResult> {
+  const holdVersion = chain.rows.find(isHoldVersion);
+  const priorStatus = holdVersion ? getStatus(JSON.parse(holdVersion.tags)) : null;
+  const strippedCurrent = currentTags.filter(t => typeof t === "string" && !t.trim().toLowerCase().startsWith(QUARANTINE_TAG_PREFIX));
+  const releasedTags = (getStatus(currentTags) === "draft" && priorStatus)
+    ? withStatus(strippedCurrent, priorStatus)
+    : strippedCurrent;
+  // The oldest kept version is the closest fact still on hand when the hold itself aged out of
+  // the visible chain (pruned or D-SH cut) — an approximation, stated here rather than guessed
+  // silently.
+  const ofSeq = holdVersion?.seq ?? chain.rows[chain.rows.length - 1].seq;
+
+  const embedCtx: WriteContext = { workspaceId: row.workspace_id, actorId: change.actorId || OWNER_WRITE_CONTEXT.actorId };
+  let newVectorIds: string[] | null = null;
+  try {
+    newVectorIds = (await reembedForRevert(env, id, row.content, releasedTags, row.source, config, embedCtx))?.vectorIds ?? null;
+  } catch (e) {
+    console.error("Release re-embed failed — the hold is left in place:", e);
+    return { status: "reembed_failed" };
+  }
+
+  const now = Date.now();
+  const casColumns = { tags: row.tags, workspace_id: authorizedWorkspaceId, vector_ids: row.vector_ids ?? null };
+  const p = new Params();
+  const tagsIdx = p.add(JSON.stringify(releasedTags));
+  const vectorIdsIdx = p.add(newVectorIds ? JSON.stringify(newVectorIds) : "[]");
+  const nowIdx = p.add(now);
+  const idIdx = p.add(id);
+  let results;
+  try {
+    results = await env.DB.batch([
+      snapshotStatement(env, {
+        entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags: releasedTags,
+        meta: { release: { of_seq: ofSeq } }, now,
+        guard: p2 => buildCasGuard(p2, casColumns),
+      }),
+      // versioning: snapshot
+      env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}, vector_ids = ${vectorIdsIdx}, updated_at = MAX(${nowIdx}, COALESCE(e.updated_at, e.created_at) + 1) WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`)
+        .bind(...p.values()),
+      pruneStatement(env, id, config.VERSION_KEEP),
+    ]);
+  } catch (e) {
+    if (newVectorIds) await discardUpload(env, id, newVectorIds);
+    throw e;
+  }
+  if (changesOf(results[1]) === 0) {
+    if (newVectorIds) await discardUpload(env, id, newVectorIds);
+    return { status: "stale" };
+  }
+
+  await writeAuditEvents(env, [{
+    entryId: id, actorId: change.actorId, event: "released",
+    payload: { of_seq: ofSeq, channel: change.channel, ...(change.client ? { client: change.client } : {}) },
+  }]);
+  return { status: "released" };
 }
 
 /**
@@ -182,14 +260,33 @@ export async function revertEntry(
     }
   }
 
+  const currentTagsList: string[] = JSON.parse(row.tags);
+  const wasHeld = isHeld(currentTagsList);
+
   // A connected mirror row (T-0089.6.6): the next sync would overwrite any revert, so this refuses
   // before reading history at all, the same as the edit and append routes refuse before writing.
-  if (await isManagedMirror(row.source, env)) return { status: "mirrored", source: row.source };
+  // 5.6 exemption: releasing a hold changes tags only, and the next sync rewrites content, not
+  // tags, so a held mirror row can still be released.
+  if (!(wasHeld && toVersion === undefined) && await isManagedMirror(row.source, env)) {
+    return { status: "mirrored", source: row.source };
+  }
 
   const chain = await loadHistory(env, identity, { id, content: row.content }, config.VERSION_KEEP);
   if (!chain.rows.length) return { status: "nothing_to_undo" };
 
   const newest = chain.rows[0];
+
+  // 5.6: undo on a currently-held row releases it, whether or not the hold is the newest version.
+  // The common case (hold IS newest) needs no dedicated path: falling through to the ordinary
+  // revert-of-newest logic below already restores the hold version's recorded PRIOR tags (the
+  // write's own requested tags, before quarantine), which is exactly the release; the generalized
+  // needsReembed/nextVectorIds logic further down (wasHeld/willBeHeld) handles re-indexing it.
+  if (toVersion === undefined && wasHeld && !isHoldVersion(newest)) {
+    const ownerUserId = newest.workspace_id === "" ? (await ensureTenantBootstrap(env)).ownerUserId : undefined;
+    const verdict = canRevert(identity, { workspace_id: row.workspace_id, actor_id: row.actor_id }, newest, newest.seq, chain.rows.map(r => r.seq), { ownerUserId });
+    if (!verdict.ok) return { status: verdict.code };
+    return releaseHeldAfterEdit(env, id, row, currentTagsList, chain, change, config, authorizedWorkspaceId);
+  }
   const target: VersionRow | undefined = toVersion === undefined ? newest : chain.rows.find(r => r.seq === toVersion);
   if (!target) {
     // toVersion named a seq outside the visible chain. The author sees the whole chain (up to
@@ -292,7 +389,12 @@ export async function revertEntry(
   const currentStatus = getStatus(JSON.parse(row.tags));
   const targetStatus = getStatus(restoredTagsRaw);
   const undeprecating = currentStatus === "deprecated" && targetStatus !== "deprecated";
-  const needsReembed = targetStatus !== "deprecated" && (contentChanged || undeprecating);
+  // 5.6: "re-embed when content changes, or when the row leaves deprecated OR HELD." willBeHeld
+  // is also how a redo (undo of a release) re-enters held: it restores the release version's
+  // recorded prior tags, which are the still-held ones.
+  const willBeHeld = isHeld(restoredTagsRaw);
+  const releasing = wasHeld && !willBeHeld;
+  const needsReembed = targetStatus !== "deprecated" && !willBeHeld && (contentChanged || undeprecating || releasing);
   const embedCtx: WriteContext = { workspaceId: row.workspace_id, actorId: change.actorId || OWNER_WRITE_CONTEXT.actorId };
   const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
 
@@ -308,7 +410,7 @@ export async function revertEntry(
   // Only set when this revert actually touched the vector index (re-embedded, or deprecating/
   // undeprecating). Otherwise leaving it out of the UPDATE, rather than rebinding this call's own
   // stale read, is what stops a re-index that lands mid-undo from being erased (U11).
-  const nextVectorIds = needsReembed ? (newVectorIds ? JSON.stringify(newVectorIds) : undefined) : targetStatus === "deprecated" ? "[]" : undefined;
+  const nextVectorIds = needsReembed ? (newVectorIds ? JSON.stringify(newVectorIds) : undefined) : (targetStatus === "deprecated" || willBeHeld) ? "[]" : undefined;
 
   const nonce = crypto.randomUUID();
   const now = Date.now();
@@ -461,18 +563,25 @@ export async function revertEntry(
     return { status: "stale" };
   }
 
-  if (targetStatus === "deprecated" || needsReembed) {
-    const stale = targetStatus === "deprecated" ? oldVectorIds : oldVectorIds.filter(v => !(newVectorIds ?? []).includes(v));
+  if (targetStatus === "deprecated" || willBeHeld || needsReembed) {
+    const stale = (targetStatus === "deprecated" || willBeHeld) ? oldVectorIds : oldVectorIds.filter(v => !(newVectorIds ?? []).includes(v));
     try { if (stale.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds: stale }]); } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
   }
 
   const hookOffset = 3 + incomingStatements.length;
   const hookResults = [retraction, unretraction].filter(h => h !== null).map(h => h!.read(results, hookOffset));
-  // One audit batch: the revert's own event and any validity changes its hooks made.
-  await writeAuditEvents(env, [{
+  // 5.6: releasing a hold (the common case, hold is the newest version) gets its OWN event —
+  // "released", not "reverted" — so the changes line (5.8) and the agent-facing copy (5.5) can
+  // tell the two apart without inspecting tags.
+  await writeAuditEvents(env, [releasing ? {
+    entryId: id, actorId: change.actorId, event: "released",
+    payload: { of_seq: target.seq, channel: change.channel, ...(change.client ? { client: change.client } : {}) },
+  } : {
     entryId: id, actorId: change.actorId, event: "reverted",
     payload: { target_seq: target.seq, reverted_reason: target.reason, channel: change.channel },
   }, ...validityEvents(change, ...hookResults)]);
+
+  if (releasing) return { status: "released" };
 
   const result: UndoResult = { status: "reverted", targetSeq: target.seq, validity: hookResults.length ? outcomeOf(...hookResults) : NO_VALIDITY_CHANGE };
 
