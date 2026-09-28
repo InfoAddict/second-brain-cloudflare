@@ -711,6 +711,19 @@ function renderViewStatus(entry) {
     btn.tabIndex = checked ? 0 : -1
     wireViewStatusButton(btn, entry)
   })
+  // UI review, S5: every status help line (Trusted/Unconfirmed/Wrong) claims
+  // search visibility ("shows up in search", "search leaves it out"), which
+  // is false while the memory is held - the banner above already says it is
+  // out of search. No held-aware copy exists yet, so this hides the line
+  // rather than risk shipping a second, possibly-conflicting claim.
+  const held = typeof heldReason === 'function' ? heldReason(entry.tags || []) : null
+  if (held) {
+    caption.style.display = 'none'
+    caption.textContent = ''
+    renderViewStatusLockNote(entry)
+    return
+  }
+  caption.style.display = ''
   const editedLabel = canonicalEditLabel(entry)
   caption.textContent = editedLabel ? t('status.editedBy', editedLabel) : t(STATUS_HELP_KEYS[status] || '')
   renderViewStatusLockNote(entry)

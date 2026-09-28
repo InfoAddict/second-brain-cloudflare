@@ -360,6 +360,27 @@ describe("status line shows 'edited by {tool}' for 7 days", () => {
     ctx.renderViewStatus({ id: "m1", tags: [], history: { items: [] } });
     expect(ctx.__els.get("view-status-caption").textContent).toContain("Confirmed");
   });
+
+  it.each([
+    ["canonical (Trusted)", []],
+    ["draft (Unconfirmed)", ["status:draft"]],
+    ["deprecated (Wrong)", ["status:deprecated"]],
+  ])("hides the help line on a held memory, whatever the status - %s", (_label, statusTags) => {
+    const ctx = load();
+    ctx.renderViewStatus({ id: "m1", tags: [...statusTags, "quarantine:instruction"], history: { items: [] } });
+    const caption = ctx.__els.get("view-status-caption");
+    expect(caption.textContent).toBe("");
+    expect(caption.style.display).toBe("none");
+  });
+
+  it("restores the help line once the memory is released", () => {
+    const ctx = load();
+    ctx.renderViewStatus({ id: "m1", tags: ["quarantine:instruction"], history: { items: [] } });
+    ctx.renderViewStatus({ id: "m1", tags: [], history: { items: [] } });
+    const caption = ctx.__els.get("view-status-caption");
+    expect(caption.style.display).toBe("");
+    expect(caption.textContent).toContain("Confirmed");
+  });
 });
 
 describe("locked for non-authors", () => {
