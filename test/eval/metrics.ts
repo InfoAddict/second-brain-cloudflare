@@ -25,12 +25,26 @@ export function ndcgAtK(ranked: readonly string[], gold: readonly GoldRef[], k: 
   return ideal === 0 ? 0 : dcg / ideal;
 }
 
-export function scoreQuery(ranked: readonly string[], gold: readonly GoldRef[]): QueryMetrics {
+/**
+ * Cuts the ranking at the first forbidden id (T-0089.2.6): gold before it still counts at its real rank, gold after
+ * it does not exist for scoring purposes. A retracted belief ranked above the actually-true gold must cost the
+ * query, not average away against queries where it is (correctly) absent (D-RET, D2.4).
+ */
+function cutAtForbidden(ranked: readonly string[], forbidden: readonly string[] | undefined): readonly string[] {
+  if (!forbidden?.length) return ranked;
+  const set = new Set(forbidden);
+  const list = unique(ranked);
+  const cut = list.findIndex(id => set.has(id));
+  return cut < 0 ? list : list.slice(0, cut);
+}
+
+export function scoreQuery(ranked: readonly string[], gold: readonly GoldRef[], forbidden?: readonly string[]): QueryMetrics {
+  const eligible = cutAtForbidden(ranked, forbidden);
   return {
-    recall5: recallAtK(ranked, gold, 5),
-    recall10: recallAtK(ranked, gold, 10),
-    mrr10: mrrAtK(ranked, gold, 10),
-    ndcg10: ndcgAtK(ranked, gold, 10),
+    recall5: recallAtK(eligible, gold, 5),
+    recall10: recallAtK(eligible, gold, 10),
+    mrr10: mrrAtK(eligible, gold, 10),
+    ndcg10: ndcgAtK(eligible, gold, 10),
   };
 }
 

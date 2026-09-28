@@ -5,7 +5,7 @@ import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from "../compression/eligibility";
 import { intParam, json } from "../lib/http";
-import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
+import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
 import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere, scopeWhereForIdRead } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
@@ -943,11 +943,15 @@ export async function handleAdminRoutes(
     // written.
     const latchedAtRaw = await env.OAUTH_KV.get(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY).catch(() => null);
     const latchedAt = latchedAtRaw ? Number(latchedAtRaw) : null;
+    // T-0101.8.5: the KV marker set once history starts being recorded (T-0089.1.1),
+    // read here only — no D1 fallback. Omitted, not null, when it has never been set.
+    const historySinceRaw = await env.OAUTH_KV.get(VERSIONS_SINCE_KV_KEY).catch(() => null);
     return json({
       ok: vectorize.ok,
       version: SB_VERSION,
       vectorize: { ...vectorize, workspaceFilter: { supported, degradedQueries, latchedAt } },
       team,
+      ...(historySinceRaw ? { history_since: Number(historySinceRaw) } : {}),
     });
   }
 
@@ -1434,7 +1438,7 @@ export async function handleAdminRoutes(
     // The single-id form keeps its precise errors, because a client asking about
     // one pattern can act on "not found" and the bulk form cannot.
     if (body.ids === undefined) {
-      if (!found.length) return json({ ok: false, error: `No entry found with ID: ${ids[0]}` }, 404);
+      if (!found.length) return json({ ok: false, error: `No memory found with ID: ${ids[0]}` }, 404);
       if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-insight")) {
         return json({ ok: false, error: "Entry is not a derived insight" }, 400);
       }

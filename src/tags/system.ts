@@ -153,7 +153,10 @@ export function stripNewReservedTags(tags: readonly string[]): { kept: string[];
 
 /** One plain line naming what was not saved; empty when nothing was dropped. */
 export function reservedTagsNote(ignored: readonly string[]): string {
-  return ignored.length ? `These tags are reserved and were not saved: ${ignored.join(", ")}.` : "";
+  if (!ignored.length) return "";
+  return ignored.length === 1
+    ? `Left off a tag Second Brain sets itself: ${ignored[0]}.`
+    : `Left off tags Second Brain sets itself: ${ignored.join(", ")}.`;
 }
 
 /**

@@ -116,6 +116,14 @@ async function resolveLoop(id, action, btn) {
     }
     dropFromLoopsQueue(id)
     if (typeof renderBoard === 'function' && typeof briefData !== 'undefined' && briefData) renderBoard(briefData)
+    if (typeof undoToast === 'function') {
+      undoToast(t(action === 'done' ? 'undo.done' : 'undo.notTask'), id, {
+        onUndone: () => {
+          if (typeof loadLoopsQueue === 'function') loadLoopsQueue()
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch (e) {
     if (btn) btn.disabled = false
     if (action === 'done') showToast(t('loops.doneFailed', { message: e.message }))

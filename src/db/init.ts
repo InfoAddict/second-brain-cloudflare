@@ -220,6 +220,10 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   idx_entry_versions_entry: `CREATE UNIQUE INDEX IF NOT EXISTS idx_entry_versions_entry ON entry_versions(entry_id, seq)`,
   entries_trash: `CREATE TABLE IF NOT EXISTS entries_trash (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', actor_id TEXT NOT NULL DEFAULT '', content TEXT NOT NULL, row_json TEXT NOT NULL, edges_json TEXT NOT NULL DEFAULT '[]', vector_ids TEXT NOT NULL DEFAULT '[]', deleted_at INTEGER NOT NULL, deleted_by TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT 'forget', nonce TEXT NOT NULL DEFAULT '')`,
   idx_entries_trash_deleted: `CREATE INDEX IF NOT EXISTS idx_entries_trash_deleted ON entries_trash(deleted_at)`,
+  // R5 (budget audit, MINOR): listTrash scopes by workspace_id and orders by deleted_at DESC;
+  // without this, SQLite's only path is the deleted_at index above, so it walks the whole trash
+  // table filtering every row for a workspace match — see db/schema.sql for the measured cost.
+  idx_entries_trash_workspace_deleted: `CREATE INDEX IF NOT EXISTS idx_entries_trash_workspace_deleted ON entries_trash(workspace_id, deleted_at DESC)`,
   // entries_fts and its three sync triggers are NOT here (v2.2 ownership
   // rule): they are created together, in one dedicated batch, below in
   // applySchema — never as independent SCHEMA_OBJECTS/POST_COLUMN_OBJECTS

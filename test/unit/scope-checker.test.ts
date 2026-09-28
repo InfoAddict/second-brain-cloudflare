@@ -1463,37 +1463,13 @@ describe("the checker over the real source tree", () => {
     // MOVED (T-0089.1.1, merge of release/v4 ebc8010d): recomputed from a real check:scope run on the merged
     // tree, not by adding two independently-tracked totals: Track 1's 196/102/17 plus release/v4's own queries
     // (Track 7's calibration and standing-cache reads, lanes Q/R/D, BE-2) land at 198/102/18/1.
-    // Deliberate: +1 query (198 -> 199) for T-0089.2.1 (src/memory/validity.ts supersedeStatements): the
-    // supersede UPDATE pins `e.workspace_id = ?` in its own compare-and-set, which the checker reads as
-    // a scope clause, so it needs no exemption.
-    // Deliberate: +1 scope-exempt (199/102 -> 199/103) for T-0089.2.1: windowClosedSql, the by-id
-    // "the window this batch closed" guard the supersede edge and the capture counters ride on; the
-    // edge insert's own entries reads moved into the shared edgeEndpointsReadableSql guard.
-    // Deliberate: +10 queries, +5 scope-exempt, +5 scope-checked (199/103/18 -> 209/108/23) for
-    // T-0089.2.4 (src/memory/validity.ts retraction hooks, D-RET): the restore and re-close hooks are
-    // set-based SQL inside the retracting write's own batch. scope-checked: the closer / retracted-by
-    // lookups (x pinned to the caller's authorized id-and-workspace pairs, y to x's workspace), both
-    // hook UPDATEs (only rows whose newest version carries the hook's own nonce) and the inherited
-    // edge's FROM. scope-exempt by-id: the newest-version reads, the supersedes-target pre-filter,
-    // the nonce-bound prune, and restore's "this trash row was consumed" guard.
-    // Deliberate: +5 queries, +3 scope-exempt, +2 scope-checked (209/108/23 -> 214/111/25) for the
-    // T-0089.2.4 cascade: builtOn (x pinned to the authorized pairs, the dependent to x's workspace)
-    // and the flag / unflag UPDATEs' own-nonce rows are scope-checked; the dependents pre-filter and
-    // the unflag's version reads of an already-pinned row are by-id exemptions.
-    // Deliberate: +2 queries, +1 scope-exempt, +1 scope-checked (214/111/25 -> 216/112/26) for
-    // T-0089.2.1 Task A4 (updateEntryValidity): its read, pinned to the caller's authorized workspace
-    // with the replaced rows sharing it (scope-checked), and the propagate "this row's new start landed"
-    // guard (by-id). Its two UPDATEs pin the workspace in their own compare-and-set.
-    // Deliberate: +2 queries, +2 scope-exempt, +1 scope-checked (216/112/26 -> 218/114/27) for
-    // Task B1 (recall's six-field validity contract, spec 5.9): the superseded_by correlated subquery
-    // (GET /recall hydration, GET /entry, MCP get, buildEntryFilterQuery for /list and list_recent) pins
-    // its closer to the outer row's own already-scoped workspace_id — scope-checked, since the lexer
-    // cannot see that pin is by column-to-column comparison rather than a bound value. The two new
-    // queries are buildEntryFilterQuery's own SELECT (now carrying the subquery) counted once for each
-    // of its two callers' distinct scoping shapes. The two scope-exempt string searches
-    // (scopeEntryFilterQuery, list_recent's inline scoping) are `.lastIndexOf("FROM entries")` calls the
-    // checker's text scan reads as queries; they search q.sql itself, not the database.
-    ).toEqual({ queries: 218, exempt: 114, checked: 27, outerJoin: 1 });
+    // MOVED 218/114/27/1 -> real --inventory output (merge of release/v4 57583d10 into v4/t2-b): this
+    // branch's own Task B1/B2 validity deltas (218/114/27/1, T-0089.2.1/2.4/B1, see history above) and
+    // release/v4's own independently-tracked deltas (BE-1's listTrash query, S1's changes query, and
+    // T-0089.2.1 lane A's supersede/retraction/cascade/updateEntryValidity scope-checked and scope-exempt
+    // sites) are independently-tracked deltas from the same base — recomputed against the real scanner
+    // output after combining rather than hand-reconciling the two.
+    ).toEqual({ queries: 220, exempt: 114, checked: 28, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

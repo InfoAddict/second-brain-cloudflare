@@ -181,7 +181,7 @@ describe("the purge checkbox label", () => {
     const ctx = load([{ provider: "gmail", name: "Gmail", itemCount: 3 }]);
     await ctx.disconnectIntegration("gmail", makeEl());
     const label = ctx.__els.get("confirm-check-label").textContent as string;
-    expect(label).toBe("Also delete the 3 synced memories");
+    expect(label).toBe("Also move the 3 synced memories to the trash");
     expect(label).not.toContain("OK =");
     expect(label).not.toContain("Cancel =");
     expect(label).not.toContain("\n");
@@ -191,17 +191,17 @@ describe("the purge checkbox label", () => {
     const one = [{ provider: "gmail", name: "Gmail", itemCount: 1 }];
     const ctx = load(one);
     await ctx.disconnectIntegration("gmail", makeEl());
-    expect(ctx.__els.get("confirm-check-label").textContent).toBe("Also delete the 1 synced memory");
+    expect(ctx.__els.get("confirm-check-label").textContent).toBe("Also move the 1 synced memory to the trash");
 
     const it_ = load(one);
     it_.initI18n("it");
     await it_.disconnectIntegration("gmail", makeEl());
-    expect(it_.__els.get("confirm-check-label").textContent).toBe("Elimina anche il 1 ricordo sincronizzato");
+    expect(it_.__els.get("confirm-check-label").textContent).toBe("Sposta nel cestino anche il 1 ricordo sincronizzato");
 
     const itMany = load([{ provider: "gmail", name: "Gmail", itemCount: 4 }]);
     itMany.initI18n("it");
     await itMany.disconnectIntegration("gmail", makeEl());
-    expect(itMany.__els.get("confirm-check-label").textContent).toBe("Elimina anche i 4 ricordi sincronizzati");
+    expect(itMany.__els.get("confirm-check-label").textContent).toBe("Sposta nel cestino anche i 4 ricordi sincronizzati");
   });
 });
 

@@ -11,6 +11,7 @@ import { buildEntryHistoryFromReads, readEntryVersion } from "../memory/history-
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
+import { decodeTrashCursor, listTrash } from "../memory/trash-list";
 import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
 import { mirrorUndoError } from "../integrations/mirror";
 import { applyStatus } from "../capture/lifecycle";
@@ -211,7 +212,7 @@ export async function handleEntriesRoutes(
     }
 
     const row = await getReadableEntry(env, auth, id);
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
@@ -219,7 +220,7 @@ export async function handleEntriesRoutes(
     const result = await forgetEntry(id, env, { actorId: auth.userId, channel: "rest" }, { reason: "forget", config: cfg }, row.workspace_id as string);
 
     if (result.status === "not_found") {
-      return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     }
 
     auditEvent(env, ctx, {
@@ -258,6 +259,39 @@ export async function handleEntriesRoutes(
       payload: { channel: "rest", edgesRestored: result.edgesRestored, trashedReason: result.trashedReason },
     });
     return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount, validity: result.validity });
+  }
+
+  // GET /trash (BE-2, T-0101.2.1, contract 4.3) — the dashboard trash view's page reader.
+  // Q10: listTrash already narrows to what the reader can restore.
+  if (url.pathname === "/trash" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limitParam = url.searchParams.get("limit");
+    let limit = 20;
+    if (limitParam !== null) {
+      const parsed = Number(limitParam);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) {
+        return json({ ok: false, error: "limit must be an integer between 1 and 50" }, 400);
+      }
+      limit = parsed;
+    }
+
+    const cursorParam = url.searchParams.get("cursor") ?? undefined;
+    if (cursorParam !== undefined && decodeTrashCursor(cursorParam) === null) {
+      return json({ ok: false, error: "cursor is invalid" }, 400);
+    }
+
+    const layerParam = url.searchParams.get("layer") ?? undefined;
+    if (layerParam !== undefined && layerParam !== "personal" && layerParam !== "company") {
+      return json({ ok: false, error: 'layer must be "personal" or "company"' }, 400);
+    }
+
+    const cfg = await resolveConfig(env);
+    const { items, nextCursor } = await listTrash(env, auth, {
+      limit, cursor: cursorParam, layer: layerParam as "personal" | "company" | undefined, config: cfg,
+    });
+    return json({ ok: true, retention_days: cfg.TRASH_RETENTION_DAYS, items, next_cursor: nextCursor });
   }
 
   // POST /undo — reverse the most recent change to a memory (or a specific earlier version, with
@@ -319,7 +353,7 @@ export async function handleEntriesRoutes(
         return json({ ok: false, error: prunedMessage(id, toVersion!, result.oldestKept, cfg.VERSION_KEEP), oldestKept: result.oldestKept }, 404);
       case "not_found":
         if (result.gone) return json({ ok: false, error: goneMessage(id, result.gone, cfg.TRASH_RETENTION_DAYS), gone: result.gone }, 404);
-        return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+        return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
       case "forbidden":
         return json({ ok: false, error: FORBIDDEN_MSG }, 403);
       case "mirrored":
@@ -329,7 +363,7 @@ export async function handleEntriesRoutes(
       case "nothing_to_undo":
         return json({ ok: false, error: `Entry ${id} has no recorded changes to undo.` }, 409);
       case "reembed_failed":
-        return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged; please try again." }, 500);
+        return json({ ok: false, error: "Couldn't update: search did not update. The memory is unchanged. Try again." }, 500);
     }
   }
 
@@ -365,7 +399,7 @@ export async function handleEntriesRoutes(
                 ORDER BY s.created_at DESC LIMIT 1) AS superseded_by_json
        FROM entries WHERE id = ? AND ${scope.clause}`
     ).bind(id, ...scope.bindings).first() as Record<string, any> | null;
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
 
     let vectorIds: unknown[] = [];
     try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
@@ -496,7 +530,7 @@ export async function handleEntriesRoutes(
     const result = await moveEntry(id, target, env, auth, { actorId: auth.userId, channel: "rest" }, teamRead.teamId);
 
     if (result.status === "not_found") {
-      return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     }
     if (result.status === "forbidden") {
       return json({ ok: false, error: "Only the entry's author or an admin can un-share it" }, 403);
@@ -530,14 +564,14 @@ export async function handleEntriesRoutes(
     const id = body.id.trim();
     const status = body.status as MemoryStatus;
     const row = await getReadableEntry(env, auth, id);
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    if (!row) return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
     const result = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env), row.workspace_id as string);
 
     if (result.status === "not_found") {
-      return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     }
     if (result.status === "reembed_failed") {
       return json({ ok: false, error: "Could not change the status: re-indexing failed. Nothing changed. Try again." }, 502);

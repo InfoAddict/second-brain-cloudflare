@@ -85,7 +85,7 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
   // Content history and soft delete (T-0089.1.1, T-0089.1.2).
-  "entry_versions", "idx_entry_versions_entry", "entries_trash", "idx_entries_trash_deleted",
+  "entry_versions", "idx_entry_versions_entry", "entries_trash", "idx_entries_trash_deleted", "idx_entries_trash_workspace_deleted",
   "entries_fts",
   "entry_counts",
   ...PROMPT_CAPSULE_TRIGGERS,
@@ -291,9 +291,10 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 62 -> 66 (T-0089.6.1) by the four partial indexes behind the agent brief.
       // MOVED 66 -> 70 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
       // MOVED 70 -> 71 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER.
-      // MOVED 71 -> 72 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER.
-      // MOVED 72 -> 74 (T-0089.2.1) by the valid_from and valid_until ALTERs.
-      expect(migrated).toBe(74); // 31 base objects + 22 ALTERs + 15 post-column objects + the email-index CREATE
+      // MOVED 71 -> 72 (R5, budget audit) by idx_entries_trash_workspace_deleted.
+      // MOVED 72 -> 73 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER.
+      // MOVED 73 -> 75 (T-0089.2.1) by the valid_from and valid_until ALTERs.
+      expect(migrated).toBe(75); // 32 base objects + 22 ALTERs + 15 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -633,9 +634,10 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 60 -> 64 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
     // MOVED 64 -> 65 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER — wasted on a fresh brain
     // (the CREATE above already has the column), same as every other ALTER a fresh CREATE subsumes.
-    // MOVED 65 -> 66 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER, wasted the same way.
-    // MOVED 66 -> 68 (T-0089.2.1) by the valid_from and valid_until ALTERs.
-    expect(cold).toBe(68); // one probe, then the 67 statements a new brain needs
+    // MOVED 65 -> 66 (R5, budget audit) by idx_entries_trash_workspace_deleted.
+    // MOVED 66 -> 67 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER, wasted the same way.
+    // MOVED 67 -> 69 (T-0089.2.1) by the valid_from and valid_until ALTERs.
+    expect(cold).toBe(69); // one probe, then the 68 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });

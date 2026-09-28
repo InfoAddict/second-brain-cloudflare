@@ -150,8 +150,10 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // retryAfterMs rework added lines above this site; same site, shifted only.
   // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.
   // MOVED 1531 -> 1534 -> 1540 (T-0089.2.1): the insights dry-run pair query's validity predicate,
-  // then B2's due/loops/vectorize-pending validity-reader-inventory markers, added lines above this site; same site.
-  { file: 'src/routes/admin.ts', line: 1540, kind: 'exempt' },
+  // then B2's due/loops/vectorize-pending validity-reader-inventory markers, added lines above this
+  // site. MOVED 1540 -> 1544 (merge of release/v4 57583d10, T-0101.8.5 BE-10): history_since on
+  // GET /health added lines above this site too; same site.
+  { file: 'src/routes/admin.ts', line: 1544, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
   // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
@@ -173,7 +175,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:86", "src/staleness/pass.ts:96",
   "src/when/pass.ts:368",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1540", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1544", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   // MOVED 443 -> 454, 503 -> 514 (T-0089.2.1): buildEntryFilterQuery's superseded_by

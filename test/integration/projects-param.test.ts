@@ -343,7 +343,7 @@ describe("GET /digest with project", () => {
     const body = await jsonOf(res);
     expect(body.project).toBe("site");
     expect(body.entry_id).toBeUndefined();
-    expect(body.error).toBe("Could not create digest — project may have fewer than 10 eligible entries or was recently compressed");
+    expect(body.error).toBe("Could not create digest: the project may have fewer than 10 eligible entries, or it was recently compressed.");
     expect(body.source_count).toBe(0);
   });
 

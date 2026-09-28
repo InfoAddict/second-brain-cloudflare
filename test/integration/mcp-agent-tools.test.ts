@@ -123,7 +123,7 @@ describe("MCP resolve", () => {
 
   it("requires until for snooze and a specific actionable id", async () => {
     expect(await call("resolve", { id: "todo", action: "snooze" })).toContain("until is required");
-    expect(await call("resolve", { id: "missing", action: "done" })).toContain("No entry found");
+    expect(await call("resolve", { id: "missing", action: "done" })).toContain("No memory found");
   });
 
   it("confirms insights and keeps stale memories on the user's word", async () => {
@@ -166,7 +166,7 @@ describe("MCP resolve", () => {
     await env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'private'`).bind(other.member.personalWorkspaceId).run();
     const member = await createMember(env, { name: "Reader" });
     const reader = (await resolveIdentityFromToken(member.token, env))!;
-    expect(await call("resolve", { id: "private", action: "done" }, reader)).toContain("No entry found");
+    expect(await call("resolve", { id: "private", action: "done" }, reader)).toContain("No memory found");
     expect(JSON.parse(String(sqlite.rows().find(r => r.id === "private")?.tags))).not.toContain("task:done");
   });
 });
@@ -278,7 +278,7 @@ describe("MCP history", () => {
     await env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'private'`).bind(other.member.personalWorkspaceId).run();
     const reader = await createMember(env, { name: "Reader" });
     const member = (await resolveIdentityFromToken(reader.token, env))!;
-    expect(await call("history", { id: "private" }, member)).toContain("No entry found");
+    expect(await call("history", { id: "private" }, member)).toContain("No memory found");
     expect(await call("history", { id: "private" }, null)).toContain("authenticated identity");
   });
 });

@@ -41,7 +41,7 @@ describe("evaluateGate", () => {
     expect(status(result, "degraded")).toBe("fail");
   });
 
-  it("reports a subset:<name> split of a category as extra rows that no rule reads", () => {
+  it("existing rules and exit codes are unchanged by an underpowered subset split (was gate.test.ts:44-51)", () => {
     const tagLong = (i: number, r: QueryResult) => { if (r.category === "long-context" && i % 16 === 7) r.tags = ["subset:coherent-padding"]; };
     const plain = judge(base, report("v", shift(0.5, 30)));
     const split = judge(report("baseline", tagLong), report("v", (i, r) => { tagLong(i, r); shift(0.5, 30)(i, r); }));
@@ -49,7 +49,75 @@ describe("evaluateGate", () => {
     expect(scopes.has("long-context [subset:coherent-padding]")).toBe(true);
     expect(scopes.has("long-context [rest]")).toBe(true);
     expect(new Set(plain.deltas.map(d => d.scope)).has("long-context [rest]")).toBe(false);
+    // The subset here is far below the 20-query/10-cluster floor, so it is reported, not gated: every rule's
+    // status (now including subset-regression and corpus-floors) is unchanged from the unsplit report.
     expect(split.rules.map(r => `${r.rule}:${r.status}`)).toEqual(plain.rules.map(r => `${r.rule}:${r.status}`));
+    expect(split.verdict).toBe(plain.verdict);
+  });
+
+  it("a subset of at least 20 queries and 10 clusters that regresses fails the gate, named (T-0089.2.6)", () => {
+    let seenLong = 0;
+    const tweak = (i: number, r: QueryResult) => {
+      if (r.category !== "long-context") return;
+      seenLong++;
+      if (seenLong <= 20) { r.tags = ["subset:target"]; r.metrics.recall10 = Math.max(0, r.metrics.recall10 - 0.1); r.metrics.mrr10 = Math.max(0, r.metrics.mrr10 - 0.1); }
+      else { r.tags = ["subset:rest-marker"]; r.metrics.recall10 = Math.min(1, r.metrics.recall10 + 0.5); r.metrics.mrr10 = Math.min(1, r.metrics.mrr10 + 0.5); }
+    };
+    const result = judge(base, report("v", tweak));
+    expect(status(result, "subset-regression")).toBe("fail");
+    expect(result.subsetRegressions.some(s => s.startsWith("long-context [subset:target]"))).toBe(true);
+    expect(result.verdict).toBe("FAIL");
+    // The category itself does not regress: the 10-query improvement in "rest" outweighs the 20-query loss in
+    // "target" on the category-level mean, which is exactly the round-4 failure this rule exists to catch.
+    expect(status(result, "regression")).toBe("pass");
+  });
+
+  it("a small subset is reported, not gated (T-0089.2.6)", () => {
+    let seenLong = 0;
+    const tweak = (i: number, r: QueryResult) => {
+      if (r.category !== "long-context") return;
+      seenLong++;
+      if (seenLong <= 5) { r.tags = ["subset:tiny"]; r.metrics.recall10 = 0; r.metrics.mrr10 = 0; }
+    };
+    const result = judge(base, report("v", tweak));
+    expect(status(result, "subset-regression")).toBe("pass");
+    expect(result.subsetRegressions).toEqual([]);
+    expect(result.deltas.some(d => d.scope === "long-context [subset:tiny]")).toBe(true);
+    const detail = result.rules.find(r => r.rule === "subset-regression")!.detail;
+    expect(detail).toMatch(/skipped underpowered.*long-context \[subset:tiny\]/);
+  });
+
+  it("a corpus floor below min fails, named (T-0089.2.6)", () => {
+    const result = judge(base, report("v"), { floors: [{ scope: "overall", metric: "mrr10", min: 0.9 }] });
+    expect(status(result, "corpus-floors")).toBe("fail");
+    expect(result.floorFailures.some(s => s.startsWith("overall mrr10"))).toBe(true);
+    expect(result.verdict).toBe("FAIL");
+  });
+
+  it("a corpus floor the candidate meets passes, named", () => {
+    const result = judge(base, report("v"), { floors: [{ scope: "overall", metric: "mrr10", min: 0.4 }] });
+    expect(status(result, "corpus-floors")).toBe("pass");
+    expect(result.floorFailures).toEqual([]);
+  });
+
+  it("--target-subsets passes on a subset win the category margin cannot see (T-0089.2.6)", () => {
+    let seenLong = 0;
+    const tweak = (i: number, r: QueryResult) => {
+      if (r.category !== "long-context") return;
+      seenLong++;
+      // 20 queries win big (the target subset); 10 stay flat: the category mean alone (about +0.33) would also
+      // pass the plain improvement rule, so this specifically proves the targeted path names the subset's own win.
+      if (seenLong <= 20) { r.tags = ["subset:winner"]; r.metrics.recall10 = 1; r.metrics.mrr10 = 1; }
+    };
+    const result = judge(base, report("v", tweak), { targetSubsets: ["long-context:winner"] });
+    expect(status(result, "improvement")).toBe("pass");
+    const detail = result.rules.find(r => r.rule === "improvement")!.detail;
+    expect(detail).toMatch(/long-context:winner (recall10|mrr10) \+/);
+  });
+
+  it("--target-subsets is inconclusive when the named subset matches no query", () => {
+    const result = judge(base, report("v"), { targetSubsets: ["long-context:nonexistent"] });
+    expect(result.rules.find(r => r.rule === "target-subsets")?.status).toBe("inconclusive");
   });
 
   it("FAILs when the baseline is degraded, so a broken baseline cannot flatter a candidate", () => {

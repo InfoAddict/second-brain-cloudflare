@@ -40,7 +40,7 @@ export async function resolveEntryAction(
   if (action === "still_true") {
     for (let attempt = 0; attempt < 3; attempt++) {
       const row = await getReadableEntry(env, identity, id, `id, workspace_id, actor_id, tags, COALESCE(updated_at, created_at) AS prior_updated_at, staleness_checked_at`) as (EntryAccessRow & Record<string, any> | null);
-      if (!row) return { ok: false, error: `No entry found with ID: ${id}`, status: 404 };
+      if (!row) return { ok: false, error: `No memory found with ID: ${id}`, status: 404 };
       const denied = assertCanEditContent(identity, row);
       if (denied) return { ok: false, error: denied.message, status: 403 };
       const tags: string[] = JSON.parse(row.tags ?? "[]");
@@ -80,7 +80,7 @@ export async function resolveEntryAction(
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, content, when_at, when_kind, when_label, when_source") as (EntryAccessRow & Record<string, any> | null);
-    if (!row) return { ok: false, error: `No entry found with ID: ${id}`, status: 404 };
+    if (!row) return { ok: false, error: `No memory found with ID: ${id}`, status: 404 };
     const denied = assertCanEditContent(identity, row);
     if (denied) return { ok: false, error: denied.message, status: 403 };
     const tags = parseTags(row.tags as string);

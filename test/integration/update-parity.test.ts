@@ -451,7 +451,7 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
       await client.close();
     }
 
-    expect(reply).toMatch(/No entry found with ID: nope/);
+    expect(reply).toMatch(/No memory found with ID: nope/);
     expect(normalize(await capture(mcpStore))).toEqual(normalize(httpSnapshot));
   });
 
@@ -484,11 +484,11 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
 
     const http = await viaHttp(world, "I live in Lisbon");
     expect(http.status).toBe(500);
-    expect(http.reply).toMatch(/Your memory is unchanged/);
+    expect(http.reply).toMatch(/The memory is unchanged/);
 
     const mcp = await viaMcp(world, "I live in Lisbon");
     expect(mcp.reply).not.toMatch(/^Updated entry/);
-    expect(mcp.reply).toMatch(/Your memory is unchanged/);
+    expect(mcp.reply).toMatch(/The memory is unchanged/);
   });
 
   it("the MCP tool flags the keyword-only degrade instead of claiming a re-index", async () => {
@@ -496,8 +496,8 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
       { seed: { content: "I live in Berlin", tags: ["home"] }, vectorizeDown: true },
       "I live in Lisbon",
     );
-    expect(mcp.reply).toMatch(/Updated entry x1/);
-    expect(mcp.reply).toMatch(/not re-indexed for semantic search/);
+    expect(mcp.reply).toMatch(/Updated memory x1/);
+    expect(mcp.reply).toMatch(/Search by meaning is unavailable/);
     expect(mcp.reply).toMatch(/wrangler vectorize create/);
   });
 

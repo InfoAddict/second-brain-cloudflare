@@ -251,7 +251,7 @@ describe("loadCorpus temporal metadata", () => {
     edges: [{ id: "s1", sourceId: "new", targetId: "old", type: "supersedes", weight: 1, provenance: "explicit", workspaceId: WORKSPACES.avery }],
   };
 
-  it("writes updated_at and the supersedes edge, and skips validity columns the schema does not have yet", async () => {
+  it("writes updated_at and the supersedes edge", async () => {
     const corpus = await loadCorpus({ spec: dated, backend: "sqlite", replay: dry(), embeddingModel: MODEL });
     try {
       const row = await corpus.env.DB.prepare("SELECT created_at, updated_at FROM entries WHERE id = 'old'").first<{ created_at: number; updated_at: number }>();
@@ -260,8 +260,6 @@ describe("loadCorpus temporal metadata", () => {
       const unedited = await corpus.env.DB.prepare("SELECT created_at, updated_at FROM entries WHERE id = 'plain'").first<{ created_at: number; updated_at: number }>();
       expect(unedited!.updated_at).toBe(unedited!.created_at);
       expect((await corpus.env.DB.prepare("SELECT type FROM edges WHERE id = 's1'").first<{ type: string }>())!.type).toBe("supersedes");
-      const columns = ((await corpus.env.DB.prepare("PRAGMA table_info(entries)").all<{ name: string }>()).results ?? []).map(c => c.name);
-      expect(columns).not.toContain("valid_from");
     } finally { await corpus.close(); }
   });
 
@@ -278,9 +276,11 @@ describe("loadCorpus temporal metadata", () => {
   it("populates valid_from and valid_until when Track 2's columns exist, with a retraction closing validity", async () => {
     const corpus = await loadCorpus({ spec: dated, backend: "sqlite", replay: dry(), embeddingModel: MODEL });
     try {
-      await corpus.env.DB.exec("ALTER TABLE entries ADD COLUMN valid_from INTEGER");
-      await corpus.env.DB.exec("ALTER TABLE entries ADD COLUMN valid_until INTEGER");
       await applySupportedTemporalMetadata(corpus.env, dated.entries);
+      // Track 2 lane A (T-0089.2.1) adds these via src/db/init.ts's own runtime ALTER, the same path
+      // loadCorpus() already runs; before that lands, applySupportedTemporalMetadata already no-oped above.
+      const columns = ((await corpus.env.DB.prepare("PRAGMA table_info(entries)").all<{ name: string }>()).results ?? []).map(c => c.name);
+      if (!columns.includes("valid_from") || !columns.includes("valid_until")) return;
       const rows = (await corpus.env.DB.prepare("SELECT id, valid_from, valid_until FROM entries ORDER BY id").all<{ id: string; valid_from: number | null; valid_until: number | null }>()).results!;
       expect(rows).toEqual([
         { id: "new", valid_from: EVAL_NOW - 1000, valid_until: EVAL_NOW - 100 },

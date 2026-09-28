@@ -1,15 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createMcpHandler } from "agents/mcp";
+import * as serverModule from "../../src/mcp/server";
 import { createApiHandler } from "../../src/mcp/handler";
 import { makeTestEnv } from "../helpers/make-env";
 import type { Env } from "../../src/env";
 
+vi.mock("../../src/mcp/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/mcp/server")>();
+  return { ...actual, buildMcpServer: vi.fn(actual.buildMcpServer) };
+});
+
 const ctx = { waitUntil: (_: Promise<unknown>) => {} } as ExecutionContext;
 
-function mcpPost(body: unknown) {
+function mcpPost(body: unknown, headers: Record<string, string> = {}) {
   return new Request("http://localhost/mcp", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+    headers: { "Content-Type": "application/json", Authorization: "Bearer test-token", ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -65,6 +71,36 @@ describe("MCP HTTP handler (/mcp)", () => {
     expect(res).toBe(downstream);
   });
 
+  it("BE-5: reads ctx.props and passes {clientName, via} plus the bearer into buildMcpServer", async () => {
+    const ctxWithProps = {
+      waitUntil: (_: Promise<unknown>) => {},
+      props: { userId: "owner", clientId: "client-1", clientName: "Cursor" },
+    } as unknown as ExecutionContext;
+
+    await handler.fetch(mcpPost({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} }), env, ctxWithProps);
+
+    expect(serverModule.buildMcpServer).toHaveBeenCalledWith(
+      env, ctxWithProps, expect.anything(),
+      expect.objectContaining({ clientName: "Cursor" }),
+      "test-token",
+    );
+  });
+
+  it("BE-5: a static-token caller's props carry via: token through to buildMcpServer", async () => {
+    const ctxWithProps = {
+      waitUntil: (_: Promise<unknown>) => {},
+      props: { userId: "owner", via: "token" },
+    } as unknown as ExecutionContext;
+
+    await handler.fetch(mcpPost({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} }), env, ctxWithProps);
+
+    expect(serverModule.buildMcpServer).toHaveBeenCalledWith(
+      env, ctxWithProps, expect.anything(),
+      expect.objectContaining({ via: "token" }),
+      "test-token",
+    );
+  });
+
   describe("R3 (budget audit): a tool call that hit the D1 daily cap", () => {
     const READ_CAP = "D1_ERROR: Your account has exceeded D1's free tier daily row read limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue.";
     const WRITE_CAP = "D1_ERROR: Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue.";
@@ -99,13 +135,13 @@ describe("MCP HTTP handler (/mcp)", () => {
     });
 
     it("leaves an unrelated tool error untouched", async () => {
-      vi.mocked(createMcpHandler).mockReturnValue((() => Promise.resolve(toolErrorResponse("No entry found with ID: e1"))) as never);
+      vi.mocked(createMcpHandler).mockReturnValue((() => Promise.resolve(toolErrorResponse("No memory found with ID: e1"))) as never);
       const res = await handler.fetch(
         mcpPost({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "get", arguments: { id: "e1" } } }),
         env, ctx,
       );
       const payload = await res.json() as any;
-      expect(payload.result.content[0].text).toBe("No entry found with ID: e1");
+      expect(payload.result.content[0].text).toBe("No memory found with ID: e1");
     });
   });
 });

@@ -195,7 +195,7 @@ describe("a link across two layers is refused, not written", () => {
     // for "this id exists in someone else's workspace".
     const res = await call("POST", "/link", alice.token, { source_id: "a-one", target_id: "b-one" });
     expect(res.status).toBe(404);
-    expect((await jsonOf(res)).error).toBe("No entry found with ID: b-one");
+    expect((await jsonOf(res)).error).toBe("No memory found with ID: b-one");
   });
 });
 
