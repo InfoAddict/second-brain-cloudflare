@@ -353,16 +353,27 @@ const I18N_EN = {
     footerPruned: 'Only the last {n} changes are kept.',
     footerNotRecorded: 'Changes before {date} were not recorded.',
     footerSharedCut: 'Earlier changes are visible only to {name}.',
-    // Lane W (T-0089.4.2, copy deck 9): the too-long hold's history entry. Not yet wired into
-    // any dashboard UI -- see the copy deck section 9 for the UI spots this is meant for (lane S).
     reasonHeldTooLong: 'Held: too long to check automatically',
+    // T3/T4 lane S5 (16-t3-t4-trust-spec.md 7.9): the sheet timeline's own
+    // event labels for a hold and a release.
+    evHeld: 'Held',
+    evReleased: 'Released',
   },
-  // Lane W (T-0089.4.2, copy deck 9): the too-long hold state (a note over about 5,000 words,
-  // held until the owner releases it). Keys only -- no dashboard chip or banner reads these yet;
-  // see the copy deck section 9 for the UI spots this is meant for (lane S).
+  // T3/T4 lane S5 wires lane W's too-long keys (deck 9) into the chip and
+  // banner, plus the general hold-reason keys from 16-t3-t4-trust-spec.md 7.9.
   held: {
     tooLongChip: 'Held: too long',
     tooLongLine: "Held out of search and away from your AI tools, because it's too long to check automatically for hidden instructions. Read it, and release it if it's fine. Shorter memories aren't held.",
+    chip: 'Held',
+    banner: 'Held out of search: {reason}. It stays saved, and AI tools will not see it until you release it.',
+    release: 'Release',
+    released: 'Released',
+    // DRAFT, flagged for the copywriter: no key given for a failed release.
+    releaseFailed: 'Could not release this: {message}',
+    reasonInstruction: 'looks like an instruction to an AI',
+    reasonHidden: 'contains hidden text',
+    reasonBurst: 'many memories were written in a short time',
+    reasonCapsule: 'changes what your AI tools always see',
   },
   undo: {
     // SH-2's write-site toasts: one per action, action label "Undo" on all.
@@ -402,6 +413,12 @@ const I18N_EN = {
     wrongHelp: 'Not true, or not to be used. Search leaves it out, for you and your AI tools. You can change this any time.',
     keywordOnly: "Not searchable by meaning until it's indexed.",
     failed: 'Could not change the status: {message}',
+    // T3/T4 lane S5 (16-t3-t4-trust-spec.md 5.7, UX-E.3): the 7-day canonical-
+    // edit label, replacing the plain help line above while it applies.
+    editedBy: 'Trusted · edited by {tool} on {date}',
+    // Not in the deck's own status.* table; reused from history.byAgent's
+    // established wording ("via an AI tool") for the same unnamed-client case.
+    anAiTool: 'an AI tool',
   },
   graph: {
     empty: 'No connections yet. Link memories, or let them connect on their own as you add more.',
@@ -1653,10 +1670,21 @@ const I18N_IT = {
     footerNotRecorded: 'Le modifiche precedenti al {date} non sono state registrate.',
     footerSharedCut: 'Le modifiche precedenti sono visibili solo a {name}.',
     reasonHeldTooLong: 'Trattenuto: troppo lungo per il controllo automatico',
+    evHeld: 'Trattenuto',
+    evReleased: 'Rilasciato',
   },
   held: {
     tooLongChip: 'Trattenuto: troppo lungo',
     tooLongLine: 'Tenuto fuori dalla ricerca e lontano dai tuoi strumenti di IA, perché è troppo lungo per controllarlo automaticamente in cerca di istruzioni nascoste. Leggilo e rilascialo se va bene. I ricordi più brevi non vengono trattenuti.',
+    chip: 'Trattenuto',
+    banner: 'Escluso dalla ricerca: {reason}. Resta salvato e gli strumenti di IA non lo vedranno finché non lo rilasci.',
+    release: 'Rilascia',
+    released: 'Rilasciato',
+    releaseFailed: 'Impossibile rilasciarlo: {message}',
+    reasonInstruction: "sembra un'istruzione per un'IA",
+    reasonHidden: 'contiene testo nascosto',
+    reasonBurst: 'molti ricordi sono stati scritti in poco tempo',
+    reasonCapsule: 'cambia ciò che i tuoi strumenti di IA vedono sempre',
   },
   undo: {
     trashed: 'Spostato nel cestino',
@@ -1694,6 +1722,8 @@ const I18N_IT = {
     wrongHelp: 'Non vero, o da non usare. La ricerca lo esclude, per te e per i tuoi strumenti di IA. Puoi cambiarlo in qualsiasi momento.',
     keywordOnly: "Non trovabile per significato finché non è indicizzato.",
     failed: 'Impossibile cambiare lo stato: {message}',
+    editedBy: 'Affidabile · modificato da {tool} il {date}',
+    anAiTool: 'uno strumento di IA',
   },
   graph: {
     empty:

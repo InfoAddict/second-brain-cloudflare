@@ -1195,6 +1195,14 @@
         border-color: var(--accent-ink);
       }
 
+      /* T3/T4 lane S5: --warn, not --danger - a held memory is a calm,
+         reviewable state (this is a common, expected outcome, not an error),
+         and never color alone: the icon plus "Held" label carry the meaning. */
+      .tag-chip--held {
+        color: var(--warn);
+        border-color: var(--warn);
+      }
+
       .tag-chip--hop {
         background: var(--accent-soft);
         color: var(--accent-ink);

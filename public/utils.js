@@ -526,7 +526,7 @@ const CONFIDENCE_VALUES = new Set([
 function isRecognizedNewReservedValue(t) {
   if (t.startsWith('quarantine:')) {
     const v = t.slice('quarantine:'.length)
-    return v === 'instruction' || v === 'hidden' || v === 'burst' || v === 'capsule'
+    return v === 'instruction' || v === 'hidden' || v === 'burst' || v === 'capsule' || v === 'too_long'
   }
   if (t.startsWith('edited-canonical:')) return /^\d{4}-\d{2}-\d{2}$/.test(t.slice('edited-canonical:'.length))
   if (t.startsWith('standing:')) return t.slice('standing:'.length) === 'active'
@@ -1086,9 +1086,56 @@ function standingBadgeHtml(tags) {
   return `<span class="tag-chip tag-chip--standing" title="${escAttr(t('standing.badgeTitle'))}"><i class="ti ti-pin"></i> ${escHtml(t('standing.badge'))}</span>`
 }
 
+/**
+ * T3/T4 lane S5 (16-t3-t4-trust-spec.md, `quarantine:<reason>`): the row's
+ * hold reason, or null when it carries none - mirrors heldReason
+ * (src/quarantine/tags.ts) in plain JS, since this file cannot import
+ * TypeScript.
+ */
+const HOLD_REASONS = ['instruction', 'hidden', 'burst', 'capsule', 'too_long']
+function heldReason(tags) {
+  const list = Array.isArray(tags) ? tags : []
+  for (const tag of list) {
+    const t = String(tag).trim().toLowerCase()
+    if (!t.startsWith('quarantine:')) continue
+    const reason = t.slice('quarantine:'.length)
+    if (HOLD_REASONS.includes(reason)) return reason
+  }
+  return null
+}
+
+/**
+ * S5 (UX-E.2): a "Held" chip, icon plus label, never color alone, on cards
+ * in the Memories list whose tags carry a worker-owned `quarantine:<reason>`
+ * marker. `too_long` reads "Held: too long" (deck section 9); every other
+ * reason reads the plain "Held".
+ */
+function heldChipHtml(tags) {
+  const reason = heldReason(tags)
+  if (!reason) return ''
+  const label = reason === 'too_long' ? t('held.tooLongChip') : t('held.chip')
+  return `<span class="tag-chip tag-chip--held"><i class="ti ti-eye-off"></i> ${escHtml(label)}</span>`
+}
+
+/**
+ * S5 (5.7): the canonical-edit label's date ("YYYY-MM-DD"), or null when the
+ * row carries none - mirrors editedCanonicalAt (src/quarantine/tags.ts).
+ * The caller checks the date against EDITED_CANONICAL_LABEL_DAYS (7); this
+ * function only reads the tag.
+ */
+function editedCanonicalAt(tags) {
+  const list = Array.isArray(tags) ? tags : []
+  for (const tag of list) {
+    const t = String(tag).trim()
+    if (!t.toLowerCase().startsWith('edited-canonical:')) continue
+    return t.slice('edited-canonical:'.length)
+  }
+  return null
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   // downloadTextFile is deliberately absent: it needs a live URL and Blob, and
   // it is exercised through its two callers (exportMemories in js/settings.js
   // and exportActivityCsv in js/activity.js) rather than in isolation.
-  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, projectChipsHtml, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml, standingBadgeHtml, providerName };
+  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, projectChipsHtml, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml, standingBadgeHtml, heldReason, heldChipHtml, editedCanonicalAt, providerName };
 }
