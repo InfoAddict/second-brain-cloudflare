@@ -318,7 +318,7 @@ describe("Stop posts /standing/stop and shows Undo", () => {
 
     const block = ctx.__els.get("view-standing");
     expect(block.style.display).toBe("");
-    expect(ctx.__els.get("view-standing-line").textContent).toBe("Not a standing instruction");
+    expect(ctx.__els.get("view-standing-line").textContent).toBe("No longer a standing instruction");
     expect(ctx.__els.get("view-standing-stop").style.display).toBe("none");
   });
 

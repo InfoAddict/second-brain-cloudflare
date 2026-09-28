@@ -1031,14 +1031,14 @@ const I18N_EN = {
     recallCardTitleBy: 'Standing instruction (set by {name}, {date})',
     recallOpen: 'Open',
     recallStop: 'Stop',
-    // DRAFT, flagged for the copywriter: the sheet's immediate, in-place
-    // confirmation once Stop succeeds (UI reviewer), echoing the wording
-    // resolveEntryAction's own stop_standing guard already uses server-side
-    // for a row that isn't one ("X is not a standing instruction."). No
-    // re-arm control here: spec 2.2 says turning an ordinary memory into a
-    // standing one is not offered in 4.0 - only Undo, from the toast, brings
-    // it back.
-    notStanding: 'Not a standing instruction',
+    // Copywriter final (18-copy-deck.md section 10): the sheet's immediate,
+    // in-place confirmation once Stop succeeds, shown only for the memory a
+    // Stop click just turned ordinary (justStoppedStandingId, memory-crud.js)
+    // - never for a memory that was never standing, which shows no line at
+    // all. No re-arm control: spec 2.2 says turning an ordinary memory into
+    // a standing one is not offered in 4.0 - only Undo, from the toast,
+    // brings it back.
+    notStanding: 'No longer a standing instruction',
   },
   loops: {
     title: 'Open loops',
@@ -2257,7 +2257,7 @@ const I18N_IT = {
     filterEmpty: 'Ancora nessuna istruzione permanente. Chiedi alla tua IA di ricordarti qualcosa ogni volta che un argomento ricorre.',
     filterLoadFailed: 'Impossibile caricare le istruzioni permanenti.',
     tryAgain: 'Riprova',
-    stateActive: 'Attiva',
+    stateActive: 'In uso',
     stateOverLimit: 'Non in uso: possono essere attive solo {max}',
     stateNotIndexed: 'Non ancora in uso: indicizzazione in corso',
     stateHeld: 'Trattenuta',
@@ -2270,7 +2270,7 @@ const I18N_IT = {
     recallCardTitleBy: 'Istruzione permanente (impostata da {name} il {date})',
     recallOpen: 'Apri',
     recallStop: 'Disattiva',
-    notStanding: 'Non è un\'istruzione permanente',
+    notStanding: 'Non è più un\'istruzione permanente',
   },
   loops: {
     title: 'Impegni aperti',
