@@ -573,7 +573,9 @@ export async function restoreEntry(
   let vectorIds: string[] = [];
   if (!deprecated && !heldRow) {
     try {
-      const stored = await upsertEntryVectors(env, trashed.id, trashed.content, tags, source, Date.now(), cfg, writeCtx);
+      // Budget auditor R20 (T-0089.4.2): a restore re-embeds the trashed row's existing content,
+      // which can be large — batchEmbeds, same as every other re-embed of existing content.
+      const stored = await upsertEntryVectors(env, trashed.id, trashed.content, tags, source, Date.now(), cfg, writeCtx, { batchEmbeds: true });
       vectorIds = stored.vectorIds;
     } catch (e) {
       if (!(await isVectorizeUnavailable(env))) return { status: "reembed_failed" };

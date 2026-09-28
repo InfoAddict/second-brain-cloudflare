@@ -89,12 +89,16 @@ const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
  * `UPDATE entries SET vector_ids` — a caller that already has an INSERT or UPDATE of its own to carry
  * the ids sets them there instead, so a batch never runs a second, redundant write for the same row
  * (U5, and U14's re-created rows).
+ *
+ * Budget auditor R20 (T-0089.4.2): always batchEmbeds — an undo can restore content of any size
+ * (the row's own history), so this must cost the same one-AI-call-per-batch as every other
+ * re-embed of existing content, not one call per chunk.
  */
 async function reembedForRevert(
   env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config>, writeCtx: WriteContext,
 ): Promise<StoredEntry | null> {
   try {
-    const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx);
+    const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx, { batchEmbeds: true });
     if (!stored.vectorIds.length) throw new Error("re-embed produced no vectors");
     return stored;
   } catch (e) {
@@ -112,11 +116,17 @@ async function reembedForRevert(
  * it silently unsearchable with nothing to say so, and no signal to ever retry. Throws on every
  * failure, Vectorize-unavailable included, so the caller always returns `reembed_failed` and the
  * row stays held rather than releasing without ever becoming findable.
+ *
+ * Budget auditor R20 (T-0089.4.2, T-0089.5.9): always batchEmbeds — a held row can be up to the
+ * 128 KB content cap, and a single Release re-embeds all of it in one invocation. Without this,
+ * releasing one 128 KB note alone costs roughly one AI call per chunk (T-0089.5.9 measured 97 for
+ * a single note), which repeated across a night's worth of releases blew the 1,000-subrequest
+ * Workers Free ceiling; embedMany batches embedBatchSize() chunks per call instead.
  */
 async function reembedForRelease(
   env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config>, writeCtx: WriteContext,
 ): Promise<StoredEntry> {
-  const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx);
+  const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx, { batchEmbeds: true });
   if (!stored.vectorIds.length) throw new Error("re-embed produced no vectors");
   return stored;
 }
