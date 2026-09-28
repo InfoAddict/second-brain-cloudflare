@@ -141,6 +141,119 @@ describe("core.frameOutput", () => {
   });
 });
 
+// T3/T4 task H (16-t3-t4-trust-spec.md, "H: hook line"): compactBriefLines' new changes line,
+// built from the lean brief's `changes: { held, groups: [{ family, count, client, at }] }` --
+// bare counts and group boundaries only, never items or preview text (Q-H, P7). Copy is the
+// copywriter's ruling (copy deck section 12). `now` is passed explicitly throughout so the
+// today/yesterday wording is deterministic, not dependent on the machine's own clock.
+describe("core.compactBriefLines: the changes line (task H)", () => {
+  const NOW = new Date(2026, 8, 28, 9, 20, 0).getTime();
+  const TODAY_912 = new Date(2026, 8, 28, 9, 12, 0).getTime();
+  const YESTERDAY_2205 = new Date(2026, 8, 27, 22, 5, 0).getTime();
+
+  it("silent when there is no changes field at all", () => {
+    expect(core.compactBriefLines({ attention: { due: 0 }, loops: { open: 0 } }, NOW)).toEqual([]);
+  });
+
+  it("silent when changes is present but empty", () => {
+    expect(core.compactBriefLines({ changes: { count: 0, held: 0, groups: [] } }, NOW)).toEqual([]);
+  });
+
+  it("silent when the only group is a 'held' burst (the held count covers it, never named as a group)", () => {
+    const lines = core.compactBriefLines({ changes: { count: 12, held: 12, groups: [{ family: "held", count: 12, client: null, at: TODAY_912 }] } }, NOW);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^Held: 12 memories were held/);
+    expect(lines[0]).not.toContain("Changed by AI tools");
+  });
+
+  it("silent when every group's `at` falls outside the last 24 hours", () => {
+    const at = TODAY_912 - 25 * 60 * 60 * 1000;
+    expect(core.compactBriefLines({ changes: { count: 1, held: 0, groups: [{ family: "status", count: 1, client: "Cursor", at }] } }, NOW)).toEqual([]);
+  });
+
+  it("names the tool, the count, the family and undo, for one group", () => {
+    const lines = core.compactBriefLines({ changes: { count: 14, held: 0, groups: [{ family: "status", count: 14, client: "Cursor", at: TODAY_912 }] } }, NOW);
+    expect(lines).toEqual([
+      'Changed by AI tools: 14 status changes via "Cursor", today at 09:12. The user can say "undo all" to reverse them.',
+    ]);
+    expect(lines[0].length).toBeLessThanOrEqual(300);
+  });
+
+  it("says 'an AI tool' when client is null", () => {
+    const lines = core.compactBriefLines({ changes: { count: 3, held: 0, groups: [{ family: "revert", count: 3, client: null, at: TODAY_912 }] } }, NOW);
+    expect(lines[0]).toContain("via an AI tool");
+    expect(lines[0]).not.toContain('via "');
+  });
+
+  it("uses today/yesterday wording for the group's own local calendar day", () => {
+    const today = core.compactBriefLines({ changes: { count: 1, held: 0, groups: [{ family: "trash", count: 1, client: "Codex", at: TODAY_912 }] } }, NOW);
+    expect(today[0]).toContain("today at 09:12");
+    const yesterday = core.compactBriefLines({ changes: { count: 1, held: 0, groups: [{ family: "trash", count: 1, client: "Codex", at: YESTERDAY_2205 }] } }, NOW);
+    expect(yesterday[0]).toContain("yesterday at 22:05");
+  });
+
+  it("held alone: singular and plural wording", () => {
+    const one = core.compactBriefLines({ changes: { count: 1, held: 1, groups: [] } }, NOW);
+    expect(one).toEqual([
+      "Held: 1 memory was held out of recall in the last 48 hours. The user can review and release it in the dashboard.",
+    ]);
+    const many = core.compactBriefLines({ changes: { count: 5, held: 5, groups: [] } }, NOW);
+    expect(many[0]).toContain("5 memories were held");
+    expect(many[0]).toContain("release them in the dashboard");
+  });
+
+  it("combines a group and a held count on one line, group sentence first", () => {
+    const lines = core.compactBriefLines({
+      changes: { count: 15, held: 1, groups: [{ family: "status", count: 14, client: "Cursor", at: TODAY_912 }] },
+    }, NOW);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].indexOf("Changed by AI tools")).toBe(0);
+    expect(lines[0]).toContain('Changed by AI tools: 14 status changes via "Cursor", today at 09:12. The user can say "undo all" to reverse them.');
+    expect(lines[0]).toContain("Also, 1 memory was held out of recall; the user can review and release it in the dashboard.");
+    expect(lines[0].length).toBeLessThanOrEqual(300);
+  });
+
+  it("names only the most recent of several groups, and counts the rest as earlier bursts", () => {
+    const lines = core.compactBriefLines({
+      changes: {
+        count: 60, held: 0,
+        groups: [
+          { family: "status", count: 14, client: "Cursor", at: TODAY_912 },
+          { family: "trash", count: 40, client: "Codex", at: TODAY_912 - 60 * 60 * 1000 },
+        ],
+      },
+    }, NOW);
+    expect(lines[0]).toContain('Changed by AI tools: 14 status changes via "Cursor", today at 09:12, and 1 earlier burst.');
+    expect(lines[0]).toContain('The user can say "undo all" to reverse a burst.');
+    expect(lines[0]).not.toContain("trash");
+  });
+
+  it("cuts, in order, the held detail, then the earlier-bursts clause, then the client name, to stay at or under 300 characters -- never mid-word, never the undo sentence", () => {
+    const longClient = "A Ridiculously Extremely Very Super Long AI Tool Client Name That Just Keeps Going On And On Without Any End In Sight At All Whatsoever";
+    const groups = Array.from({ length: 19 }, (_, i) => ({ family: "status", count: 5, client: longClient, at: NOW - i * 60_000 }));
+    const lines = core.compactBriefLines({ changes: { count: 200, held: 123, groups } }, NOW);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].length).toBeLessThanOrEqual(300);
+    expect(lines[0]).toContain('The user can say "undo all"'); // the undo sentence itself is never cut
+    expect(lines[0]).not.toMatch(/\betool\.\.\./); // a cut lands after "..." at a name boundary, not mid-word
+  });
+
+  it("never includes a memory's own text (P7): the lean shape has no preview or content to leak", () => {
+    const lines = core.compactBriefLines({
+      changes: {
+        count: 1, held: 1,
+        groups: [{ family: "status", count: 10, client: "Cursor", at: TODAY_912 }],
+        // Even a caller that (wrongly) attached extra fields the lean brief never sends must not
+        // leak through -- changesLine only ever reads held/groups[].{family,count,client,at}.
+        items: [{ preview: "the secret held content", reasons: ["instruction"] }],
+      },
+    }, NOW);
+    const text = lines.join(" ");
+    expect(text).not.toContain("secret");
+    expect(text).not.toContain("instruction");
+  });
+});
+
 describe("core session cache", () => {
   it("round-trips a block for a session id, namespaced per adapter", () => {
     const dir = tmp();

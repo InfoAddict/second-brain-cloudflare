@@ -378,7 +378,117 @@ function cleanSnippet(s) {
     .trim();
 }
 
-function compactBriefLines(brief) {
+// T3/T4 task H (16-t3-t4-trust-spec.md, "H: hook line"): the "what AI tools changed" line,
+// English-only (this file has no i18n, same as every other compactBriefLines line). Wording is
+// the copywriter's ruling (copy deck section 12), reached from lane S's own lean-brief shape:
+// `changes: { count, held, groups: [{ family, count, client, at }] }` — bare counts and group
+// boundaries only, never items or preview text, so a held memory's own text structurally cannot
+// reach this line (P7) no matter what this code does. `family: "held"` groups are never named as
+// a group (the copywriter's own rule) — the `held` count covers them; a held burst inflates
+// `held` too, since grouping never removes an event from that count.
+const GROUP_NOUNS = {
+  status: ["status change", "status changes"],
+  canonical_edit: ["edit to trusted memories", "edits to trusted memories"],
+  capsule_changed: ["change to what AI tools always see", "changes to what AI tools always see"],
+  trash: ["memory moved to the trash", "memories moved to the trash"],
+  revert: ["memory put back to an earlier version", "memories put back to an earlier version"],
+  released: ["held memory released", "held memories released"],
+};
+const CHANGES_DAY_MS = 24 * 60 * 60 * 1000;
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function groupNoun(family, count) {
+  const pair = GROUP_NOUNS[family];
+  if (!pair) return null;
+  return count === 1 ? pair[0] : pair[1];
+}
+
+function sameLocalDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+/** "today at 09:12" / "yesterday at 09:12" / "on Sep 26 at 09:12", the machine's own local time
+ * and calendar day — this script runs on the person's own machine, not the Worker, so there is no
+ * server timezone to thread through (unlike src/brief/changes.ts's renderChangesText). */
+function whenLabel(atMs, nowMs) {
+  const d = new Date(atMs);
+  const now = new Date(nowMs);
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (sameLocalDay(d, now)) return `today at ${time}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameLocalDay(d, yesterday)) return `yesterday at ${time}`;
+  return `on ${MONTH_NAMES[d.getMonth()]} ${d.getDate()} at ${time}`;
+}
+
+/** Builds the group sentence for the top (most recent) eligible group, at a given client-name
+ * cut length and with or without the "and N earlier bursts" clause — the two knobs the 300-char
+ * cutting order (below) turns down in sequence before giving up on the rest of the line. */
+function groupSentenceFor(top, extra, nowMs, clientCutAt) {
+  const noun = groupNoun(top.family, top.count);
+  const when = whenLabel(top.at, nowMs);
+  const rawClient = typeof top.client === "string" ? top.client : null;
+  const client = rawClient && clientCutAt && rawClient.length > clientCutAt ? `${rawClient.slice(0, clientCutAt)}...` : rawClient;
+  const clientPhrase = client ? `via "${client}"` : "via an AI tool";
+  if (extra > 0) {
+    return `Changed by AI tools: ${top.count} ${noun} ${clientPhrase}, ${when}, and ${extra} earlier burst${extra === 1 ? "" : "s"}. The user can say "undo all" to reverse a burst.`;
+  }
+  return `Changed by AI tools: ${top.count} ${noun} ${clientPhrase}, ${when}. The user can say "undo all" to reverse them.`;
+}
+
+function heldSentence(held, standalone) {
+  const plural = held !== 1;
+  if (standalone) {
+    return plural
+      ? `Held: ${held} memories were held out of recall in the last 48 hours. The user can review and release them in the dashboard.`
+      : `Held: 1 memory was held out of recall in the last 48 hours. The user can review and release it in the dashboard.`;
+  }
+  return plural
+    ? `Also, ${held} memories were held out of recall; the user can review and release them in the dashboard.`
+    : `Also, 1 memory was held out of recall; the user can review and release it in the dashboard.`;
+}
+
+/**
+ * The changes line (Q-H, 5.8/5.9 surfaced in the hook): silent when there is nothing eligible —
+ * groups' own family is "held", or every group's `at` falls outside the last 24 hours (bursts
+ * show only within 24h; a hold shows until released, so `held` itself is never time-limited),
+ * or `changes` is absent entirely (a fixture or a Worker that predates this field). `at` is a
+ * group's OLDEST member, so a burst that started over 24h ago but is still running right now
+ * reads as ineligible here — the same conservative bias GET /brief's own truncation flag takes
+ * (R21 review), not a bug: nothing after this point in the file can name it either.
+ */
+function changesLine(changes, nowMs) {
+  const held = Math.floor(Number(changes?.held));
+  const rawGroups = Array.isArray(changes?.groups) ? changes.groups : [];
+  const eligible = rawGroups.filter((g) => g && g.family !== "held" && Number.isFinite(g.at)
+    && nowMs - g.at <= CHANGES_DAY_MS && Number.isFinite(g.count) && g.count > 0 && groupNoun(g.family, g.count));
+  const hasHeld = Number.isFinite(held) && held > 0;
+  if (!eligible.length && !hasHeld) return null;
+
+  const top = eligible[0];
+  const extra = eligible.length - 1;
+  let group = eligible.length ? groupSentenceFor(top, extra, nowMs, null) : "";
+  let heldPart = hasHeld ? heldSentence(held, !group) : "";
+  let line = [group, heldPart].filter(Boolean).join(" ");
+
+  // The copywriter's own cutting order, re-checking the length after each step; never cuts the
+  // undo sentence and never cuts mid-word.
+  if (line.length > 300 && group && heldPart) {
+    heldPart = `Also, ${held} held (review in the dashboard).`;
+    line = [group, heldPart].filter(Boolean).join(" ");
+  }
+  if (line.length > 300 && extra > 0) {
+    group = groupSentenceFor(top, 0, nowMs, null);
+    line = [group, heldPart].filter(Boolean).join(" ");
+  }
+  if (line.length > 300 && eligible.length && typeof top.client === "string") {
+    group = groupSentenceFor(top, extra > 0 && group.includes("earlier burst") ? extra : 0, nowMs, 24);
+    line = [group, heldPart].filter(Boolean).join(" ");
+  }
+  return line;
+}
+
+function compactBriefLines(brief, now = Date.now()) {
   const lines = [];
   const due = Number(brief?.attention?.due);
   const open = Number(brief?.loops?.open);
@@ -397,6 +507,8 @@ function compactBriefLines(brief) {
   }
   const standingItems = Array.isArray(brief?.standing?.items) ? brief.standing.items.slice(0, 3) : [];
   for (const item of standingItems) lines.push(`Standing: ${cleanSnippet(item?.content).slice(0, 160)}`);
+  const changes = changesLine(brief?.changes, now);
+  if (changes) lines.push(changes);
   return lines;
 }
 
