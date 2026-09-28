@@ -122,7 +122,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/validity.ts', line: 616, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 634, kind: 'snapshot' },
   { file: 'src/quarantine/hold.ts', line: 98, kind: 'snapshot' },
-  { file: 'src/quarantine/rescan.ts', line: 126, kind: 'exempt' },
+  { file: 'src/quarantine/rescan.ts', line: 133, kind: 'exempt' },
   { file: 'src/recall/search.ts', line: 1287, kind: 'exempt' },
   { file: 'src/routes/admin.ts', line: 1563, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 87, kind: 'exempt' },
@@ -148,7 +148,7 @@ const HYGIENE_EXEMPT = new Set([
   // The nightly quarantine-rescan pass (5.1 point 2 follow-up) clears its own NEEDS_RESCAN_TAG
   // pipeline marker once a row's unscanned middle has been checked: bookkeeping, not a
   // user-visible change, and the row's hold path (a real tags edit) is its own snapshot site above.
-  "src/quarantine/rescan.ts:126",
+  "src/quarantine/rescan.ts:133",
 ]);
 
 const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");
