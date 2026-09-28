@@ -12,7 +12,7 @@ import {
   type DecisionOutcomeRow,
 } from "../../src/decisions/calibration";
 
-const GATES = { CALIBRATION_MIN_N: 10, CALIBRATION_MIN_BUCKET_N: 5, CALIBRATION_MIN_TOPIC_N: 5 };
+const GATES = { minN: 10, minBucketN: 5, minTopicN: 5 };
 
 function row(confidence: number | null, source: "stated" | "inferred" | null, outcome: DecisionOutcomeRow["outcome"], tags: string[] = []): DecisionOutcomeRow {
   return { confidence, source, outcome, tags };

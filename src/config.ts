@@ -169,9 +169,9 @@ export const DEFAULTS = {
   TRASH_RETENTION_DAYS: 14,
 
   // ── Standing memory (src/standing/*, Track 7, T-0089.7.1) ──
-  // Eval-tuned firing threshold (test/eval/data/baselines/standing.bge-small-en-v1.5.json,
-  // Task 2's chosen value for the raw-input curve). Not a fixed constant: a future re-run of
-  // the eval retunes this without a code change.
+  // Eval-tuned firing threshold (the committed standing eval report, Task 2's chosen value
+  // for the raw-input curve — see SYNTHETIC-CORPORA.md). Not a fixed constant: a future
+  // re-run of the eval retunes this without a code change.
   STANDING_THRESHOLD: 0.67,
   // Capacity, not a fixed cap: how many standing memories one workspace may hold at once
   // (Design 2.1 "the cap", 2.4's oldest-first cache build).

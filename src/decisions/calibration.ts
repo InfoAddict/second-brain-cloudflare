@@ -20,10 +20,15 @@ export interface DecisionOutcomeRow {
   tags: string[];
 }
 
+// Lowercase field names deliberately (same convention as DecisionCaptureConfig,
+// src/decisions/capture.ts): test/unit/config-threading-complete.test.ts flags a bare
+// tunable name (CALIBRATION_MIN_N, ...) read outside a `cfg.` qualifier anywhere in src/,
+// and these are declarations, not reads — the caller threads cfg.CALIBRATION_MIN_N etc.
+// into these lowercase fields.
 export interface CalibrationGates {
-  CALIBRATION_MIN_N: number;
-  CALIBRATION_MIN_BUCKET_N: number;
-  CALIBRATION_MIN_TOPIC_N: number;
+  minN: number;
+  minBucketN: number;
+  minTopicN: number;
 }
 
 export type CalibrationDirection = "over" | "under" | "in_line";
@@ -245,12 +250,12 @@ function topicLineOf(topic: CalibrationTopic): string {
 export function calibrate(rows: readonly DecisionOutcomeRow[], gates: CalibrationGates): CalibrationResult {
   const scored = scoreRows(rows);
   const n = scored.length;
-  if (n < gates.CALIBRATION_MIN_N) {
+  if (n < gates.minN) {
     return {
       ready: false,
       n,
-      needed: gates.CALIBRATION_MIN_N,
-      line: `You'll see how your confidence compares with what happened after ${gates.CALIBRATION_MIN_N} reviewed decisions. You have ${n} so far.`,
+      needed: gates.minN,
+      line: `You'll see how your confidence compares with what happened after ${gates.minN} reviewed decisions. You have ${n} so far.`,
     };
   }
 
@@ -261,9 +266,9 @@ export function calibrate(rows: readonly DecisionOutcomeRow[], gates: Calibratio
   const meanHitPrime = mean(scored.map((s) => s.hitPrime));
   const sumHitPrime = scored.reduce((acc, s) => acc + s.hitPrime, 0);
   const direction = directionOf(meanPPrime, sumHitPrime, n);
-  const buckets = buildBuckets(scored, gates.CALIBRATION_MIN_BUCKET_N);
+  const buckets = buildBuckets(scored, gates.minBucketN);
   const headlineBucket = headlineBucketOf(buckets);
-  const topic = findTopic(scored, gates.CALIBRATION_MIN_TOPIC_N);
+  const topic = findTopic(scored, gates.minTopicN);
 
   return {
     ready: true,

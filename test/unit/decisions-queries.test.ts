@@ -15,7 +15,7 @@ afterEach(() => {
   sq = null;
 });
 
-const GATES = { CALIBRATION_MIN_N: 10, CALIBRATION_MIN_BUCKET_N: 5, CALIBRATION_MIN_TOPIC_N: 5 };
+const GATES = { minN: 10, minBucketN: 5, minTopicN: 5 };
 
 const AUTH: Identity = {
   userId: "u1",

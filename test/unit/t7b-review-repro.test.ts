@@ -7,7 +7,7 @@ import { makeSqliteD1 } from "../helpers/sqlite-d1";
 import type { Identity } from "../../src/lib/identity";
 import { scopeWhere } from "../../src/lib/scope";
 
-const gates = { CALIBRATION_MIN_N: 10, CALIBRATION_MIN_BUCKET_N: 5, CALIBRATION_MIN_TOPIC_N: 5 };
+const gates = { minN: 10, minBucketN: 5, minTopicN: 5 };
 const row = (confidence: number, outcome: "right" | "wrong"): DecisionOutcomeRow =>
   ({ confidence, source: "stated", outcome, tags: [] });
 
