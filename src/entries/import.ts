@@ -894,9 +894,11 @@ function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: 
  * The validity window an exported row carried (T-0089.2.1). An import only inserts, so it never
  * supersedes anything; a malformed or inverted window is dropped (NULL, "since created_at, still
  * true") rather than failing the memory, since the writers' invariant is until >= effective start.
+ * So is a date in the future: validity dates are for what has already happened (P5), and an export
+ * only ever holds dates at or before the moment it was taken.
  */
-function importedWindow(from: unknown, until: unknown, createdAt: number): { valid_from: number | null; valid_until: number | null } {
-  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : v === undefined || v === null ? null : NaN;
+function importedWindow(from: unknown, until: unknown, createdAt: number, now = Date.now()): { valid_from: number | null; valid_until: number | null } {
+  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= now ? v : v === undefined || v === null ? null : NaN;
   const f = num(from);
   const u = num(until);
   if (Number.isNaN(f) || Number.isNaN(u)) return { valid_from: null, valid_until: null };

@@ -68,8 +68,10 @@ describe("export and import keep validity", () => {
       { id: "bad-type", content: "x", created_at: 1000, valid_from: "2020", valid_until: 5 },
       { id: "inverted", content: "y", created_at: 1000, valid_from: 3000, valid_until: 2000 },
       { id: "before-created", content: "z", created_at: 5000, valid_until: 2000 },
+      { id: "future-start", content: "f", created_at: 1000, valid_from: Date.now() + 86_400_000 },
+      { id: "future-end", content: "g", created_at: 1000, valid_until: Date.now() + 86_400_000 },
     ] });
-    expect(r).toMatchObject({ imported: 3, failed: 0 });
-    for (const id of ["bad-type", "inverted", "before-created"]) expect(await b.row(id), id).toEqual({ valid_from: null, valid_until: null });
+    expect(r).toMatchObject({ imported: 5, failed: 0 });
+    for (const id of ["bad-type", "inverted", "before-created", "future-start", "future-end"]) expect(await b.row(id), id).toEqual({ valid_from: null, valid_until: null });
   });
 });

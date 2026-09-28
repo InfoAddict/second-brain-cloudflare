@@ -28,9 +28,26 @@ const DEPRECATED_LIKE = `'%"status:deprecated"%'`;
 
 export const EFFECTIVE_FROM = (a: string) => `COALESCE(${a}.valid_from, ${a}.created_at)`;
 
-/** Current: open, or ends after now. Stated starts are never in the future (P5), so no start check. */
+/**
+ * Current: open, or ends after `nowSql`. Stated starts are never in the future (P5), so no start
+ * check. The one definition of "current": `alias` "" reads bare columns (a fragment spliced into a
+ * single-table statement), and `nowSql` is a bound placeholder or SQL_NOW_MS.
+ */
+export function currentValidityAt(alias: string, nowSql: string): string {
+  const col = alias ? `${alias}.valid_until` : "valid_until";
+  return `(${col} IS NULL OR ${col} > ${nowSql})`;
+}
+
+/**
+ * The database's own clock in epoch ms, for a static SQL fragment that has no binding of its own
+ * (STALE_REVIEW_SQL). julianday works on every SQLite D1 runs; request paths that have a clock of
+ * their own bind it through currentValiditySql instead, so a frozen test or eval clock still applies.
+ */
+export const SQL_NOW_MS = `CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`;
+
+/** Current at `now`, bound through Params. */
 export function currentValiditySql(p: Params, alias: string, now: number): string {
-  return `(${alias}.valid_until IS NULL OR ${alias}.valid_until > ${p.add(now)})`;
+  return currentValidityAt(alias, p.add(now));
 }
 
 /** Actually true at T: starts at or before T and ends after T. */

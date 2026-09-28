@@ -89,6 +89,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/entry.ts', line: 463, kind: 'exempt' },
   { file: 'src/capture/entry.ts', line: 497, kind: 'exempt' },
   { file: 'src/capture/entry.ts', line: 514, kind: 'exempt' },
+  // MOVED (T-0089.2.1 fix round): validity.ts +17 (currentValidityAt, SQL_NOW_MS), staleness/pass.ts +1 (its import).
   // MOVED (T-0089.2.4): lifecycle.ts, actions.ts, trash.ts and undo.ts shift for the retraction hooks; same sites.
   { file: 'src/capture/lifecycle.ts', line: 152, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 229, kind: 'snapshot' },
@@ -127,18 +128,18 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/undo.ts', line: 344, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 380, kind: 'exempt' },
   // NEW (T-0089.2.1): the supersede UPDATE (validity window closed; its validity snapshot rides in the same batch).
-  { file: 'src/memory/validity.ts', line: 125, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 142, kind: 'snapshot' },
   // NEW (T-0089.2.4): the retraction restore and un-retraction re-close UPDATEs (D-RET), and the
   // cascade's flag and unflag UPDATEs; each rides after its own derived snapshot in the same batch,
   // and lands only on the rows that snapshot versioned (nonce).
-  { file: 'src/memory/validity.ts', line: 265, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 334, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 377, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 421, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 282, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 351, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 394, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 438, kind: 'snapshot' },
   // NEW (T-0089.2.1, Task A4): update(valid_from / valid_until) and its propagate UPDATE, each with its validity snapshot.
   // MOVED +4 (lane A follow-up): the digest guard's comment shifted earlier lines in this file; same sites.
-  { file: 'src/memory/validity.ts', line: 580, kind: 'snapshot' },
-  { file: 'src/memory/validity.ts', line: 598, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 597, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 615, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
@@ -154,8 +155,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // site. MOVED 1540 -> 1544 (merge of release/v4 57583d10, T-0101.8.5 BE-10): history_since on
   // GET /health added lines above this site too; same site.
   { file: 'src/routes/admin.ts', line: 1544, kind: 'exempt' },
-  { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
-  { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
+  { file: 'src/staleness/pass.ts', line: 87, kind: 'exempt' },
+  { file: 'src/staleness/pass.ts', line: 97, kind: 'exempt' },
   // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
   // MOVED 78 -> 89 (T-0089.1.1 round 3): the pass plans from lengths, then reads the chosen rows.
   // MOVED 89 -> 93 (T-0089.1.1 round 5): indexPendingRow reports whether its commit landed.
@@ -173,7 +174,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
  * snapshot, trash or hard-delete (the undo invariant).
  */
 const HYGIENE_EXEMPT = new Set([
-  "src/staleness/pass.ts:86", "src/staleness/pass.ts:96",
+  "src/staleness/pass.ts:87", "src/staleness/pass.ts:97",
   "src/when/pass.ts:368",
   "src/capture/classify.ts:78", "src/routes/admin.ts:1544", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet

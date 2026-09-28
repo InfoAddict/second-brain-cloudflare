@@ -172,3 +172,21 @@ describe("supersedeStatements", () => {
     expect(supersedeStatements(env, planSupersede(older, newer), older, newer, change, DEFAULTS)).toEqual([]);
   });
 });
+
+import { currentValidityAt, SQL_NOW_MS } from "../../src/memory/validity";
+describe("the current-validity predicate over the database clock", () => {
+  it("selects the same rows as the bound form at the same moment, bare or aliased", async () => {
+    const now = Date.now();
+    await seed("past", 100, null, now - 60_000);
+    await seed("future", 100, null, now + 3_600_000);
+    await seed("open", 100, null, null);
+    const bound = async () => {
+      const p = new Params();
+      return ((await d1.db.prepare(`SELECT e.id FROM entries e WHERE ${currentValiditySql(p, "e", now)} ORDER BY e.id`).bind(...p.values()).all()).results as any[]).map(r => r.id);
+    };
+    const clock = async (sql: string) => ((await d1.db.prepare(sql).all()).results as any[]).map(r => r.id);
+    expect(await bound()).toEqual(["future", "open"]);
+    expect(await clock(`SELECT id FROM entries WHERE ${currentValidityAt("", SQL_NOW_MS)} ORDER BY id`)).toEqual(["future", "open"]);
+    expect(await clock(`SELECT e.id FROM entries e WHERE ${currentValidityAt("e", SQL_NOW_MS)} ORDER BY e.id`)).toEqual(["future", "open"]);
+  });
+});

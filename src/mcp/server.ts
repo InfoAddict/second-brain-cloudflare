@@ -44,7 +44,7 @@ import { resolveClientLabel, type McpClientExtra, type McpClientProps } from "./
 import { heldReason, holdReasonPhrase, isHeld } from "../quarantine/tags";
 import { contentByteLength, isOverContentLimit, tooLargeMcpMessage, MAX_CONTENT_BYTES } from "../lib/content-size";
 import {
-  parseValidityInput, supersedeReply, updateEntryValidity, updateValidityReply, validityReplySuffix, VALIDITY_WITH_CONTENT_ERROR,
+  currentValidityAt, parseValidityInput, supersedeReply, updateEntryValidity, updateValidityReply, validityReplySuffix, VALIDITY_WITH_CONTENT_ERROR,
 } from "../memory/validity";
 
 // Asking the calling model for this is the whole point: it has already read the content
@@ -517,12 +517,14 @@ export function buildMcpServer(
       const scope = scopeWhereForRead(identity, { layer: workspace, teamId: teamRead.teamId });
       const digestTag = slug ? `project:${slug}` : topic!;
       const row = await env.DB.prepare(
+        // validity: current: a replaced or ended digest is not the current summary (T-0089.2.1)
         `SELECT content, created_at FROM entries
          WHERE ${scope.clause} AND actor_id = '' AND source = 'system' AND tags NOT LIKE '%"status:deprecated"%'
            AND tags NOT LIKE '%"status:draft"%' AND tags NOT LIKE '%"conflict-held"%'
            AND tags LIKE ? ${TAG_LIKE_ESCAPE} AND tags LIKE ? ${TAG_LIKE_ESCAPE}
+           AND ${currentValidityAt("", "?")}
          ORDER BY created_at DESC, id DESC LIMIT 1`,
-      ).bind(...scope.bindings, tagLikePattern("synthesized"), tagLikePattern(digestTag))
+      ).bind(...scope.bindings, tagLikePattern("synthesized"), tagLikePattern(digestTag), Date.now())
         .first<{ content: string; created_at: number }>();
       if (!row) return { content: [{ type: "text", text: "No digest yet. One is built automatically overnight once there are 10 or more eligible memories. Use recall with project instead." }] };
       const text = `${STORED_DATA_NOTICE}\nDigest from ${new Date(row.created_at).toISOString().slice(0, 10)}:\n----- digest (begin) -----\n${cleanStored(row.content)}\n----- digest (end) -----`;
