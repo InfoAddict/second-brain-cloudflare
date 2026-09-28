@@ -27,7 +27,9 @@ function* walk(dir: string): Generator<string> {
 /** Drops rows that are deprecated, quarantined or held: a "what is live" filter. */
 const LIVENESS_FILTER = /NOT LIKE '%"status:deprecated"%'|NOT LIKE '%"quarantine:|NOT LIKE '%"conflict-held"%'|\$\{NOT_HELD_SQL\}/;
 /** The validity predicate itself, or a named fragment that carries it (checked below). */
-const VALIDITY = /valid_until|currentValidityAt\(|currentValiditySql\(|validAtSql\(|\$\{(STALE_REVIEW_SQL|PENDING_INSIGHT_SQL)\}|dueSql\(|openLoopSql\(|resurfaceFilter\(/;
+const VALIDITY = /(\w+\.)?valid_until IS NULL OR (\w+\.)?valid_until >|currentValidityAt\(|currentValiditySql\(|validAtSql\(|\$\{(STALE_REVIEW_SQL|PENDING_INSIGHT_SQL)\}|dueSql\(|openLoopSql\(|resurfaceFilter\(/;
+/** True when the SQL literal filters on current validity (the predicate itself, or a fragment that carries it). */
+export const carriesValidity = (sql: string): boolean => VALIDITY.test(sql);
 
 interface Hit { file: string; sql: string }
 
@@ -37,7 +39,7 @@ function scan(): Hit[] {
     const text = readFileSync(path, "utf8");
     for (const span of templateSpans(text) as unknown as { start: number; end: number }[]) {
       const sql = text.slice(span.start + 1, span.end);
-      if (LIVENESS_FILTER.test(sql) && !VALIDITY.test(sql)) hits.push({ file: relative(ROOT, path), sql: sql.replace(/\s+/g, " ").trim() });
+      if (LIVENESS_FILTER.test(sql) && !carriesValidity(sql)) hits.push({ file: relative(ROOT, path), sql: sql.replace(/\s+/g, " ").trim() });
     }
   }
   return hits;
@@ -53,12 +55,25 @@ const ANY_READERS: { file: string; has: string; why: string }[] = [
   { file: "src/memory/trash.ts", has: "x.tags NOT LIKE", why: "restore's un-retraction landed guard over the restored row itself, not a reader" },
   { file: "src/compression/digest.ts", has: "INDEXED BY idx_entries_conflict_held", why: "held digests are bookkeeping for the digest writer, whatever their window" },
   { file: "src/decisions/queries.ts", has: "tags LIKE '%\"outcome:%'", why: "calibration scores every decision that had an outcome, including one later replaced" },
+  { file: "src/graph/traverse.ts", has: "SELECT id, content, tags, source, created_at, valid_until FROM entries WHERE id IN", why: "graph node hydration for connections and GET /graph (5.5: any); recall's hops drop replaced nodes in expandGraph from the valid_until it projects" },
+  { file: "src/graph/traverse.ts", has: "e.source, e.valid_until, u.name AS actor_display_name", why: "GET /graph view hydration: the graph shows replaced memories, dimmed (5.5: any)" },
+  { file: "src/memory/validity.ts", has: "CASE WHEN ${outer}.valid_until IS NULL THEN NULL ELSE", why: "supersededBySql: the replacing memory may itself be replaced later; it only has to be live and not wrong" },
   { file: "src/graph/pass.ts", has: "id NOT IN (SELECT source_id FROM edges)", why: "nightly edge backfill links history too (spec 4.5: any)" },
   { file: "src/insight/candidates.ts", has: "WHERE (created_at > ? OR (created_at = ? AND id > ?)) AND ${NOT_HELD_SQL}", why: "seed scan fragment; isCurrent() drops replaced rows in JS on the rows it returns" },
   { file: "src/insight/candidates.ts", has: "WHERE ${NOT_HELD_SQL}", why: "seed scan fragment; isCurrent() drops replaced rows in JS on the rows it returns" },
   { file: "src/recall/search.ts", has: "${tagScopeSql} AND ${NOT_HELD_SQL}", why: "tag/project member ids; the final hydration's d1Filters is the current-only predicate" },
   { file: "src/staleness/pass.ts", has: "tags NOT LIKE '%\"status:deprecated\"%'", why: "SYSTEM_TAG_EXCLUSIONS fragment; the candidate query adds currentValidityAt itself" },
 ];
+
+describe("the validity matcher", () => {
+  it("a projected valid_until is not a filter; the predicate shape and the helpers are", () => {
+    expect(carriesValidity(`SELECT id, valid_until FROM entries WHERE tags NOT LIKE '%"status:deprecated"%'`)).toBe(false);
+    expect(carriesValidity(`SELECT id FROM entries WHERE (valid_until IS NULL OR valid_until > ?)`)).toBe(true);
+    expect(carriesValidity(`SELECT a.id FROM entries a WHERE (a.valid_until IS NULL OR a.valid_until > 5)`)).toBe(true);
+    expect(carriesValidity("SELECT id FROM entries WHERE ${currentValidityAt(\"\", \"?3\")}")).toBe(true);
+    expect(carriesValidity("SELECT id FROM entries e WHERE ${currentValiditySql(p, \"e\", now)}")).toBe(true);
+  });
+});
 
 describe("current-reader class guard (5.5)", () => {
   const hits = scan();
