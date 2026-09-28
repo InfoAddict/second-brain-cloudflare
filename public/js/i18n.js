@@ -103,7 +103,12 @@ const I18N_EN = {
     topicsSub: 'Most used tags',
     rereadSub: 'Old, important, and connected to what you\'re working on now',
     loopsTitle: 'Open loops',
-    loopsSub: 'Things you said you would do',
+    // T7-E, UX advisor round 2: the panel now shows both directions, so the
+    // subtitle names both. Draft, not yet in 18-copy-deck.md: flagged for
+    // the copywriter (board.loopsSub does not exist there yet).
+    loopsSub: "What you owe and what you're owed",
+    ledgerTitle: 'Decision log',
+    ledgerSub: 'How often your calls come true',
     saved: 'Saved',
     growthTitle: 'Memories over time',
     growthSubDay: 'Saved per day',
@@ -939,6 +944,71 @@ const I18N_EN = {
     keepFailed: 'Could not keep this memory: {message}',
     more: '{n} more',
   },
+  // T7-E (Track 7 lane E, Task 15, Design 4.4/7.4): the decision log sheet
+  // and its calibration dot plot. Copy final, 18-copy-deck.md section 8. The
+  // calibration sentence itself (result.line/topicLine) is a server string
+  // (18-copy-deck.md section 5.3, English only) and is rendered as-is, not
+  // through a key here.
+  ledger: {
+    title: 'Decision log',
+    sourceAll: 'All',
+    sourceStated: 'Stated',
+    sourceInferred: 'Estimated',
+    stateOpen: 'Open',
+    stateResolved: 'Reviewed',
+    legendStated: 'You said',
+    legendHit: 'Came true',
+    notEnoughYet: 'too few yet ({n})',
+    tipStated: 'you said {pct}%',
+    tipHit: 'came true {pct}% of the time',
+    tipN: {
+      one: '{n} decision ({stated} stated, {inferred} estimated)',
+      other: '{n} decisions ({stated} stated, {inferred} estimated)',
+    },
+    openLog: 'Open the log',
+    empty: "No decisions yet. Tell your AI about a choice you've made and how sure you are, and it can log it here.",
+    // T7-E, UX advisor round 2: the Open tab's own empty line, so a brain
+    // with resolved decisions but nothing currently open does not read the
+    // "no decisions yet" onboarding line. Draft, flagged for the copywriter.
+    emptyOpen: 'No decisions waiting for review.',
+    loadFailed: 'Could not load the decision log.',
+    tryAgain: 'Try again',
+    reviewAround: 'Review around {date}',
+    outcomeRight: 'Right call',
+    outcomeWrong: 'Wrong call',
+    outcomeMixed: 'Mixed',
+    confidenceStated: '{pct}% · stated',
+    confidenceInferred: '{pct}% · estimated',
+    noConfidence: 'no percentage given',
+    editedSince: 'Edited after it was logged',
+    tableColBucket: 'Confidence',
+    tableColN: 'Decisions',
+    tableColStated: 'You said',
+    tableColHit: 'Came true',
+    tableColSplit: 'Stated / estimated',
+    tableCaption: 'What you said, next to how often it came true, by confidence',
+    caption: 'Accuracy score: {brier}. Lower is better: 0 is perfect, and always saying 50% scores 0.25.',
+    // T7-E, UI reviewer round 2: the chart is scored decisions only, so it
+    // reads identically on the Open and Resolved tabs (only the list below
+    // changes). This says so, rather than the toggle looking like it does
+    // nothing. Draft, flagged for the copywriter.
+    chartScopeNote: 'The chart shows every reviewed decision, on both the Open and Reviewed tabs.',
+    // T7-E round 3 (18-copy-deck.md section 8.6): the localized calibration
+    // sentences, built client-side from GET /decisions/calibration's `kind`
+    // field ("rate", "in_line" or "no_range") next to the English server line.
+    lineRate: "So far, when you were about {stated}% sure, you were right {hit}% of the time, based on {n} decisions.",
+    lineInLine: 'So far, how sure you were roughly matches how things turned out, based on {n} decisions.',
+    // The "5" here is CALIBRATION_MIN_BUCKET_N (src/config.ts) typed in, since
+    // the client has no field to read it from; keep the two in step by hand.
+    lineNoRange: "You'll see how often you're right once 5 decisions share a similar confidence. You have {n} so far.",
+    lineEstimated: {
+      one: 'For {k} of them, that figure was estimated from your wording.',
+      other: 'For {k} of them, that figure was estimated from your wording.',
+    },
+    topicOver: "On {topic}, you've been right less often than you expected so far, based on {n} decisions.",
+    topicUnder: "On {topic}, you've been right more often than you expected so far, based on {n} decisions.",
+    lineNotReady: "You'll see how your confidence compares with what happened after {needed} reviewed decisions. You have {n} so far.",
+  },
   loops: {
     title: 'Open loops',
     empty: 'Nothing open.',
@@ -949,6 +1019,20 @@ const I18N_EN = {
     notTaskFailed: 'Could not update this: {message}',
     more: '{n} more',
     seeAll: 'See all',
+    // T7-E (Track 7 lane E): the loops sheet splits into "You owe" (outbound,
+    // the original queue) and "Owed to you" (inbound, someone else's
+    // promise). Copy final, 18-copy-deck.md section 8.
+    youOwe: 'You owe',
+    owedToYou: 'Owed to you',
+    received: 'Received',
+    receivedFailed: 'Could not mark it received: {message}',
+    doneToast: 'Marked done',
+    notTaskToast: 'No longer a commitment',
+    receivedToast: 'Marked received',
+    fromName: 'from {name}',
+    dueDate: 'due {date}',
+    wasDueDate: 'was due {date}',
+    tryAgain: 'Try again',
   },
   due: {
     title: 'Due',
@@ -966,6 +1050,34 @@ const I18N_EN = {
     doneFailed: 'Could not mark this done: {message}',
     clearFailed: 'Could not update this: {message}',
     snoozeFailed: 'Could not snooze this: {message}',
+    // T7-E: decision review rows (kind: "decision") show four outcome
+    // buttons instead of Done, plus an optional note and an inbound
+    // commitment's counterparty. Copy final, 18-copy-deck.md section 8.
+    // reviewLabel's prefix comes from here
+    // rather than the stored when_label's own English "Review: " text
+    // (18-copy-deck.md section 5, the note on reviewLabel), so Italian
+    // reads "Da rivedere" instead of the stored English word.
+    reviewLabel: 'Review: {label}',
+    right: 'Right call',
+    wrong: 'Wrong call',
+    mixed: 'Mixed',
+    cantTellYet: 'Too early to tell',
+    addNote: 'Add a note',
+    notePlaceholder: 'Add details (optional)',
+    // T7-E, UX advisor round 2: a static label above the four outcome
+    // buttons (distinct from the note's own placeholder above, which asks
+    // the same question for the optional free-text note). Draft, flagged
+    // for the copywriter.
+    outcomeLabel: 'How did it go?',
+    outcomeFailed: 'Could not record this: {message}',
+    outcomeToastRight: 'Logged as the right call',
+    outcomeToastWrong: 'Logged as the wrong call',
+    outcomeToastMixed: 'Logged as mixed',
+    outcomeToastLater: 'Okay. Review again around {date}',
+    outcomeToastNoMore: 'Okay. No more reviews for this one',
+    undo: 'Undo',
+    undoFailed: 'Could not undo: {message}',
+    owedToYou: 'Owed to you',
   },
   notifications: {
     title: 'Notifications',
@@ -1256,7 +1368,9 @@ const I18N_IT = {
     topicsSub: 'I tag più usati',
     rereadSub: 'Vecchio, importante e collegato a ciò su cui stai lavorando ora',
     loopsTitle: 'Impegni aperti',
-    loopsSub: 'Cose che hai detto che avresti fatto',
+    loopsSub: 'Cosa devi e cosa ti devono',
+    ledgerTitle: 'Registro delle decisioni',
+    ledgerSub: 'Quanto spesso le tue previsioni si avverano',
     saved: 'Salvato',
     growthTitle: 'Ricordi nel tempo',
     growthSubDay: 'Salvati al giorno',
@@ -2061,6 +2175,54 @@ const I18N_IT = {
     keepFailed: 'Impossibile tenere questa memoria: {message}',
     more: 'Altri {n}',
   },
+  ledger: {
+    title: 'Registro delle decisioni',
+    sourceAll: 'Tutte',
+    sourceStated: 'Dichiarate',
+    sourceInferred: 'Stimate',
+    stateOpen: 'Aperte',
+    stateResolved: 'Valutate',
+    legendStated: 'Hai detto',
+    legendHit: 'Avverate',
+    notEnoughYet: 'troppo poche finora ({n})',
+    tipStated: 'hai detto {pct}%',
+    tipHit: 'avverate il {pct}% delle volte',
+    tipN: {
+      one: '{n} decisione ({stated} dichiarate, {inferred} stimate)',
+      other: '{n} decisioni ({stated} dichiarate, {inferred} stimate)',
+    },
+    openLog: 'Apri il registro',
+    empty: 'Ancora nessuna decisione. Racconta alla tua IA una scelta che hai fatto e con quale sicurezza: potrà registrarla qui.',
+    emptyOpen: 'Nessuna decisione in attesa di valutazione.',
+    loadFailed: 'Impossibile caricare il registro delle decisioni.',
+    tryAgain: 'Riprova',
+    reviewAround: 'Da rivedere intorno al {date}',
+    outcomeRight: 'Scelta giusta',
+    outcomeWrong: 'Scelta sbagliata',
+    outcomeMixed: 'In parte',
+    confidenceStated: '{pct}% · dichiarata',
+    confidenceInferred: '{pct}% · stimata',
+    noConfidence: 'nessuna percentuale',
+    editedSince: 'Modificata dopo la registrazione',
+    tableColBucket: 'Sicurezza',
+    tableColN: 'Decisioni',
+    tableColStated: 'Hai detto',
+    tableColHit: 'Avverate',
+    tableColSplit: 'Dichiarate / stimate',
+    tableCaption: 'La tua sicurezza dichiarata, accanto a quanto spesso le decisioni si sono avverate',
+    caption: 'Punteggio di accuratezza: {brier}. Più basso è meglio: 0 è perfetto, e dire sempre 50% dà 0,25.',
+    chartScopeNote: 'Il grafico mostra tutte le decisioni valutate, sia in Aperte sia in Valutate.',
+    lineRate: 'Finora, le scelte che davi al {stated}% circa si sono rivelate giuste il {hit}% delle volte, su {n} decisioni.',
+    lineInLine: 'Finora la tua sicurezza corrisponde più o meno a come sono andate le cose, su {n} decisioni.',
+    lineNoRange: 'Vedrai quanto spesso hai ragione quando 5 decisioni avranno una sicurezza simile. Finora ne hai {n}.',
+    lineEstimated: {
+      one: 'In {k} caso, la percentuale è stata stimata dalle tue parole.',
+      other: 'In {k} casi, le percentuali sono state stimate dalle tue parole.',
+    },
+    topicOver: 'Su {topic}, finora hai avuto ragione meno spesso di quanto ti aspettassi, su {n} decisioni.',
+    topicUnder: 'Su {topic}, finora hai avuto ragione più spesso di quanto ti aspettassi, su {n} decisioni.',
+    lineNotReady: "Vedrai come la tua sicurezza si confronta con com'è andata dopo {needed} decisioni valutate. Finora ne hai {n}.",
+  },
   loops: {
     title: 'Impegni aperti',
     empty: 'Nessun impegno aperto.',
@@ -2071,6 +2233,17 @@ const I18N_IT = {
     notTaskFailed: 'Impossibile aggiornare: {message}',
     more: 'Altri {n}',
     seeAll: 'Vedi tutti',
+    youOwe: 'Devi tu',
+    owedToYou: 'Ti devono',
+    received: 'Ricevuto',
+    receivedFailed: 'Impossibile segnarlo come ricevuto: {message}',
+    doneToast: 'Segnato come fatto',
+    notTaskToast: 'Non è più un impegno',
+    receivedToast: 'Segnato come ricevuto',
+    fromName: 'da {name}',
+    dueDate: 'scade il {date}',
+    wasDueDate: 'scadeva il {date}',
+    tryAgain: 'Riprova',
   },
   due: {
     title: 'Scadenze',
@@ -2085,6 +2258,23 @@ const I18N_IT = {
     doneFailed: 'Impossibile segnare come fatto: {message}',
     clearFailed: 'Impossibile aggiornare: {message}',
     snoozeFailed: 'Impossibile rimandare: {message}',
+    reviewLabel: 'Da rivedere: {label}',
+    right: 'Scelta giusta',
+    wrong: 'Scelta sbagliata',
+    mixed: 'In parte',
+    cantTellYet: 'Troppo presto per dirlo',
+    addNote: 'Aggiungi una nota',
+    notePlaceholder: 'Aggiungi dettagli (facoltativo)',
+    outcomeLabel: "Com'è andata?",
+    outcomeFailed: 'Impossibile registrare: {message}',
+    outcomeToastRight: 'Registrata come scelta giusta',
+    outcomeToastWrong: 'Registrata come scelta sbagliata',
+    outcomeToastMixed: 'Registrata come in parte giusta',
+    outcomeToastLater: 'Va bene. Da rivedere intorno al {date}',
+    outcomeToastNoMore: "Va bene. Nessun'altra revisione per questa decisione",
+    undo: 'Annulla',
+    undoFailed: 'Impossibile annullare: {message}',
+    owedToYou: 'Ti devono',
   },
   notifications: {
     title: 'Notifiche',

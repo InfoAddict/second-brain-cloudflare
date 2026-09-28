@@ -53,7 +53,7 @@ describe("explain on", () => {
       expect(t.level).toBe(2);
       expect(t.idf).toBeGreaterThan(0);
     }
-    expect(Object.keys(e1.multipliers).sort()).toEqual(["append_penalty", "combined", "frequency", "importance", "recency", "rolled_up_penalty", "source_weight", "tag_boost"]);
+    expect(Object.keys(e1.multipliers).sort()).toEqual(["append_penalty", "combined", "frequency", "importance", "recency", "rolled_up_penalty", "source_weight", "stale_penalty", "tag_boost"]);
     expect(e1.multipliers.frequency).toBeCloseTo(1 + Math.log1p(2), 2);
     expect(e1.multipliers.importance).toBeGreaterThan(1);
     expect(e1.rerank_percentile).toBeNull();

@@ -108,6 +108,10 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/actions.ts', line: 250, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 291, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 303, kind: 'snapshot' },
+  // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): v4/t34-w's own class E/A/R20
+  // deltas and release/v4's own Track 2 lane B (as-of) deltas are independently-tracked from the
+  // same base c0eed34b — recomputed against the real scanner output on the merged tree below,
+  // not hand-combined. History from both branches kept for provenance.
   { file: 'src/memory/trash.ts', line: 230, kind: 'trash' },
   { file: 'src/memory/trash.ts', line: 623, kind: 'exempt' },
   { file: 'src/memory/undo.ts', line: 184, kind: 'snapshot' },
@@ -137,7 +141,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
  */
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:87", "src/staleness/pass.ts:97",
-  // MOVED 368 -> 373 (T-0089.4.2, Codex review class E): the NOT_HELD_SQL comment above candidateSql.
+  // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): recomputed against the real
+  // scanner output on the merged tree below, not hand-combined.
   "src/when/pass.ts:373",
   "src/capture/classify.ts:78", "src/routes/admin.ts:1563", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet

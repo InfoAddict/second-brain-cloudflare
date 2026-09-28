@@ -16,7 +16,7 @@ const files = (dir: string): string[] => readdirSync(dir).flatMap(f => {
 const rel = (p: string) => relative(SRC, p);
 
 describe("eval-only recall switches are unreachable from routes and MCP", () => {
-  it("every recallEntries caller outside src/recall passes only identity, workspaceFilter and teamId as internal options", () => {
+  it("every recallEntries caller outside src/recall passes only identity, workspaceFilter, teamId and asOf as internal options", () => {
     const callers = files(SRC).filter(f => !rel(f).startsWith("recall/") && /\brecallEntries\(/.test(readFileSync(f, "utf8")));
     expect(callers.map(rel).sort()).toEqual(["mcp/server.ts", "routes/recall.ts"]);
     for (const f of callers) {
@@ -25,7 +25,9 @@ describe("eval-only recall switches are unreachable from routes and MCP", () => 
       expect(calls.length, rel(f)).toBeGreaterThan(0);
       for (const c of calls) {
         const keys = c[1].slice(1, -1).split(",").map(part => part.split(":")[0].trim()).filter(Boolean);
-        for (const k of keys) expect(["identity", "workspaceFilter", "teamId"], `${rel(f)} passes "${k}" as an internal recall option`).toContain(k);
+        // asOf (T-0089.2.2) is a real, spec'd production option (as_of on both surfaces), not one
+        // of the eval-only switches this guard exists to keep unreachable (see the file docstring).
+        for (const k of keys) expect(["identity", "workspaceFilter", "teamId", "asOf"], `${rel(f)} passes "${k}" as an internal recall option`).toContain(k);
       }
     }
   });

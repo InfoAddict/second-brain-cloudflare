@@ -45,9 +45,9 @@ describe("multipliers reconstruct the applied score", () => {
     it(`product of reported factors equals the score: ${fx.name}`, () => {
       const [t] = rerankWithTimeDecayTraced([fx.m], new Map([["d", 6], ["a", 2]]), new Map([["a", 4]]), ["work"], new Map(), new Map(), new Map([[(fx.m.metadata as any).parentId, fx.tags]]));
       const x = t.multipliers;
-      expect(Object.keys(x).sort()).toEqual(["append_penalty", "combined", "frequency", "importance", "recency", "rolled_up_penalty", "source_weight", "tag_boost"]);
+      expect(Object.keys(x).sort()).toEqual(["append_penalty", "combined", "frequency", "importance", "recency", "rolled_up_penalty", "source_weight", "stale_penalty", "tag_boost"]);
       expect(x.combined).toBeCloseTo(Math.min(1, x.recency * x.frequency), 12);
-      const product = fx.m.score * x.combined * x.importance * x.tag_boost * x.append_penalty * x.rolled_up_penalty * x.source_weight;
+      const product = fx.m.score * x.combined * x.importance * x.tag_boost * x.append_penalty * x.rolled_up_penalty * x.source_weight * x.stale_penalty;
       expect(t.match.score).toBeCloseTo(product, 12);
     });
   }
@@ -73,7 +73,7 @@ describe("why line honesty", () => {
   const why = (over: Partial<WhyTrace>): WhyTrace => ({
     dense_rank: 1, keyword_terms: [], multipliers: null, rerank_percentile: null, rerank_move: null, age_known: null, graph: null, slot: "direct", ...over,
   });
-  const mult = { recency: 1, frequency: 1, combined: 1, importance: 1, tag_boost: 1, append_penalty: 1, rolled_up_penalty: 1, source_weight: 1 };
+  const mult = { recency: 1, frequency: 1, combined: 1, importance: 1, tag_boost: 1, append_penalty: 1, rolled_up_penalty: 1, source_weight: 1, stale_penalty: 1 };
   const line = (w: WhyTrace, source?: string) => {
     const m = { id: "x", content: "hello", score: 1, tags: [], source, createdAt: NOW, hop: 0, why: w } as unknown as RecallMatch;
     return renderRecallText([m], {} as any).split("\n").find(l => l.startsWith("why: "))!;

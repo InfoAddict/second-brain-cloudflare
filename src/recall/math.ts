@@ -1,8 +1,11 @@
 import { CHUNK_OVERLAP_CHARS } from "../constants";
 import { getStatus } from "../memory/status";
 import { getVolatility } from "../memory/volatility";
+import { hasStaleAsOf } from "../memory/stale";
+import { RETRACTED_SOURCE_TAG } from "../memory/validity";
 import { DEFAULTS, type Config } from "../config";
 import { sourceClass, sourceWeight } from "./source-trust";
+import type { RecallIntent } from "./query-profile";
 
 export interface VectorizeMatch {
   id: string;
@@ -15,6 +18,8 @@ export interface RerankOptions {
   useRecallFrequency?: boolean;
   /** D1's source column, keyed by parentId. Wins over Vectorize metadata's `source`, exactly as d1Tags wins over metadata tags (4.2). */
   d1Sources?: Map<string, string>;
+  /** The query's classified intent (spec 14 5.8/B6): stale_penalty applies only under "current". */
+  intent?: RecallIntent;
 }
 
 // Recency-decay floors: the minimum fraction of its semantic relevance a memory
@@ -75,6 +80,8 @@ export interface RankMultipliers {
   rolled_up_penalty: number;
   /** The source-class demotion (4.2); 1.0 for direct and for any canonical row regardless of class. */
   source_weight: number;
+  /** Mild demotion for a stale:as-of row under a "current" query intent (spec 14 5.8/B6); 1.0 otherwise. */
+  stale_penalty: number;
 }
 
 type RerankArgs = [
@@ -148,7 +155,14 @@ function scoredMultiplier(
   const source = options.d1Sources?.get(parentId) ?? (typeof meta?.source === "string" ? meta.source : undefined);
   const srcWeight = getStatus(tags) === "canonical" ? 1.0 : sourceWeight(sourceClass(source, tags), config);
 
-  return { factor: combined * appendPenalty * rolledUpPenalty * importance * tagBoost * srcWeight, recency, frequency, combined, importance, tagBoost, appendPenalty, rolledUpPenalty, ageKnown, srcWeight };
+  const stalePenalty = options.intent === "current" && hasStaleAsOf(tags) && !tags.includes(RETRACTED_SOURCE_TAG)
+    ? config.STALE_PENALTY
+    : 1.0;
+
+  return {
+    factor: combined * appendPenalty * rolledUpPenalty * importance * tagBoost * srcWeight * stalePenalty,
+    recency, frequency, combined, importance, tagBoost, appendPenalty, rolledUpPenalty, ageKnown, srcWeight, stalePenalty,
+  };
 }
 
 /**
@@ -173,7 +187,7 @@ export function rerankWithTimeDecayTraced(...args: Partial<RerankArgs>): { match
       const m = scoredMultiplier(match, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, config, options);
       return {
         match: { ...match, score: match.score * m.factor },
-        multipliers: { recency: m.recency, frequency: m.frequency, combined: m.combined, importance: m.importance, tag_boost: m.tagBoost, append_penalty: m.appendPenalty, rolled_up_penalty: m.rolledUpPenalty, source_weight: m.srcWeight },
+        multipliers: { recency: m.recency, frequency: m.frequency, combined: m.combined, importance: m.importance, tag_boost: m.tagBoost, append_penalty: m.appendPenalty, rolled_up_penalty: m.rolledUpPenalty, source_weight: m.srcWeight, stale_penalty: m.stalePenalty },
         ageKnown: m.ageKnown,
       };
     })
