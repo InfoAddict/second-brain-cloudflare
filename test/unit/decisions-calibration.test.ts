@@ -245,10 +245,13 @@ describe("calibrate: wording (18-copy-deck.md section 5.3)", () => {
     expect(result.ready).toBe(true);
     if (result.ready) {
       expect(result.direction).not.toBe("in_line");
-      expect(result.line).toBe("So far, your 70% calls came true 43% of the time, based on 14 decisions. For 5 of them, the confidence was estimated from your wording.");
+      expect(result.line).toBe("So far, when you were about 70% sure, you were right 43% of the time, based on 14 decisions. For 5 of them, that figure was estimated from your wording.");
       expect(result.line).not.toMatch(/always|never/i);
       expect(result.line).not.toMatch(/\bn=/);
       expect(result.line).not.toContain("inferred");
+      expect(result.kind).toBe("rate");
+      expect(result.stated).toBe(70);
+      expect(result.hit).toBe(43);
     }
   });
 
@@ -261,7 +264,19 @@ describe("calibrate: wording (18-copy-deck.md section 5.3)", () => {
     expect(result.ready).toBe(true);
     if (result.ready) {
       expect(result.direction).not.toBe("in_line");
-      expect(result.line).toBe("So far, your 90% calls came true 30% of the time, based on 10 decisions.");
+      expect(result.line).toBe("So far, when you were about 90% sure, you were right 30% of the time, based on 10 decisions.");
+    }
+  });
+
+  it("uses the singular 'decision' for a headline bucket of exactly one", () => {
+    // A single scored row: it is both the only bucket shown and the overall n, so the singular
+    // check holds whichever of mainLine's templates fires (rate or in_line).
+    const result = calibrate([row(0.7, "stated", "right")], { minN: 1, minBucketN: 1, minTopicN: 5 });
+    expect(result.ready).toBe(true);
+    if (result.ready) {
+      expect(result.n).toBe(1);
+      expect(result.line).toContain("based on 1 decision.");
+      expect(result.line).not.toContain("1 decisions");
     }
   });
 
@@ -297,6 +312,13 @@ describe("calibrate: wording (18-copy-deck.md section 5.3)", () => {
       expect(result.line).toContain("based on 5 decisions");
       expect(result.line).not.toContain("based on 14 decisions");
       expect(result.line).not.toContain("14");
+      // Calibration truth check: the headline's own n (5) is honest about what the RATE describes,
+      // but the overall n it deliberately omits (14) must still be the true total every bucket the
+      // dashboard charts adds up to — not a number pulled from nowhere. A UX review once found the
+      // dashboard showing "Based on 14 decisions" next to a chart that summed to 20: this confirms
+      // the backend's own n and the sum of its own buckets can never drift apart, whatever the
+      // headline chooses to cite.
+      expect(result.buckets.reduce((sum, b) => sum + b.n, 0)).toBe(result.n);
     }
   });
 
@@ -309,8 +331,28 @@ describe("calibrate: wording (18-copy-deck.md section 5.3)", () => {
     expect(result.ready).toBe(true);
     if (result.ready) {
       expect(result.direction).toBe("in_line");
-      expect(result.line).toBe("So far, your confidence roughly matches how things turned out, based on 10 decisions.");
+      expect(result.line).toBe("So far, how sure you were roughly matches how things turned out, based on 10 decisions.");
       expect(result.line).not.toMatch(/over|under/i);
+      expect(result.kind).toBe("in_line");
+      expect(result.stated).toBeNull();
+      expect(result.hit).toBeNull();
+    }
+  });
+
+  it("the no-range line uses the same disclosure gate the code enforces, not a typed-in number", () => {
+    // Two decisions in each of the 5 buckets, all wrong: spread thin enough that none clears an
+    // 8-decision gate, and confidently wrong enough that direction is "over", not "in_line" —
+    // isolating the no-range template from the in_line one, which also has a null headline bucket.
+    const rows = [0.55, 0.65, 0.75, 0.85, 0.95].flatMap(p => [row(p, "stated", "wrong" as const), row(p, "stated", "wrong" as const)]);
+    const result = calibrate(rows, { minN: 10, minBucketN: 8, minTopicN: 5 });
+    expect(result.ready).toBe(true);
+    if (result.ready) {
+      expect(result.direction).not.toBe("in_line");
+      expect(result.headlineBucket).toBeNull();
+      expect(result.line).toContain("once 8 decisions share a similar confidence");
+      expect(result.kind).toBe("no_range");
+      expect(result.stated).toBeNull();
+      expect(result.hit).toBeNull();
     }
   });
 
@@ -324,7 +366,7 @@ describe("calibrate: wording (18-copy-deck.md section 5.3)", () => {
     expect(result.ready).toBe(true);
     if (result.ready && result.topic) {
       expect(result.topic.direction).toBe("over");
-      expect(result.topicLine).toBe("On hiring, your calls have come true less often than you expected so far, based on 6 decisions.");
+      expect(result.topicLine).toBe("On hiring, you've been right less often than you expected so far, based on 6 decisions.");
       expect(result.topicLine).not.toMatch(/%/);
     }
   });
