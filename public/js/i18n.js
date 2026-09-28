@@ -1677,14 +1677,13 @@ const I18N_IT = {
     evReleased: 'Rilasciato',
   },
   held: {
-    // "Tenuto" (not "Trattenuto"), matching the banner and tooLongLine's own
-    // verb (UI review, S5): the chip and the sentence it opens onto read as
-    // one word, the way the English chip and banner both start with "Held".
-    tooLongChip: 'Tenuto: troppo lungo',
-    tooLongLine: 'Tenuto fuori dalla ricerca e lontano dai tuoi strumenti di IA, perché è troppo lungo per controllarlo automaticamente in cerca di istruzioni nascoste. Leggilo e rilascialo se va bene. I ricordi più brevi non vengono trattenuti.',
-    chip: 'Tenuto',
-    banner: 'Tenuto fuori dalla ricerca: {reason}. Resta salvato e i tuoi strumenti di IA non lo vedranno finché non lo rilasci.',
-    bannerOther: "Tenuto fuori dalla ricerca: {reason}. Resta salvato e gli strumenti di IA non lo vedranno finché non lo rilascia chi l'ha salvato o un amministratore.",
+    // Copywriter ruling (S5): one root, "Trattenuto", everywhere in Italian -
+    // standing alone, "Tenuto" does not read as "held".
+    tooLongChip: 'Trattenuto: troppo lungo',
+    tooLongLine: 'Trattenuto fuori dalla ricerca e lontano dai tuoi strumenti di IA, perché è troppo lungo per controllarlo automaticamente in cerca di istruzioni nascoste. Leggilo e rilascialo se va bene. I ricordi più brevi non vengono trattenuti.',
+    chip: 'Trattenuto',
+    banner: 'Trattenuto fuori dalla ricerca: {reason}. Resta salvato e i tuoi strumenti di IA non lo vedranno finché non lo rilasci.',
+    bannerOther: "Trattenuto fuori dalla ricerca: {reason}. Resta salvato e gli strumenti di IA non lo vedranno finché non lo rilascia chi l'ha salvato.",
     release: 'Rilascia',
     released: 'Rilasciato',
     releaseFailed: 'Impossibile rilasciarlo: {message}',
