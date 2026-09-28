@@ -12,7 +12,7 @@ import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
 import { decodeTrashCursor, listTrash } from "../memory/trash-list";
-import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
+import { revertEntry, undoGroup, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
 import { mirrorUndoError } from "../integrations/mirror";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
@@ -302,8 +302,11 @@ export async function handleEntriesRoutes(
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
 
-    let body: { id?: string; to_version?: unknown; nonce?: unknown };
+    let body: { id?: string; to_version?: unknown; nonce?: unknown; group?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    // Reviewer MAJOR (server.ts's MCP undo had the same gap): a body naming both a single id and
+    // a group is ambiguous about which write the caller wants; refused before any read.
+    if (body.group !== undefined) return json({ ok: false, error: "Pass either id or group (POST /undo/group), not both." }, 400);
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     const id = body.id.trim();
     const nonce = optionalNonce(body);
@@ -369,6 +372,27 @@ export async function handleEntriesRoutes(
       case "reembed_failed":
         return json({ ok: false, error: "Couldn't update: search did not update. The memory is unchanged. Try again." }, 500);
     }
+  }
+
+  // POST /undo/group — "undo all" or "release all" a burst the brief's changes line grouped
+  // (5.9). Kept separate from POST /undo above, so contract 4.4 (T-0089.6.6) is untouched.
+  // Membership is re-derived from the reader's own scope on every call, never trusted from the
+  // client (undoGroup, src/memory/undo.ts). Each call reverts at most UNDO_GROUP_PAGE memories;
+  // the caller loops while remaining > 0, the same pattern as POST /vectorize-pending.
+  if (url.pathname === "/undo/group" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { group?: unknown; id?: unknown };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (body.id !== undefined) return json({ ok: false, error: "Pass either id (POST /undo) or group, not both." }, 400);
+    if (typeof body.group !== "string" || !body.group.trim()) return json({ ok: false, error: "group is required" }, 400);
+
+    const cfg = await resolveConfig(env);
+    const result = await undoGroup(env, auth, body.group.trim(), { actorId: auth.userId, channel: "rest" }, cfg, ctx);
+    if (!result) return json({ ok: false, error: "Invalid or unreadable group" }, 404);
+
+    return json({ ok: true, results: result.results, done: result.done, remaining: result.remaining, group: result.group });
   }
 
   // GET /entry — one full row by id, for the dashboard graph view's tap-to-open

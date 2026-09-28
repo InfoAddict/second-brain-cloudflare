@@ -10,7 +10,8 @@ import { isHeld, QUARANTINE_TAG_PREFIX } from "../quarantine/tags";
 import { deleteEntryVectors } from "../vectorize/batch";
 import { discardUpload, upsertEntryVectors, type StoredEntry } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
-import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
+import { OWNER_WRITE_CONTEXT, readScopeWorkspaces, type WriteContext } from "../lib/scope";
+import { groupCandidates, safeClient, UNDO_GROUP_PAGE, type ChangeFamily, type DecodedGroup } from "../brief/changes";
 import type { Config } from "../config";
 import { VERSION_ROW_BUDGET_BYTES, UNDO_MERGE_REEMBED_INLINE } from "../constants";
 import { getTrashedEntry, restoreEntry } from "./trash";
@@ -648,6 +649,193 @@ export async function revertEntry(
   if (deferredIncoming) (result as { deferredIncoming?: number }).deferredIncoming = deferredIncoming;
 
   return result;
+}
+
+// ── Undo/release a group (S3, 5.9) ──────────────────────────────────────────
+//
+// Membership is re-derived from the reader's own scoped read on every call
+// (changes.ts's groupCandidates), never trusted from the client. Paging is
+// stateless: UNDO_GROUP_PAGE members are taken from whichever candidates are
+// still "actionable" this call, where a member drops out of "actionable" the
+// moment its own current state shows it was already handled --
+//   - held family: it is no longer held (isHeld(tags) is false);
+//   - status/edit/revert families: its newest version's created_at, actor and
+//     client no longer match the group's own recorded actor/client/window --
+//     which is also true of a genuine third-party edit, so those two cases are
+//     told apart by whether the newest version was written by the identity now
+//     calling undo/group, after the window closed, with reason "revert" or a
+//     release's "status" (5.6) -- i.e. whether it looks like OUR own earlier
+//     page's write. A third-party edit that lands between two pages of the
+//     SAME undo/group call, before this heuristic's page reaches it, is
+//     reported as changed_since once and then (since nothing is written for
+//     it) can be re-offered on a later call if the caller keeps going past
+//     `remaining: 0` -- accepted: no write is ever duplicated or lost, only a
+//     rare race's status line could repeat.
+export interface UndoGroupResult {
+  results: { id: string; result: string }[];
+  done: boolean;
+  remaining: number;
+  group: string;
+  capped: boolean;
+  /** The group's total member count (after the UNDO_GROUP_MAX cap), stable across calls. */
+  total: number;
+  family: ChangeFamily;
+}
+
+function resultForStatus(status: UndoResult["status"]): string {
+  return status;
+}
+
+async function resolveHeldGroup(
+  env: Env, identity: Identity, ids: string[], change: ChangeContext, config: Readonly<Config>,
+  ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
+): Promise<UndoGroupResult> {
+  const { results: rows } = await env.DB.prepare(
+    // scope-checked: workspace_id IN (?2) narrows to the reader's own scope; ids already come
+    // from groupCandidates's own reader-scoped derivation, so this is defense in depth, not the
+    // only check.
+    `SELECT id, tags, workspace_id FROM entries WHERE id IN (SELECT value FROM json_each(?1)) AND workspace_id IN (SELECT value FROM json_each(?2))`,
+  ).bind(JSON.stringify(ids), JSON.stringify(scope)).all<{ id: string; tags: string; workspace_id: string }>();
+  const byId = new Map(rows.map(r => [r.id, r]));
+
+  const actionable = ids.filter(id => {
+    const row = byId.get(id);
+    if (!row) return false;
+    try { return isHeld(JSON.parse(row.tags) as string[]); } catch { return false; }
+  });
+  const page = actionable.slice(0, UNDO_GROUP_PAGE);
+
+  const results: { id: string; result: string }[] = [];
+  for (const id of page) {
+    const row = byId.get(id)!;
+    const outcome = await revertEntry(env, identity, id, change, config, undefined, row.workspace_id, undefined, ctx);
+    results.push({ id, result: resultForStatus(outcome.status) });
+  }
+  const remaining = actionable.length - page.length;
+  return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: "held" };
+}
+
+async function resolveTrashGroup(
+  env: Env, identity: Identity, ids: string[], change: ChangeContext, config: Readonly<Config>,
+  ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
+): Promise<UndoGroupResult> {
+  const { results: rows } = await env.DB.prepare(
+    // scope-checked: workspace_id IN (?2) narrows to the reader's own scope; ids already come
+    // from groupCandidates's own reader-scoped derivation, so this is defense in depth, not the
+    // only check.
+    `SELECT id, workspace_id, nonce FROM entries_trash WHERE id IN (SELECT value FROM json_each(?1)) AND workspace_id IN (SELECT value FROM json_each(?2))`,
+  ).bind(JSON.stringify(ids), JSON.stringify(scope)).all<{ id: string; workspace_id: string; nonce: string }>();
+  const byId = new Map(rows.map(r => [r.id, r]));
+  const actionable = ids.filter(id => byId.has(id));
+  const page = actionable.slice(0, UNDO_GROUP_PAGE);
+
+  const results: { id: string; result: string }[] = [];
+  for (const id of page) {
+    const row = byId.get(id)!;
+    const outcome = await revertEntry(env, identity, id, change, config, undefined, row.workspace_id, row.nonce, ctx);
+    results.push({ id, result: resultForStatus(outcome.status) });
+  }
+  const remaining = actionable.length - page.length;
+  return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: "trash" };
+}
+
+interface ChainRow {
+  seq: number; meta: string; reason: string; channel: string; actor_id: string; created_at: number; workspace_id: string;
+}
+
+type MemberVerdict =
+  | { kind: "pending"; toVersion: number; workspaceId: string }
+  | { kind: "done" }
+  | { kind: "changed_since" }
+  | { kind: "not_found" };
+
+/**
+ * Whether this one memory is still owed the group's own revert, told from a stable, seq-based
+ * cursor rather than a timestamp (reviewer MINOR: an undo landing in the group's own final
+ * millisecond used to read as still-eligible on the next page, and paging repeated it instead of
+ * advancing). `target_seq` is the "before this version" seq a plain revert always records
+ * (metaCandidate above); a later version carrying `reason: "revert"` and that exact target_seq is
+ * unambiguous proof this exact group-qualifying change was already undone, whatever time it
+ * landed at. Nothing happening after the qualifying version at all (newest === toVersion) is
+ * "pending"; anything else that happened since, and is not that proof, is a third party's edit
+ * (reviewer MAJOR, R21 follow-up: the qualifying version's own actor must equal the group's own
+ * actor, or a same-window edit by someone else using the same client label could be reverted).
+ */
+async function classifyMember(env: Env, id: string, decoded: DecodedGroup, cfg: Readonly<Config>, scope: string[]): Promise<MemberVerdict> {
+  const { results } = await env.DB.prepare(
+    // scope-checked: en.workspace_id IN (?2) narrows to the reader's own scope; `id` also already
+    // comes from groupCandidates's own reader-scoped derivation, so this is defense in depth.
+    `SELECT ev.seq, ev.meta, ev.reason, ev.channel, ev.actor_id, ev.created_at, en.workspace_id
+     FROM entry_versions ev JOIN entries en ON en.id = ev.entry_id
+     WHERE ev.entry_id = ?1 AND en.workspace_id IN (SELECT value FROM json_each(?2))
+     ORDER BY ev.seq ASC LIMIT 500`,
+  ).bind(id, JSON.stringify(scope)).all<ChainRow>();
+  if (!results.length) return { kind: "not_found" };
+
+  let toVersion: number | undefined;
+  let consumed = false;
+  for (const r of results) {
+    let meta: Record<string, unknown> = {};
+    try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no client / no target_seq */ }
+    if (toVersion === undefined) {
+      if (r.created_at >= decoded.start && r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
+        toVersion = r.seq;
+      }
+      continue;
+    }
+    if (r.reason === "revert" && meta.target_seq === toVersion) consumed = true;
+  }
+  if (toVersion === undefined) return { kind: "not_found" };
+  if (consumed) return { kind: "done" };
+  const newest = results[results.length - 1];
+  return newest.seq === toVersion ? { kind: "pending", toVersion, workspaceId: newest.workspace_id } : { kind: "changed_since" };
+}
+
+async function resolveVersionGroup(
+  env: Env, identity: Identity, decoded: DecodedGroup, ids: string[], change: ChangeContext, config: Readonly<Config>,
+  ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
+): Promise<UndoGroupResult> {
+  const results: { id: string; result: string }[] = [];
+  let doneCount = 0;
+  let i = 0;
+  for (; i < ids.length && results.length < UNDO_GROUP_PAGE; i++) {
+    const verdict = await classifyMember(env, ids[i], decoded, config, scope);
+    if (verdict.kind === "done") { doneCount++; continue; }
+    if (verdict.kind === "not_found" || verdict.kind === "changed_since") { results.push({ id: ids[i], result: verdict.kind }); continue; }
+    const outcome = await revertEntry(env, identity, ids[i], change, config, verdict.toVersion, verdict.workspaceId, undefined, ctx);
+    results.push({ id: ids[i], result: resultForStatus(outcome.status) });
+  }
+  // Everything from i onward is still unexamined and stays actionable for the next call.
+  const remaining = ids.length - doneCount - results.length;
+  return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: decoded.family };
+}
+
+/**
+ * "Undo all" / "release all" (5.9). Returns null when `groupKeyStr` does not decode to a group
+ * shape at all (a malformed or foreign string) -- the caller renders that as `not_found`, the
+ * same neutral response an unreadable id gets elsewhere in this file.
+ */
+export async function undoGroup(
+  env: Env, identity: Identity, groupKeyStr: string, change: ChangeContext, config: Readonly<Config>, ctx?: ExecutionContext,
+): Promise<UndoGroupResult | null> {
+  const candidates = await groupCandidates(env, identity, groupKeyStr, config);
+  if (!candidates) return null;
+  const { decoded, ids, capped } = candidates;
+  if (!ids.length) return { results: [], done: true, remaining: 0, group: groupKeyStr, capped, total: 0, family: decoded.family };
+
+  const scope = readScopeWorkspaces(identity);
+  if (decoded.family === "held") return resolveHeldGroup(env, identity, ids, change, config, ctx, groupKeyStr, capped, scope);
+  if (decoded.family === "trash") return resolveTrashGroup(env, identity, ids, change, config, ctx, groupKeyStr, capped, scope);
+  return resolveVersionGroup(env, identity, decoded, ids, change, config, ctx, groupKeyStr, capped, scope);
+}
+
+/** "Undid 5 of 14 changes in that group; call undo with the same group again to continue." (5.9). */
+export function undoGroupMcpReply(result: UndoGroupResult): string {
+  const verb = result.family === "held" ? "Released" : "Undid";
+  const noun = result.family === "held" ? "releases" : "changes";
+  const done = result.total - result.remaining;
+  if (result.remaining === 0) return `${verb} all ${result.total} ${noun} in that group.`;
+  return `${verb} ${done} of ${result.total} ${noun} in that group; call undo with the same group again to continue.`;
 }
 
 // ── Reply text (T-0089.6.6) ──────────────────────────────────────────────────

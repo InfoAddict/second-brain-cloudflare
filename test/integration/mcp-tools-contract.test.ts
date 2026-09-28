@@ -444,10 +444,10 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
   });
 
   describe("undo", () => {
-    it("matches the approved description word for word (T-0089.6.6)", async () => {
+    it("matches the approved description word for word (T-0089.6.6, S3 adds the group sentence)", async () => {
       const undo = (await descriptions()).undo;
       expect(undo).toBe(
-        "Reverse the most recent change to a memory, or restore a memory from the trash. Call when the user says a change was wrong or asks to put something back. Every undo can itself be undone.",
+        "Reverse the most recent change to a memory, or restore a memory from the trash. Call when the user says a change was wrong or asks to put something back. Every undo can itself be undone. Pass group (from brief) only when the user asks to undo that whole group.",
       );
     });
 
@@ -455,7 +455,14 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
       const schema = await schemaFor("undo");
       expect(schema).not.toHaveProperty("permanent");
       expect(schema).not.toHaveProperty("confirm");
-      expect(Object.keys(schema).sort()).toEqual(["id", "to_version"]);
+      expect(Object.keys(schema).sort()).toEqual(["group", "id", "to_version"]);
+    });
+
+    // S3 (T-0089.4.3, 5.9): group is a single string, never an array -- the schema itself is the
+    // guard against an agent trying to build an id list rather than copy a group key verbatim.
+    it("group is a single string, never an id list", async () => {
+      const schema = await schemaFor("undo");
+      expect(schema.group.type).toBe("string");
     });
 
     it("is honest that a hard delete is irreversible and history beyond the cap is gone", async () => {

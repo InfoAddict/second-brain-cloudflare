@@ -33,5 +33,11 @@ export async function handleBriefRoutes(request: Request, url: URL, env: Env, ct
   }
   const projectRows = await readProjectParam(env, auth, url);
   if (projectRows instanceof Response) return projectRows;
-  return json(await computeBrief(env, auth, url.searchParams.get("preview") === "1", projectRows));
+  // reveal_held (5.8/P7 follow-up, R21 review): REST auth is one bearer token per user with no
+  // separate dashboard-session concept, so a held item's own text stays back unless the caller
+  // opts in explicitly and by name -- never on by default, and never conflated with `preview`
+  // above (an unrelated dry-run flag). No current caller sends this; a future dashboard "reveal"
+  // action (S4) is the only one that should.
+  const revealHeld = url.searchParams.get("reveal_held") === "1";
+  return json(await computeBrief(env, auth, url.searchParams.get("preview") === "1", projectRows, revealHeld));
 }

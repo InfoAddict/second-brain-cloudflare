@@ -9,7 +9,7 @@ import { COUNTERPARTY_NAME_MAX_CHARS, partitionIgnoredTags, t7ReplyText, validat
 import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
 import { getTrashedEntry } from "../memory/trash";
-import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
+import { revertEntry, undoGroup, undoGroupMcpReply, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
 import { auditEvent, type ChangeContext } from "../lib/audit";
 import { channelNoun, lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
@@ -1469,16 +1469,35 @@ export function buildMcpServer(
   server.registerTool(
     "undo",
     {
-      description: "Reverse the most recent change to a memory, or restore a memory from the trash. Call when the user says a change was wrong or asks to put something back. Every undo can itself be undone.",
+      description: "Reverse the most recent change to a memory, or restore a memory from the trash. Call when the user says a change was wrong or asks to put something back. Every undo can itself be undone. Pass group (from brief) only when the user asks to undo that whole group.",
       inputSchema: {
-        id: z.string().describe("Entry ID from recall, list_recent or history"),
+        id: z.string().optional().describe("Entry ID from recall, list_recent or history"),
         to_version: z.number().int().positive().optional().describe("Roll all the way back to this version number instead of just undoing the latest change. Get version numbers from history. Only reaches versions still within the kept history — the oldest eventually age out, and a permanently deleted memory has none left to reach."),
+        group: z.string().optional().describe("A group key copied verbatim from the brief tool's \"What AI tools changed\" block, to undo or release every memory in that group. Never build one yourself — only pass one exactly as brief gave it."),
       },
       // Reverting a redo lands right back on the change it just reversed (server.ts's own docs on
       // the tool describe this), so calling it twice does not repeat the first call's effect.
       annotations: { idempotentHint: false },
     },
-    async ({ id, to_version }, extra) => {
+    async ({ id, to_version, group }, extra) => {
+      // 5.9 (S3): group is mutually exclusive with id/to_version, and only ever a string copied
+      // from brief — the schema itself (z.string(), not z.array) closes the "id list" path this
+      // tool must never accept for a group undo.
+      // Reviewer MAJOR: id and group together used to fall through to the group branch and run
+      // the bulk write, silently ignoring id — refused outright, before anything else runs.
+      if (id !== undefined && group !== undefined) {
+        return { content: [{ type: "text", text: "Pass either id or group, not both." }] };
+      }
+      if (group !== undefined) {
+        if (!identity) return { content: [{ type: "text", text: FORBIDDEN_MSG }] };
+        const cfg = await resolveConfig(env);
+        const client = await resolveClient(extra);
+        const result = await undoGroup(env, identity, group, { actorId: identity.userId, channel: "mcp", client }, cfg, ctx);
+        if (!result) return { content: [{ type: "text", text: "That group is no longer valid. Call brief again for a fresh one." }] };
+        return { content: [{ type: "text", text: undoGroupMcpReply(result) }] };
+      }
+      if (!id) return { content: [{ type: "text", text: "id is required unless group is given." }] };
+
       // The workspace THIS call's own scoped read authorizes (Class 1): a live row's, or — undo of
       // a forget — a trashed row's. revertEntry reads the row again moments later on its own;
       // pinning its CAS guard to what this read found is what keeps an unshare in that gap from
