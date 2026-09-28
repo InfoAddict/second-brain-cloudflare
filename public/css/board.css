@@ -1018,6 +1018,23 @@
   color: var(--text-primary);
 }
 
+/* T7-E: the loops panel's two groups ("You owe", "Owed to you"), each its
+   own small caps label above its own rows — .task's own top border already
+   separates rows within a group, so only the group boundary itself needs a
+   gap. */
+.loops-group + .loops-group {
+  margin-top: 14px;
+}
+
+.loops-group-title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
 /* ── Upkeep and connected sources ─────────────────────────────────────── */
 .task {
   display: flex;

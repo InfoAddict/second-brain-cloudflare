@@ -814,4 +814,34 @@ describe("dashboard i18n", () => {
     // look like at a glance.
     expect(actualDynamicIdentities).toEqual([...EXPECTED_DYNAMIC_CALL_SITES].sort());
   });
+
+  // T7-E (Track 7 lane E, Task 13): every key the loops direction split and
+  // the Due sheet's decision outcomes added, in en and it, with no em dash
+  // (U+2014). Scoped to just these new keys rather than a whole-catalog
+  // sweep, since this branch does not carry one yet.
+  it("every new key from the loops/due split exists in en and it, with no em dash", () => {
+    const { ctx } = loadI18n("en");
+    const en = flattenCatalog(vm.runInContext("I18N_EN", ctx));
+    const it = flattenCatalog(vm.runInContext("I18N_IT", ctx));
+    const NEW_KEYS = [
+      "loops.youOwe", "loops.owedToYou", "loops.received", "loops.receivedFailed",
+      "loops.doneToast", "loops.notTaskToast", "loops.receivedToast", "loops.undo",
+      "loops.undoFailed", "loops.fromName", "loops.dueDate", "loops.wasDueDate",
+      "due.reviewLabel", "due.right", "due.wrong", "due.mixed", "due.cantTellYet",
+      "due.addNote", "due.notePlaceholder", "due.outcomeFailed", "due.outcomeToastRight",
+      "due.outcomeToastWrong", "due.outcomeToastMixed", "due.undo", "due.undoFailed",
+      "due.owedToYouBy", "due.owedToYou",
+    ];
+    const EM_DASH = "—";
+    const missing: string[] = [];
+    const emDash: string[] = [];
+    for (const key of NEW_KEYS) {
+      if (typeof en[key] !== "string") missing.push(`en:${key}`);
+      else if ((en[key] as string).includes(EM_DASH)) emDash.push(`en:${key}`);
+      if (typeof it[key] !== "string") missing.push(`it:${key}`);
+      else if ((it[key] as string).includes(EM_DASH)) emDash.push(`it:${key}`);
+    }
+    expect(missing, "keys missing from a catalog").toEqual([]);
+    expect(emDash, "em dash (U+2014) found in a new key's value").toEqual([]);
+  });
 });

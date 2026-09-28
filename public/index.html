@@ -856,6 +856,12 @@
           <h2 style="margin-bottom: 0" data-i18n="loops.title">Open loops</h2>
           <button class="btn-close-icon" onclick="closeLoopsSheet()"><i class="ti ti-x"></i></button>
         </div>
+        <!-- T7-E: "You owe" (outbound) / "Owed to you" (inbound), paging
+             GET /loops?direction=out|in (Design 7.1). -->
+        <div class="loops-tabs" role="tablist" aria-label="Loops direction">
+          <button type="button" class="loops-tab active" id="loops-tab-out" role="tab" aria-selected="true" onclick="setLoopsDirection('out')" data-i18n="loops.youOwe">You owe</button>
+          <button type="button" class="loops-tab" id="loops-tab-in" role="tab" aria-selected="false" onclick="setLoopsDirection('in')" data-i18n="loops.owedToYou">Owed to you</button>
+        </div>
         <div id="loops-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
         <button class="digest-more" id="loops-more" hidden onclick="loadMoreLoops(this)"></button>
       </div>

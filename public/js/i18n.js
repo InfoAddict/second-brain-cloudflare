@@ -797,6 +797,22 @@ const I18N_EN = {
     notTaskFailed: 'Could not update this: {message}',
     more: '{n} more',
     seeAll: 'See all',
+    // T7-E (Track 7 lane E): the loops sheet splits into "You owe" (outbound,
+    // the original queue) and "Owed to you" (inbound, someone else's
+    // promise). Draft copy, not yet in the copy deck: flagged for the
+    // copywriter.
+    youOwe: 'You owe',
+    owedToYou: 'Owed to you',
+    received: 'Received',
+    receivedFailed: 'Could not mark this received: {message}',
+    doneToast: 'Marked done.',
+    notTaskToast: 'Removed from your commitments.',
+    receivedToast: 'Marked as received.',
+    undo: 'Undo',
+    undoFailed: 'Could not undo: {message}',
+    fromName: 'from {name}',
+    dueDate: 'due {date}',
+    wasDueDate: 'was due {date}',
   },
   due: {
     title: 'Due',
@@ -810,6 +826,28 @@ const I18N_EN = {
     doneFailed: 'Could not mark this done: {message}',
     clearFailed: 'Could not update this: {message}',
     snoozeFailed: 'Could not snooze this: {message}',
+    // T7-E: decision review rows (kind: "decision") show four outcome
+    // buttons instead of Done, plus an optional note and an inbound
+    // commitment's counterparty. Draft copy, not yet in the copy deck:
+    // flagged for the copywriter. reviewLabel's prefix comes from here
+    // rather than the stored when_label's own English "Review: " text
+    // (18-copy-deck.md section 5, the note on reviewLabel), so Italian
+    // reads "Da rivedere" instead of the stored English word.
+    reviewLabel: 'Review: {label}',
+    right: 'Right',
+    wrong: 'Wrong',
+    mixed: 'Mixed',
+    cantTellYet: 'Can’t tell yet',
+    addNote: 'Add a note',
+    notePlaceholder: 'Optional note',
+    outcomeFailed: 'Could not record this: {message}',
+    outcomeToastRight: 'Recorded: went right.',
+    outcomeToastWrong: 'Recorded: went wrong.',
+    outcomeToastMixed: 'Recorded: mixed result.',
+    undo: 'Undo',
+    undoFailed: 'Could not undo: {message}',
+    owedToYouBy: 'Owed to you by {name}',
+    owedToYou: 'Owed to you',
   },
   notifications: {
     title: 'Notifications',
@@ -1774,6 +1812,18 @@ const I18N_IT = {
     notTaskFailed: 'Impossibile aggiornare: {message}',
     more: 'Altri {n}',
     seeAll: 'Vedi tutti',
+    youOwe: 'Tu devi',
+    owedToYou: 'Ti devono',
+    received: 'Ricevuto',
+    receivedFailed: 'Impossibile segnare come ricevuto: {message}',
+    doneToast: 'Segnato come fatto.',
+    notTaskToast: 'Rimosso dai tuoi impegni.',
+    receivedToast: 'Segnato come ricevuto.',
+    undo: 'Annulla',
+    undoFailed: 'Impossibile annullare: {message}',
+    fromName: 'da {name}',
+    dueDate: 'scade il {date}',
+    wasDueDate: 'scadeva il {date}',
   },
   due: {
     title: 'Scadenze',
@@ -1787,6 +1837,21 @@ const I18N_IT = {
     doneFailed: 'Impossibile segnare come fatto: {message}',
     clearFailed: 'Impossibile aggiornare: {message}',
     snoozeFailed: 'Impossibile rimandare: {message}',
+    reviewLabel: 'Da rivedere: {label}',
+    right: 'Giusta',
+    wrong: 'Sbagliata',
+    mixed: 'Mista',
+    cantTellYet: 'Non ancora chiaro',
+    addNote: 'Aggiungi una nota',
+    notePlaceholder: 'Nota facoltativa',
+    outcomeFailed: 'Impossibile registrare: {message}',
+    outcomeToastRight: 'Registrato: si è rivelata giusta.',
+    outcomeToastWrong: 'Registrato: si è rivelata sbagliata.',
+    outcomeToastMixed: 'Registrato: risultato misto.',
+    undo: 'Annulla',
+    undoFailed: 'Impossibile annullare: {message}',
+    owedToYouBy: 'Te lo deve {name}',
+    owedToYou: 'Ti devono',
   },
   notifications: {
     title: 'Notifiche',

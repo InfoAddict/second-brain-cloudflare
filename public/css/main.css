@@ -2274,6 +2274,45 @@
         box-shadow: var(--shadow-card);
       }
 
+      /* T7-E: the loops sheet's "You owe / Owed to you" tabs. Same raised-pill
+         language as .theme-toggle above, its only other segmented control. */
+      .loops-tabs {
+        display: flex;
+        gap: 3px;
+        background: var(--surface-2);
+        border-radius: var(--radius-pill);
+        padding: 3px;
+        margin-bottom: 14px;
+      }
+
+      .loops-tab {
+        flex: 1;
+        border: none;
+        background: none;
+        cursor: pointer;
+        padding: 8px 13px;
+        border-radius: var(--radius-pill);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        min-height: 36px;
+        transition:
+          background 0.18s,
+          color 0.18s;
+      }
+
+      .loops-tab.active {
+        background: var(--bg-card);
+        color: var(--accent-ink);
+        box-shadow: var(--shadow-card);
+      }
+
+      .loops-tab:focus-visible {
+        outline: 2px solid var(--accent-ink);
+        outline-offset: 2px;
+      }
+
       .menu-item {
         display: flex;
         align-items: center;
@@ -2520,6 +2559,22 @@
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
+      }
+
+      /* T7-E: the decision row's optional note, expanded by "Add a note"
+         (Design 7.2) before the outcome buttons. Never required, so it stays
+         a plain one-line field rather than the memory sheet's own textarea. */
+      .due-note-input {
+        display: block;
+        width: 100%;
+        margin: 0 0 8px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-input);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        color: var(--text-primary);
+        background: transparent;
       }
 
       .pattern-row {

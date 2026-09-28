@@ -8,7 +8,7 @@ import vm from "node:vm";
 import { describe, it, expect } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "../..");
-const src = ["public/js/i18n.js", "public/utils.js", "public/js/state.js", "public/js/api.js", "public/js/board.js", "public/js/chart.js"]
+const src = ["public/js/i18n.js", "public/utils.js", "public/js/state.js", "public/js/api.js", "public/js/loops.js", "public/js/board.js", "public/js/chart.js"]
   .map((f) => readFileSync(resolve(ROOT, f), "utf8"))
   .join("\n");
 
@@ -917,6 +917,53 @@ describe("open loops panel", () => {
     ctx.renderLoopsPanel(board, {});
 
     expect(board.children).toHaveLength(0);
+  });
+
+  it("loops panel renders two groups and hides empty ones", () => {
+    const ctx = ctxFor();
+    const both = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(both, {
+      loops: {
+        open: 1,
+        items: [
+          { id: "out1", content: "Send the contract back", source: "cli", tags: ["task"], created_at: Date.now(), direction: "out" },
+          { id: "in1", content: "the write-up from Priya", source: "cli", tags: ["task", "owed-to-me", "counterparty:priya"], created_at: Date.now(), direction: "in" },
+        ],
+      },
+      owed_to_me: 1,
+    });
+    const bothHtml = both.children[0].body.innerHTML;
+    expect(bothHtml).toContain("You owe");
+    expect(bothHtml).toContain("Owed to you");
+    expect(bothHtml).toContain("Send the contract back");
+    expect(bothHtml).toContain("the write-up from Priya");
+    expect(bothHtml).toContain("resolveLoop('in1', 'done'");
+
+    // Outbound only: the "Owed to you" group is omitted entirely, not shown empty.
+    const outOnly = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(outOnly, {
+      loops: { open: 1, items: [{ id: "out1", content: "Send the contract back", source: "cli", tags: ["task"], created_at: Date.now(), direction: "out" }] },
+      owed_to_me: 0,
+    });
+    const outHtml = outOnly.children[0].body.innerHTML;
+    expect(outHtml).toContain("You owe");
+    expect(outHtml).not.toContain("Owed to you");
+
+    // Inbound only, no outbound open loops at all: the panel still shows, with only its one group.
+    const inOnly = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(inOnly, {
+      loops: { open: 0, items: [{ id: "in1", content: "the write-up from Priya", source: "cli", tags: ["task", "owed-to-me"], created_at: Date.now(), direction: "in" }] },
+      owed_to_me: 1,
+    });
+    expect(inOnly.children).toHaveLength(1);
+    const inHtml = inOnly.children[0].body.innerHTML;
+    expect(inHtml).toContain("Owed to you");
+    expect(inHtml).not.toContain("You owe");
+
+    // Both empty: the panel itself is hidden, per the existing contract.
+    const neither = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(neither, { loops: { open: 0, items: [] }, owed_to_me: 0 });
+    expect(neither.children).toHaveLength(0);
   });
 });
 
