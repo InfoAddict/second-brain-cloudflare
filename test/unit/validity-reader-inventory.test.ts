@@ -116,7 +116,7 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // MOVED (merge of release/v4 c0eed34b into v4/t2-b): Track 7-C's GET /loops direction/kind logic
   // and the decisions/commitments wiring added lines above several of these sites; recomputed
   // against the real scanner output on the merged tree.
-  "src/routes/admin.ts": [610, 623, 635, 660, 733, 758, 807, 856, 861, 1000, 1007, 1123, 1129, 1453, 1544, 1574, 1686],
+  "src/routes/admin.ts": [611, 624, 636, 661, 734, 759, 808, 857, 862, 1001, 1008, 1124, 1130, 1454, 1545, 1575, 1689],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };

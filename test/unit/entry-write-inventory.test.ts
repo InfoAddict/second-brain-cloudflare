@@ -153,7 +153,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // site. MOVED 1540 -> 1544 (merge of release/v4 57583d10, T-0101.8.5 BE-10): history_since on
   // GET /health added lines above this site too. MOVED 1545 -> 1563 (merge of release/v4 c0eed34b,
   // Track 7-C decisions/commitments wiring): recomputed against the real scanner output; same site.
-  { file: 'src/routes/admin.ts', line: 1563, kind: 'exempt' },
+  { file: 'src/routes/admin.ts', line: 1564, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 87, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 97, kind: 'exempt' },
   // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
@@ -175,7 +175,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:87", "src/staleness/pass.ts:97",
   "src/when/pass.ts:368",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1563", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1564", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   "src/capture/entry.ts:540", "src/capture/entry.ts:601",

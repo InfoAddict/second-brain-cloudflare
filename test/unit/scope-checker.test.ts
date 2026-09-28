@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (227 queries, 115 exceptions, 31 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (229 queries, 115 exceptions, 31 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1482,7 +1482,7 @@ describe("the checker over the real source tree", () => {
     // (Track 7-C decisions/commitments wiring, see history above) are independently-tracked deltas
     // from the same base — recomputed against the real scanner output after combining rather than
     // hand-reconciling the two.
-    ).toEqual({ queries: 227, exempt: 115, checked: 31, outerJoin: 1 });
+    ).toEqual({ queries: 229, exempt: 115, checked: 31, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
