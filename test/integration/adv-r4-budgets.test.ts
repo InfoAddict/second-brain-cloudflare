@@ -160,6 +160,8 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     expect(L.calls.length).toBeLessThanOrEqual(73);
     // MOVED 22 -> 23: the pass resolves config (one KV read) only on a night with deferred rows.
     // MOVED 23 -> 24 (T-0089.1.1 round 5): plus the failure-count read, only on a night with deferred rows.
+    // MOVED 24 -> 25 -> 24 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
+    // pass's own resolveConfig KV read, added then removed with rescan.ts itself.
     expect(L.kv.length).toBe(24);
     // The cron makes no external (non-Cloudflare) fetches at all, so it is nowhere near the
     // separate 50-external-fetch cap either.
@@ -176,8 +178,12 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // KV) — the mock skips calls real SQL makes, but both are far under the real 1,000 ceiling.
     // MOVED 49 -> 51 (T-0089.1.1 close-out): the nightly vectorize-pending read and write batch.
     // MOVED 51 -> 52 (T-0089.1.1 round 3): the pass plans from lengths, then reads only the chosen rows' content.
+    // MOVED 52 -> 53 -> 52 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
+    // pass's candidate SELECT, added then removed with rescan.ts itself.
     expect(L.calls.length).toBe(52);
     // MOVED 20 -> 21 (T-0089.1.1 round 5): the vectorize-pending failure-count read.
+    // MOVED 21 -> 22 -> 21 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
+    // pass's own resolveConfig KV read, added then removed with rescan.ts itself.
     expect(L.kv.length).toBe(21);
   });
 });

@@ -240,6 +240,9 @@ export async function runWeeklyInsights(
     // only at accrual, or every candidate accrued before D1 existed keeps
     // being drawn under the old rule until the pool empties. Free: the JOIN
     // was already selecting these rows, this only widens the column list.
+    // Codex review class E (T-0089.4.2): a row accrued clean can be held later, between accrual
+    // and this weekly draw — the same re-check reasoning as status:deprecated/valid_until above,
+    // for the one condition those two do not cover. Held content must never reach reasonOverPair.
     const drawn: CandidateRow[] = [];
     for (const chunk of sliceChunks) {
       // Built here rather than inline in the template so the query carries a

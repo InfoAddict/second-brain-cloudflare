@@ -65,7 +65,7 @@ describe("update, append: baseline, no extra execution", () => {
     t = await makeTrashEnv();
     t.seed("e1", { content: "Notes:" });
     t.sqlite.issued.length = 0;
-    const ok = await appendToEntry(t.env, "e1", "Notes:", "met Sam", [], "api", DEFAULTS, undefined, writeCtx(), change(), undefined, t.roots.ownerPersonalWorkspaceId);
+    const ok = (await appendToEntry(t.env, "e1", "Notes:", "met Sam", [], "api", DEFAULTS, undefined, writeCtx(), change(), undefined, t.roots.ownerPersonalWorkspaceId)).indexed;
     expect(ok).toBe(true);
     expect(t.sqlite.issued).toHaveLength(2);
     expect(t.sqlite.issued[1]).toBe("BATCH");

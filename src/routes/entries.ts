@@ -344,6 +344,9 @@ export async function handleEntriesRoutes(
           ok: true, id, status: "restored", message: restoredMessage(id, result), validity: result.validity,
           ...(result.mirrorSource ? { mirrorWarning: true } : {}),
         });
+      // 5.6: 200 { ok, result: "released", id } — REST and MCP release leave identical rows except channel.
+      case "released":
+        return json({ ok: true, id, result: "released", message: `Released entry ${id}. It is back in recall.` });
       case "no_change":
         return json({ ok: true, id, status: "no_change", changed: false, message: `Entry ${id} already matches that version; nothing changed.` });
       // A hidden version reads exactly like one that never existed (D-SH): never reveals whether

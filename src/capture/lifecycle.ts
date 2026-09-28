@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { getStatus, withStatus, type MemoryStatus } from "../memory/status";
 import { deleteEntryVectors } from "../vectorize/batch";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 import { reembedOrDegrade, discardUpload } from "./store";
 import type { Config } from "../config";
 import type { ChangeContext } from "../lib/audit";
@@ -90,8 +91,13 @@ export async function forgetEntry(
  * or repairing unindexed entries can recognise it. (`vector_ids` is named bare
  * here on purpose — test/unit/updated-at-coalesced.test.ts reads every
  * backtick-delimited span in src/ as SQL, comments included.)
+ *
+ * W4 (16-t3-t4-trust-spec.md 5.3 point 1): a held row's vector_ids is ALSO empty, for the same
+ * reason a deprecated row's is — but it must never be re-embedded, so every re-indexing path
+ * behind this one constant skips it too: /vectorize-pending, the embedding migration and the
+ * brief's "unindexed" count.
  */
-export const INDEXABLE_SQL = `tags NOT LIKE '%"status:deprecated"%'`;
+export const INDEXABLE_SQL = `tags NOT LIKE '%"status:deprecated"%' AND ${NOT_HELD_SQL}`;
 
 /**
  * `workspaceId` pins both the read and the write to it (R2-3): a row that moved since the caller's

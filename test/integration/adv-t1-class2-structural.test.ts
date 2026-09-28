@@ -82,7 +82,7 @@ describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, t
     const { DEFAULTS } = await import("../../src/config");
     const { store, vec, deleteByIds } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     await seed("u1", "Original content");
     store.set("u1", { content: "Original content" });
     const raw = env.DB as any;
@@ -116,7 +116,7 @@ describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, t
     const { DEFAULTS } = await import("../../src/config");
     const { store, vec, deleteByIds } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     const longBody = "x".repeat(1700);
     await seed("u2", longBody);
     store.set("u2", { content: longBody });
@@ -151,7 +151,7 @@ describe("CLASS 2 structural: a thrown commit batch re-embeds the row as it stan
     const { DEFAULTS } = await import("../../src/config");
     const { store, vec } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     await seed("t1", "Original content");
     store.set("t1", { content: "Original content" });
     const raw = env.DB as any;
@@ -171,7 +171,7 @@ describe("CLASS 2 structural: a thrown commit batch re-embeds the row as it stan
     const { DEFAULTS } = await import("../../src/config");
     const { store, vec, deleteByIds } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     await seed("t2", "Original content");
     store.set("t2", { content: "Original content" });
     const raw = env.DB as any;

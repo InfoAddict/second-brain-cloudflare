@@ -113,7 +113,7 @@ describe("ADV-2 (MAJOR): a person's merge lands in another member's personal wor
         upsert: vi.fn(async () => ({ mutationId: "m" }) as any),
         deleteByIds: vi.fn(async () => ({ mutationId: "m" }) as any),
       }),
-      AI: { run: vi.fn(async (model: string) => model.startsWith("@cf/baai/bge") ? { data: [new Array(384).fill(0.1)] } : stream(decision)) } as any,
+      AI: { run: vi.fn(async (model: string, opts: any) => model.startsWith("@cf/baai/bge") ? { data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) } : stream(decision)) } as any,
     }) as Env;
     const db = raceEnv.DB as any;
     const prepare = db.prepare.bind(db);
@@ -188,7 +188,7 @@ describe("ADV-3 (MINOR): digest rollup writes a version for a source it did not 
   it("a source moved out of the digest's workspace mid-run gets no rollup version", async () => {
     const digestEnv = makeTestEnv(undefined, {
       DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(),
-      AI: { run: vi.fn(async (model: string) => model.startsWith("@cf/baai/bge") ? { data: [new Array(384).fill(0.1)] }
+      AI: { run: vi.fn(async (model: string, opts: any) => model.startsWith("@cf/baai/bge") ? { data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) }
         : new ReadableStream({ start(c) {
           c.enqueue(new TextEncoder().encode(`data: {"response":"Synthesized text"}\n\n`));
           c.enqueue(new TextEncoder().encode("data: [DONE]\n\n")); c.close();
@@ -225,7 +225,7 @@ describe("ADV-4 (MINOR): vectors that describe uncommitted or replaced text surv
     });
     const e = makeTestEnv(undefined, {
       DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any,
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any,
     }) as Env;
     return { e, store };
   }
@@ -320,7 +320,7 @@ describe("ADV-7 (MINOR): a forget during a long append's embed leaves the memory
       deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
     });
     const e = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     await seed("g1", { content: "PRIVATE MEDICAL NOTE ".repeat(80), vectorIds: [] });
     // The user forgets the memory while the append is embedding: forget read vector_ids ([]) before the append's
     // storeEntry wrote its chunk ids, and its DELETE commits before the append's batch.
@@ -367,7 +367,7 @@ describe("ADV-9 (MINOR): a digest rollup marks a source the user replaced after 
   it("the user's new text is not marked rolled-up by a digest that summarised the old text", async () => {
     const digestEnv = makeTestEnv(undefined, {
       DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(),
-      AI: { run: vi.fn(async (model: string) => model.startsWith("@cf/baai/bge") ? { data: [new Array(384).fill(0.1)] }
+      AI: { run: vi.fn(async (model: string, opts: any) => model.startsWith("@cf/baai/bge") ? { data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) }
         : new ReadableStream({ start(c) {
           c.enqueue(new TextEncoder().encode(`data: {"response":"Synthesized text"}\n\n`));
           c.enqueue(new TextEncoder().encode("data: [DONE]\n\n")); c.close();
@@ -527,7 +527,7 @@ describe("R2-2 (MAJOR): a lost update deletes the row's own live vector", () => 
       deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
     });
     const e = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     await seed("v1", { content: "Bob's company note", workspaceId: companyWs, actorId: author.userId, vectorIds: ["v1"] });
     store.set("v1", { id: "v1", values: [0.1], metadata: { content: "Bob's company note", parentId: "v1" } });
     // Bob unshares while the admin's edit is embedding (after its first read, before its batch).
@@ -765,7 +765,7 @@ describe("R3-3 (MINOR): restoreRowVectors orphans the chunks of the appends that
       deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
     });
     const e = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     const ws = owner.personalWorkspaceId;
     const wctx = { workspaceId: ws, actorId: owner.userId };
     const change = { actorId: owner.userId, channel: "rest" as const };
@@ -858,7 +858,7 @@ describe("R4-2 (MINOR): /vectorize-pending racing an edit lists vectors of text 
       deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
     });
     const plain = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     let raced = false;
     const repairEnv = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
       AI: { run: vi.fn(async () => {
@@ -890,7 +890,7 @@ describe("R4-2 (MINOR): /vectorize-pending racing an edit lists vectors of text 
       deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
     });
     const plain = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
-      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+      AI: { run: vi.fn(async (_model: string, opts: any) => ({ data: (Array.isArray(opts?.text) ? opts.text : [opts?.text]).map(() => new Array(384).fill(0.1)) })) } as any }) as Env;
     let raced = false;
     const repairEnv = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
       AI: { run: vi.fn(async () => {

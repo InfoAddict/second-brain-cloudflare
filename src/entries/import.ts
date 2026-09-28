@@ -8,6 +8,7 @@ import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { boundedEntryId } from "../vectorize/ids";
 import { parseImportedProject, type ImportedProject } from "../projects/registry";
 import { isOverContentLimit } from "../lib/content-size";
+import { normalizeTagList, stripNewReservedTags } from "../tags/system";
 
 /**
  * Default page size: array positions examined per call, inserts and skips alike.
@@ -207,7 +208,14 @@ export function parseTags(
   if (tags === undefined || tags === null) return { ok: true, tags: [] };
   if (!Array.isArray(tags)) return { ok: false, reason: "invalid_tag" };
   if (!tags.every(t => typeof t === "string")) return { ok: false, reason: "invalid_tag" };
-  return { ok: true, tags };
+  // Codex review class B (T-0089.4.2): trimmed here, at the one place an import's tags first
+  // become this row's stored tags — a leading/trailing space around a quarantine: tag would
+  // otherwise still read as held in JS (isHeld trims) but miss the SQL LIKE filters that keep a
+  // held row out of recall and re-indexing (NOT_HELD_SQL, INDEXABLE_SQL match the literal text).
+  // Codex recheck (T-0089.4.2): an import is a caller-supplied tag path like any other -- the
+  // same stripNewReservedTags guard captureEntry and updateEntryContent already apply, so an
+  // import can no longer forge quarantine:*, edited-canonical:* or a Track 7 tag onto a row.
+  return { ok: true, tags: stripNewReservedTags(normalizeTagList(tags)).kept };
 }
 
 export function normalizedEdgeKey(sourceId: string, targetId: string, type: string): string {

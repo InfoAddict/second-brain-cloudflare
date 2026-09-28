@@ -782,7 +782,12 @@ export async function recallEntries(
     queryTokens: profile.evidenceTokens, evidenceTokens: profile.evidenceTokens, direct: directReranked.filter(inScope), root: rootReranked.filter(inScope),
     loadContent: async ids => {
       const known = new Map(rcRows.filter(r => r.content !== undefined).map(r => [r.id, r.content as string]));
-      const need = ids.filter(id => !known.has(id) && scopedParents.has(id));
+      // Codex review class E (T-0089.4.2): defense-in-depth, not the only guard — every id here
+      // already passed notHeld() upstream (it entered directReranked/rootReranked through it), but
+      // this reuses d1Tags (no extra read: rcRows already carries it) to keep loadContent's own
+      // fallback fetch from ever becoming the one path that forgot to check, whatever feeds `ids`
+      // in the future.
+      const need = ids.filter(id => !known.has(id) && scopedParents.has(id) && !isHeld(d1Tags.get(id) ?? []));
       if (need.length) {
         // validity: current: every id here already passed the current-only filters above (d1Map or the evidence-slot re-check); this is a content-only re-fetch, not a new candidate source
         // scope-exempt: by-id: every id here came from rcRows, the scoped candidate-signal read above (inScope filters to it). The scope clause is left out on purpose: with it SQLite plans a scan of the caller's whole workspace instead of <=30 primary-key lookups, which costs rows_read in proportion to the brain's size on every recall

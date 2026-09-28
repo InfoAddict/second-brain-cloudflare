@@ -14,6 +14,8 @@ import { upsertEntryVectors, deleteStaleVectors, discardUpload } from "../captur
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { resolveConfig, type Config } from "../config";
 import { getStatus } from "./status";
+import { isHeld } from "../quarantine/tags";
+import { normalizeTagList } from "../tags/system";
 import { Params } from "./params";
 import { chunkText } from "../text/chunk";
 import { auditValidity, outcomeOf, retractionHook, unretractionHook, type ValidityOutcome } from "./validity";
@@ -545,8 +547,13 @@ export async function restoreEntry(
   if (trashed.nonce === "") return { status: "conflict" };
 
   const row = JSON.parse(trashed.row_json) as Record<string, unknown>;
-  const tags: string[] = (() => { try { return JSON.parse(String(row.tags ?? "[]")); } catch { return []; } })();
+  // Codex review class B (T-0089.4.2): normalized here too, defensively — a row trashed before
+  // this normalization landed could still carry a stray leading/trailing space on a reserved tag.
+  const tags: string[] = normalizeTagList((() => { try { return JSON.parse(String(row.tags ?? "[]")); } catch { return []; } })());
   const deprecated = getStatus(tags) === "deprecated";
+  // Codex review class A (T-0089.4.2): a held row must never be embedded, restore included — the
+  // one gate every embed-or-upsert site for a row's real content routes through.
+  const heldRow = isHeld(tags);
 
   // A live-again id (the id was re-captured while its old copy sat in the trash) is a conflict
   // before anything else runs: the INSERT below would fail on the primary key anyway, and checking
@@ -564,9 +571,11 @@ export async function restoreEntry(
   const cfg = config ?? await resolveConfig(env);
   const writeCtx = { workspaceId: trashed.workspace_id, actorId: trashed.actor_id };
   let vectorIds: string[] = [];
-  if (!deprecated) {
+  if (!deprecated && !heldRow) {
     try {
-      const stored = await upsertEntryVectors(env, trashed.id, trashed.content, tags, source, Date.now(), cfg, writeCtx);
+      // Budget auditor R20 (T-0089.4.2): a restore re-embeds the trashed row's existing content,
+      // which can be large — batchEmbeds, same as every other re-embed of existing content.
+      const stored = await upsertEntryVectors(env, trashed.id, trashed.content, tags, source, Date.now(), cfg, writeCtx, { batchEmbeds: true });
       vectorIds = stored.vectorIds;
     } catch (e) {
       if (!(await isVectorizeUnavailable(env))) return { status: "reembed_failed" };
@@ -574,6 +583,9 @@ export async function restoreEntry(
       vectorIds = [];
     }
   }
+  // A held row restores exactly as held: no vectors, same as any other hold (5.3 point 1) —
+  // restoring it is not a release, and the next nightly rescan (or an explicit undo) still owns
+  // that decision.
 
   const { names, exprs } = restoreColumnsSql("t");
   // workspace_id comes from the restored entry, not the trashed edge's own snapshot (spec: "taken from the source entry").
