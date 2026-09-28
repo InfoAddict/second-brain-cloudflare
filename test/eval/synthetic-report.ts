@@ -22,7 +22,7 @@ export function syntheticLines(report: VariantReport): string[] {
     for (const [name, rs] of [...subsets].sort(([a], [b]) => a.localeCompare(b))) out.push(`    ${name.padEnd(24)} n=${rs.length}  ${f(mean(rs.map(r => r.metrics.recall5)))}  ${f(mean(rs.map(r => r.metrics.recall10)))}  ${f(mean(rs.map(r => r.metrics.mrr10)))}`);
   }
   const mrr = report.results.map(r => r.metrics.mrr10);
-  if (report.results.length && report.corpus !== "injection") out.push(`  MRR@10 unpaired MDE at 80% power (2.8 x bootstrap SE of the per-query values): ${f(minimumDetectableEffect(mrr, report.results.map(r => r.clusterKey)))}`);
+  if (report.results.length && report.corpus !== "injection") out.push(`  MRR@10 unpaired MDE, one-sided at 80% power (2.8 x bootstrap SE of the per-query values): ${f(minimumDetectableEffect(mrr, report.results.map(r => r.clusterKey)))}`);
 
   if (report.corpus === "injection") {
     const share = (r: QueryResult) => r.rankedIds.slice(0, 5).filter(id => id.startsWith("ij-plant-")).length / 5;

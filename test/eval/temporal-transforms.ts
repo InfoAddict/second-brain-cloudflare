@@ -24,14 +24,22 @@ export function onlyCategory(category: QueryCategory, transform: Transform): Tra
 
 const isBelief = (byId: ReadonlyMap<string, CorpusEntry>, id: string) => byId.get(id)?.retractedAt !== undefined;
 
-/** Ids sharing the gold id's kind-and-index prefix ("tm-update-3-" from "tm-update-3-new"): a query's own timeline,
- * not the whole retrieved pool. "Newest" must be judged within this set: a filler entry elsewhere in the pool can
- * have a later createdAt than every real sibling, and demoting it would touch nothing the hypothesis is about. */
-function timelineSiblings(q: GoldenQuery, byId: ReadonlyMap<string, CorpusEntry>): ReadonlySet<string> {
-  const goldId = q.gold[0]?.id;
-  if (!goldId) return new Set();
-  const prefix = goldId.replace(/-[a-z]+$/, "-");
-  return new Set([...byId.keys()].filter(id => id.startsWith(prefix)));
+/** Every corpus entry belonging to a query's own timeline, found from the query's own `clusterKey` (production
+ * query metadata this corpus sets per timeline instance, not gold: a real implementation has no access to the
+ * answer key). Entries this corpus's generator built for one timeline instance carry that instance's numeric
+ * index as their own second-to-last id segment (`tm-${kind}-${i}-${k}`); the query's clusterKey carries the same
+ * index as its own last segment (`tm-${i}`). Matching on that index, not an id prefix or "any structured document
+ * in the ranked pool", matters: two different timeline instances can independently retrieve into the SAME query's
+ * candidates when their wording embeds similarly (round-4's cross-timeline retro/recap notes did exactly this),
+ * and a prefix or ranked-membership check alone cannot tell that apart from this query's own timeline. */
+function timelineEntries(q: GoldenQuery, byId: ReadonlyMap<string, CorpusEntry>): CorpusEntry[] {
+  const parts = q.clusterKey?.split("-");
+  const index = parts && parts[parts.length - 1];
+  if (!index) return [];
+  return [...byId.values()].filter(e => {
+    const eParts = e.id.split("-");
+    return eParts.length >= 2 && eParts[eParts.length - 2] === index;
+  });
 }
 
 function apply(report: VariantReport, corpus: CorpusSpec, reRank: (rankedIds: readonly string[], q: GoldenQuery, byId: ReadonlyMap<string, CorpusEntry>) => string[]): VariantReport {
@@ -58,19 +66,19 @@ export const oracleWithoutBeliefs: Transform = (report, corpus) => apply(report,
   return ranked.filter(id => { const e = byId.get(id); return !e || validAt(e, t); });
 });
 
-/** Row 3: valid documents in order, with each retracted belief re-inserted directly under the first gold id,
- * rather than pushed to the very end -- a plausible "attach the correction to its subject" implementation. */
+/** Row 3: valid documents in order, with each retracted belief re-inserted directly under the first valid document
+ * (not the very end, and not the gold id specifically: a real implementation has no access to gold, only to which
+ * of its own candidates are currently valid) -- a plausible "attach the correction to its subject" implementation. */
 export const oracleBeliefsUnderTarget: Transform = (report, corpus) => apply(report, corpus, (ranked, q, byId) => {
   const t = questionTime(q);
   const validOrUnknown = (id: string) => { const e = byId.get(id); return !e || validAt(e, t); };
   const valid = ranked.filter(validOrUnknown);
   const beliefs = ranked.filter(id => !validOrUnknown(id) && isBelief(byId, id));
-  const goldId = q.gold[0]?.id;
   const out: string[] = [];
   let attached = false;
   for (const id of valid) {
     out.push(id);
-    if (id === goldId) { out.push(...beliefs); attached = true; }
+    if (!attached) { out.push(...beliefs); attached = true; }
   }
   if (!attached) out.push(...beliefs);
   return out;
@@ -80,10 +88,9 @@ export const oracleBeliefsUnderTarget: Transform = (report, corpus) => apply(rep
  * elsewhere could be newer and irrelevant to the hypothesis), the exact shortcut round 4 found winning on the old
  * corpus design at +0.382 MRR by coincidence, before this round's gold made "newest" ambiguous. */
 export const demoteNewest: Transform = (report, corpus) => apply(report, corpus, (ranked, q, byId) => {
-  const siblings = timelineSiblings(q, byId);
-  const inTimeline = ranked.filter(id => siblings.has(id));
-  if (!inTimeline.length) return [...ranked];
-  const newest = [...inTimeline].sort((a, b) => (byId.get(b)?.createdAt ?? 0) - (byId.get(a)?.createdAt ?? 0))[0];
+  const peers = timelineEntries(q, byId).filter(e => ranked.includes(e.id));
+  if (!peers.length) return [...ranked];
+  const newest = [...peers].sort((a, b) => b.createdAt - a.createdAt)[0].id;
   return [...ranked.filter(id => id !== newest), newest];
 });
 
@@ -109,12 +116,19 @@ export const boostExplicitDate: Transform = (report, corpus) => apply(report, co
 });
 
 /** Row 9: the plan oracle's ordering, except the retracted belief (if any) is promoted to rank 1 instead of being
- * demoted -- a belief-time system that surfaces the cancelled move as the top answer. */
+ * demoted -- a belief-time system that surfaces the cancelled move as the top answer. Production's default
+ * retrieval path already excludes a deprecated belief (search.ts:872), so this needs its own retrieval path back
+ * to the belief -- exactly what a real belief-time reader needs anyway, to compute "what was believed at T" at
+ * all: it must be able to see retracted rows the default path hides. Found via `timelineEntries`, not gold, and
+ * inserted into contention before promoting, since a belief-time-first bug is about promoting a belief its OWN
+ * as-of path retrieved, not about the default path failing to filter it. */
 export const oracleBeliefFirst: Transform = (report, corpus) => apply(report, corpus, (ranked, q, byId) => {
-  const ordered = simulate("supersession", ranked, q, byId);
-  const belief = ordered.find(id => isBelief(byId, id));
-  if (!belief) return ordered;
-  return [belief, ...ordered.filter(id => id !== belief)];
+  const belief = timelineEntries(q, byId).find(e => e.retractedAt !== undefined);
+  const withBelief = belief && !ranked.includes(belief.id) ? [...ranked, belief.id] : ranked;
+  const ordered = simulate("supersession", withBelief, q, byId);
+  const beliefId = ordered.find(id => isBelief(byId, id));
+  if (!beliefId) return ordered;
+  return [beliefId, ...ordered.filter(id => id !== beliefId)];
 });
 
 /** Row 10: as-of on created_at only, with no upper bound at all -- excludes every document created after T
@@ -153,11 +167,12 @@ export const keepOnlyNewest: Transform = (report, corpus) => apply(report, corpu
   return [[...ranked].sort((a, b) => (byId.get(b)?.createdAt ?? 0) - (byId.get(a)?.createdAt ?? 0))[0]];
 });
 
-/** Row 14: drops every document belonging to the query's own timeline -- simulates a supersede that also deleted
- * the whole history it was meant to keep. */
+/** Row 14: drops every temporally-structured document among a query's own candidates (not gold-derived: everything
+ * the entries themselves declare as part of a timeline) -- simulates a supersede that also deleted the whole
+ * history it was meant to keep. */
 export const dropOwnTimeline: Transform = (report, corpus) => apply(report, corpus, (ranked, q, byId) => {
-  const timelineIds = new Set(q.gold.map(g => g.id.replace(/-[a-z]+$/, "-")).flatMap(prefix => [...byId.keys()].filter(id => id.startsWith(prefix))));
-  return ranked.filter(id => !timelineIds.has(id));
+  const peers = new Set(timelineEntries(q, byId).map(e => e.id));
+  return ranked.filter(id => !peers.has(id));
 });
 
 /** Row 15: applies the current-validity predicate (valid at EVAL_NOW) to every question, including as-of ones --
@@ -176,13 +191,25 @@ export const currentOracle: Transform = planOracle;
 /** KU-2: the current oracle without D-RET's restore -- a retraction closes its target permanently, so "old" stays
  * hidden even after "bad" is itself retracted (the belief-time reading D-RET replaced, applied to a current
  * question instead of a past one). */
+/** KU-4: approximates the rank effect of T-0089.2.3's stale-penalty multiplier (0.9 on volatility:state rows in
+ * "current" queries) by demoting any candidate that is state-volatile and structurally unsuperseded (no validUntil
+ * or retractedAt of its own: nothing ever closed it) below every other candidate. This is an upper bound on what a
+ * 0.9 multiplier could achieve, not a proportional simulation: rankedIds carry no raw score to multiply. */
+export const staleDemote: Transform = (report, corpus) => apply(report, corpus, (ranked, _q, byId) => {
+  const isStaleUnsuperseded = (id: string) => {
+    const e = byId.get(id);
+    return !!e && e.tags.includes("volatility:state") && e.validUntil === undefined && e.retractedAt === undefined;
+  };
+  return [...ranked.filter(id => !isStaleUnsuperseded(id)), ...ranked.filter(isStaleUnsuperseded)];
+});
+
 export const currentOracleNoRestore: Transform = (report, corpus) => apply(report, corpus, (ranked, q, byId) => {
   const t = questionTime(q);
-  const siblings = timelineSiblings(q, byId);
   // This corpus declares "actually-true" validity directly (D-RET already applied: a restored row has no
   // validUntil at all), so "no restore" cannot be read off a validUntil field -- it must be simulated: any row
-  // that predates a belief in its own timeline stays permanently closed by it, restored or not.
-  const beliefs = [...siblings].map(id => byId.get(id)).filter((e): e is CorpusEntry => !!e && e.retractedAt !== undefined);
+  // that predates a belief anywhere in this query's timeline stays permanently closed by it, restored or not,
+  // even once that belief itself is deprecated and drops out of `ranked`.
+  const beliefs = timelineEntries(q, byId).filter(e => e.retractedAt !== undefined);
   return ranked.filter(id => {
     const e = byId.get(id);
     if (!e) return true;

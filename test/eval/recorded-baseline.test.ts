@@ -24,12 +24,16 @@ describe("recorded temporal baseline (T-0089.2.6, after T-0089.2.5 merged into r
     expect(recorded.results.length).toBeGreaterThan(0);
   });
 
-  it("is a recorded baseline, not a lock: pre-Track-2 code, so bad/wrong are ordinary notes with no filter applied", () => {
-    // The recorded report was produced before any Track 2 validity/as-of code exists: every query's rankedIds
-    // reflect plain semantic+keyword retrieval, so a retracted belief (bad/wrong) can appear anywhere, unfiltered.
-    // This is exactly what the transforms in temporal-gate-proof.test.ts start from.
-    const retractedPast = recorded.results.filter(r => r.tags?.includes("subset:retracted-past"));
-    expect(retractedPast.length).toBeGreaterThan(0);
-    expect(retractedPast.some(r => r.rankedIds.some(id => id.endsWith("-bad")))).toBe(true);
+  it("is a recorded baseline, not a lock: pre-Track-2 code, but still today's production retrieval, so a deprecated belief (bad/wrong) never appears at all", () => {
+    // The recorded report was produced before any Track 2 validity/as-of code exists, but release/v4 recall
+    // already excludes deprecated rows before ranking (search.ts:872) -- that filter predates Track 2 and has
+    // nothing to do with it. A baseline that let bad/wrong through unfiltered would not be today's production
+    // state, and (T-0089.2.6 adversary round) let a candidate with no as-of logic of its own pass purely by
+    // riding that pre-existing filter. bad/wrong carry status:deprecated for exactly this reason.
+    const byId = new Map(corpus.entries.map(e => [e.id, e] as const));
+    const deprecated = new Set([...byId.values()].filter(e => e.tags.includes("status:deprecated")).map(e => e.id));
+    expect(deprecated.size).toBeGreaterThan(0);
+    const leaked = recorded.results.filter(r => r.rankedIds.some(id => deprecated.has(id)));
+    expect(leaked.map(r => r.queryId)).toEqual([]);
   });
 });
