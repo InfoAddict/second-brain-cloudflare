@@ -4,7 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "dev:demo": "wrangler dev -c wrangler.demo.jsonc --port 8799",
+    "dev:local": "node scripts/dev-local.mjs",
+    "ux:seed": "node scripts/ux-run-ts.mjs scripts/ux-harness/seed-370-brain.ts",
+    "ux:shot": "node scripts/ux-shot.mjs",
+    "ux:walkthroughs": "node scripts/ux-walkthroughs.mjs",
+    "ux:chat": "node scripts/ux-chat.mjs",
     "predeploy": "node scripts/predeploy-guard.mjs",
     "check:scope": "node scripts/check-scope.mjs",
     "deploy": "wrangler deploy",
@@ -43,6 +47,7 @@
     "@types/node": "^26.1.2",
     "@vitest/coverage-v8": "^4.1.10",
     "esbuild": "^0.28.1",
+    "puppeteer-core": "^25.12.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
     "wrangler": "^4.114.0"
