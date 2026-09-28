@@ -145,53 +145,8 @@ describe("captureEntry()", () => {
 
   // ── Contradiction ───────────────────────────────────────────────────────────
 
-  it("returns status=contradiction, stores new entry, and DEPRECATES (not deletes) the conflicting entry", async () => {
-    db.entries.push({
-      id: "old-entry",
-      content: "I live in NYC",
-      tags: "[]",
-      source: "api",
-      created_at: Date.now(),
-      vector_ids: '["old-vec-1","old-vec-2"]',
-      recall_count: 0,
-      importance_score: 0,
-    });
-
-    const deleteByIdsMock = vi.fn().mockResolvedValue({ mutationId: "m" });
-    env = makeTestEnv(db, {
-      VECTORIZE: makeVectorizeMock({
-        query: vi.fn().mockResolvedValue({
-          matches: [{ id: "old-entry", score: 0.72, metadata: { parentId: "old-entry" } }],
-        }),
-        deleteByIds: deleteByIdsMock,
-      }),
-      AI: makeContradictionAI('{"contradicts": true, "conflicting_id": "old-entry", "reason": "different city"}'),
-    });
-
-    const { ctx } = makeCtx();
-    const result = await captureEntry("I moved to LA", [], "api", env, ctx);
-
-    expect(result.status).toBe("contradiction");
-    if (result.status !== "contradiction") return;
-    expect(result.resolvedConflict).toBe("old-entry");
-    expect(result.reason).toBe("different city");
-    expect(typeof result.id).toBe("string");
-
-    // New entry stored
-    expect(db.entries.some(e => e.id === result.id)).toBe(true);
-    // Conflicting entry row STILL EXISTS (deprecated, not deleted)
-    const conflictRow = db.entries.find(e => e.id === "old-entry");
-    expect(conflictRow).toBeDefined();
-    const conflictTags: string[] = JSON.parse(conflictRow!.tags);
-    expect(conflictTags).toContain("status:deprecated");
-    // Vectors cleared from D1 row
-    expect(conflictRow!.vector_ids).toBe("[]");
-    // Vectorize deleteByIds called with old vector ids
-    expect(deleteByIdsMock).toHaveBeenCalledWith(["old-vec-1", "old-vec-2"]);
-    // New entry won the contradiction; deprecated incumbent recorded the loss.
-    expect(db.entries.find(e => e.id === result.id)!.contradiction_wins).toBe(1);
-    expect(conflictRow!.contradiction_losses).toBe(1);
-  });
+  // T-0089.2.1: "returns status=contradiction, stores new entry, and keeps the conflicting entry" moved to test/integration/supersede.test.ts, on real SQLite: a contradiction
+  // now supersedes (one batch the hand-written D1 mock cannot run) instead of deprecating.
 
   it("returns status=contradiction_protected when conflicting entry is canonical — keeps canonical, demotes new to draft", async () => {
     db.entries.push({
@@ -246,33 +201,8 @@ describe("captureEntry()", () => {
     expect(newRow!.contradiction_losses).toBe(1);
   });
 
-  it("adds contradiction-resolved tag when contradiction detected", async () => {
-    db.entries.push({
-      id: "conflict",
-      content: "I live in NYC",
-      tags: "[]",
-      source: "api",
-      created_at: Date.now(),
-      vector_ids: "[]",
-      recall_count: 0,
-      importance_score: 0,
-    });
-    env = makeTestEnv(db, {
-      VECTORIZE: makeVectorizeMock({
-        query: vi.fn().mockResolvedValue({
-          matches: [{ id: "conflict", score: 0.72, metadata: { parentId: "conflict" } }],
-        }),
-      }),
-      AI: makeContradictionAI('{"contradicts": true, "conflicting_id": "conflict", "reason": "changed location"}'),
-    });
-    const { ctx } = makeCtx();
-    const result = await captureEntry("I moved to LA", [], "api", env, ctx);
-    expect(result.status).toBe("contradiction");
-    if (result.status !== "contradiction") return;
-    const storedEntry = db.entries.find(e => e.id === result.id);
-    const tags: string[] = JSON.parse(storedEntry!.tags);
-    expect(tags).toContain("contradiction-resolved");
-  });
+  // T-0089.2.1: "adds contradiction-resolved tag when contradiction detected" moved to test/integration/supersede.test.ts, on real SQLite: a contradiction
+  // now supersedes (one batch the hand-written D1 mock cannot run) instead of deprecating.
 
   // ── Smart merge: replace ────────────────────────────────────────────────────
 
@@ -749,17 +679,8 @@ describe("captureEntry()", () => {
     expect(JSON.parse(added.tags)).toContain("status:draft");
   });
 
-  it("a hand-written contradiction still deprecates (unchanged behaviour)", async () => {
-    db.entries = [existingNote("claude")];
-    env = makeTestEnv(db, {
-      VECTORIZE: makeVectorizeMock({ query: vi.fn().mockResolvedValue({ matches: [{ id: "existing", score: 0.7, metadata: { parentId: "existing" } }] }) }),
-      AI: makeContradictionAI('{"contradicts": true, "conflicting_id": "existing", "reason": "reversed decision"}'),
-    });
-    const { ctx } = makeCtx();
-    const result = await captureEntry("We moved off Vectorize to a KV index.", [], "claude", env, ctx);
-    expect(result.status).toBe("contradiction");
-    expect(JSON.parse(db.entries.find(e => e.id === "existing")!.tags)).toContain("status:deprecated");
-  });
+  // T-0089.2.1: "a hand-written contradiction still supersedes" moved to test/integration/supersede.test.ts, on real SQLite: a contradiction
+  // now supersedes (one batch the hand-written D1 mock cannot run) instead of deprecating.
 
   // ── Prompt Capsule definitions (#329) ───────────────────────────────────────
 

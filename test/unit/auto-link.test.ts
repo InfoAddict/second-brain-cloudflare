@@ -110,24 +110,6 @@ describe("auto-link on write (issue #16)", () => {
     expect(db.edges).toHaveLength(0);
   });
 
-  it("projects a supersedes edge (not a redundant relates_to) when a new entry wins a contradiction", async () => {
-    seedExisting(db); // non-canonical incumbent
-    const env = makeTestEnv(db, {
-      VECTORIZE: makeVectorizeMock({ query: vi.fn().mockResolvedValue({ matches: [match("existing", 0.9)] }) }),
-      AI: makeAI('{"action":"contradiction","conflicting_id":"existing","reason":"conflict"}'),
-    });
-    const { ctx, drain } = makeCtx();
-
-    const result = await captureEntry("The corrected fact", [], "api", env, ctx);
-    await drain();
-
-    expect(result.status).toBe("contradiction");
-    if (result.status !== "contradiction") throw new Error("expected contradiction");
-    expect(db.edges).toHaveLength(1);
-    const e = db.edges[0];
-    expect(e.type).toBe("supersedes"); // new supersedes the deprecated incumbent
-    expect(e.provenance).toBe("system");
-    expect(e.source_id).toBe(result.id);
-    expect(e.target_id).toBe("existing");
-  });
+  // T-0089.2.1: "projects a supersedes edge (not a redundant relates_to) when a new entry wins a contradiction" moved to test/integration/supersede.test.ts, on real SQLite: a contradiction
+  // now supersedes (one batch the hand-written D1 mock cannot run) instead of deprecating.
 });

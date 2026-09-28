@@ -173,7 +173,7 @@ describe("upgrade from a 3.7.0-shaped database", () => {
 
     const change = { actorId: roots.ownerUserId, channel: "rest" as const };
     const result = await applyStatus("e1", "deprecated", env, change, DEFAULTS, roots.ownerPersonalWorkspaceId);
-    expect(result).toEqual({ status: "ok", indexed: false });
+    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object) });
 
     const versions = (await (d1.db as any).prepare(`SELECT * FROM entry_versions WHERE entry_id = 'e1' ORDER BY seq`).all()).results as any[];
     expect(versions).toHaveLength(1);

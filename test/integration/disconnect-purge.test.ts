@@ -107,7 +107,8 @@ describe("disconnect purge through the trash", () => {
     const res = await trashMirroredEntries(t.env, owner, ["p00000", "p00001", "p00002"], { provider: "notion", budget: 10_000 });
     expect(res).toEqual({ purged: 3, skipped: 0 });
     // trash tier 1 + trash tier 2 + version delete (tier 3) + edges + entries = 5 statements, then one audit batch.
-    expect(batches[0]).toBe(5);
+    // MOVED 5 -> 9 (T-0089.2.4): the D-RET restore hook's four statements ride in the same batch (still one execution).
+    expect(batches[0]).toBe(9);
     expect((await t.one<any>(`SELECT edges_json FROM entries_trash WHERE id = 'p00000'`))!.edges_json).not.toBe("[]");
     expect((await t.one<any>(`SELECT edges_json FROM entries_trash WHERE id = 'p00001'`))!.edges_json).toBe("[]");
     expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'p00002'`)).toBeNull();

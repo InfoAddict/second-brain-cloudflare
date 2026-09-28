@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (199 queries, 102 exceptions, 18 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (216 queries, 112 exceptions, 26 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1466,7 +1466,25 @@ describe("the checker over the real source tree", () => {
     // Deliberate: +1 query (198 -> 199) for T-0089.2.1 (src/memory/validity.ts supersedeStatements): the
     // supersede UPDATE pins `e.workspace_id = ?` in its own compare-and-set, which the checker reads as
     // a scope clause, so it needs no exemption.
-    ).toEqual({ queries: 199, exempt: 102, checked: 18, outerJoin: 1 });
+    // Deliberate: +1 scope-exempt (199/102 -> 199/103) for T-0089.2.1: windowClosedSql, the by-id
+    // "the window this batch closed" guard the supersede edge and the capture counters ride on; the
+    // edge insert's own entries reads moved into the shared edgeEndpointsReadableSql guard.
+    // Deliberate: +10 queries, +5 scope-exempt, +5 scope-checked (199/103/18 -> 209/108/23) for
+    // T-0089.2.4 (src/memory/validity.ts retraction hooks, D-RET): the restore and re-close hooks are
+    // set-based SQL inside the retracting write's own batch. scope-checked: the closer / retracted-by
+    // lookups (x pinned to the caller's authorized id-and-workspace pairs, y to x's workspace), both
+    // hook UPDATEs (only rows whose newest version carries the hook's own nonce) and the inherited
+    // edge's FROM. scope-exempt by-id: the newest-version reads, the supersedes-target pre-filter,
+    // the nonce-bound prune, and restore's "this trash row was consumed" guard.
+    // Deliberate: +5 queries, +3 scope-exempt, +2 scope-checked (209/108/23 -> 214/111/25) for the
+    // T-0089.2.4 cascade: builtOn (x pinned to the authorized pairs, the dependent to x's workspace)
+    // and the flag / unflag UPDATEs' own-nonce rows are scope-checked; the dependents pre-filter and
+    // the unflag's version reads of an already-pinned row are by-id exemptions.
+    // Deliberate: +2 queries, +1 scope-exempt, +1 scope-checked (214/111/25 -> 216/112/26) for
+    // T-0089.2.1 Task A4 (updateEntryValidity): its read, pinned to the caller's authorized workspace
+    // with the replaced rows sharing it (scope-checked), and the propagate "this row's new start landed"
+    // guard (by-id). Its two UPDATEs pin the workspace in their own compare-and-set.
+    ).toEqual({ queries: 216, exempt: 112, checked: 26, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

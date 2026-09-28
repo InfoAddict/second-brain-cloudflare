@@ -30,9 +30,9 @@ export const EDGE_ENDPOINT_QUERY_BATCH = Math.floor(D1_MAX_BOUND_PARAMS / 2);
 // versioning: exempt: creation — an imported row has no prior state to keep
 // scope-exempt: by-id existence probes across every workspace: an id is unique deployment-wide
 const ENTRY_INSERT_SQL_TEMPLATE =
-  `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses, workspace_id, actor_id)
+  `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses, workspace_id, actor_id, valid_from, valid_until)
    SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM entries WHERE id = ?1) AND NOT EXISTS (SELECT 1 FROM entries_trash WHERE id = ?1) THEN ?1 ELSE lower(hex(randomblob(16))) END,
-          ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+          ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
    RETURNING id`;
 
 function parseInsertColumns(sql: string): readonly string[] {
@@ -85,6 +85,9 @@ export interface ExportEntry {
   importance_score?: number;
   contradiction_wins?: number;
   contradiction_losses?: number;
+  /** Track 2 (T-0089.2.1): absent in exports taken before validity windows; restored as NULL. */
+  valid_from?: number | null;
+  valid_until?: number | null;
 }
 
 export interface ExportEdge {
@@ -186,6 +189,8 @@ interface PendingInsert {
   importance_score: number;
   contradiction_wins: number;
   contradiction_losses: number;
+  valid_from: number | null;
+  valid_until: number | null;
 }
 
 function isValidProvenance(p: string): p is EdgeProvenance {
@@ -373,6 +378,8 @@ function bindInsert(env: Env, row: PendingInsert, writeCtx: WriteContext) {
     row.contradiction_losses,
     writeCtx.workspaceId,
     writeCtx.actorId,
+    row.valid_from,
+    row.valid_until,
   );
 }
 
@@ -878,8 +885,23 @@ function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: 
       importance_score: importanceParsed.value,
       contradiction_wins: winsParsed.value,
       contradiction_losses: lossesParsed.value,
+      ...importedWindow(entry.valid_from, entry.valid_until, created_at),
     },
   };
+}
+
+/**
+ * The validity window an exported row carried (T-0089.2.1). An import only inserts, so it never
+ * supersedes anything; a malformed or inverted window is dropped (NULL, "since created_at, still
+ * true") rather than failing the memory, since the writers' invariant is until >= effective start.
+ */
+function importedWindow(from: unknown, until: unknown, createdAt: number): { valid_from: number | null; valid_until: number | null } {
+  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : v === undefined || v === null ? null : NaN;
+  const f = num(from);
+  const u = num(until);
+  if (Number.isNaN(f) || Number.isNaN(u)) return { valid_from: null, valid_until: null };
+  if (u !== null && u < (f ?? createdAt)) return { valid_from: null, valid_until: null };
+  return { valid_from: f, valid_until: u };
 }
 
 /** Parse one edge row into an insertable record, or the failure to report. */

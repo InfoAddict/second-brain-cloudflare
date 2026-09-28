@@ -18,10 +18,11 @@ import {
   buildCasGuard, canRevert, changesOf, loadHistory, ownSnapshotLandedSql, pruneStatement, snapshotStatement, Params,
   type StateChange, type VersionRow, type WhenChange,
 } from "./versions";
+import { NO_VALIDITY_CHANGE, outcomeOf, retractionHook, unretractionHook, validityEvents, validityReplySuffix, type ValidityOutcome } from "./validity";
 
 export type UndoResult =
-  | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true; keptIncoming?: { id: string; reason: string }[]; deferredIncoming?: number }
-  | { status: "restored"; mirrorSource?: string }
+  | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true; keptIncoming?: { id: string; reason: string }[]; deferredIncoming?: number; validity: ValidityOutcome }
+  | { status: "restored"; mirrorSource?: string; validity: ValidityOutcome }
   | { status: "no_change" }
   | { status: "nothing_to_undo" }
   // `gone` is set whenever entry_events, read once and only for a caller who is on record as an
@@ -173,7 +174,7 @@ export async function revertEntry(
             if (src && (await isManagedMirror(src, env))) mirrorSource = src;
           } catch { /* malformed row_json restores plain, same as everywhere else this is parsed */ }
         }
-        return mirrorSource ? { status: "restored", mirrorSource } : { status: "restored" };
+        return mirrorSource ? { status: "restored", mirrorSource, validity: restored.validity } : { status: "restored", validity: restored.validity };
       }
       case "reembed_failed": return { status: "reembed_failed" };
       // A racing restore or purge already claimed the trash row between the read above and the batch.
@@ -311,6 +312,13 @@ export async function revertEntry(
 
   const nonce = crypto.randomUUID();
   const now = Date.now();
+  // D-RET (T-0089.2.4): a revert into "wrong" hands back what this row had replaced; a revert out of it
+  // takes it again. Either lands only if this revert's own snapshot did.
+  const retracting = currentStatus !== "deprecated" && targetStatus === "deprecated";
+  const landed = (hp: Params) => ownSnapshotLandedSql(hp, id, newest.seq, nonce);
+  const hookRow = [{ id, workspaceId: authorizedWorkspaceId }];
+  const retraction = retracting ? retractionHook(env, hookRow, landed, change, config, now, { cascade: true }) : null;
+  const unretraction = undeprecating ? unretractionHook(env, hookRow, landed, change, config, now, { cascade: true }) : null;
   // Pinned at authorization (the caller's own scoped read), never at the write: a share/unshare
   // writes no version, so without this a concurrent move leaves MAX(seq) unchanged and an admin's
   // undo can commit into the row after it left their reach (U3, R2-7, Class 1).
@@ -418,6 +426,8 @@ export async function revertEntry(
       env.DB.prepare(updateSql).bind(...p.values()),
       ...incomingStatements,
       pruneStatement(env, id, config.VERSION_KEEP),
+      ...(retraction?.statements ?? []),
+      ...(unretraction?.statements ?? []),
     ]);
   } catch (e) {
     // A thrown batch: this undo's own upload never became the row's (ids are per upload, T-0089.1.1),
@@ -456,12 +466,15 @@ export async function revertEntry(
     try { if (stale.length) await deleteEntryVectors(env, [{ entryId: id, vectorIds: stale }]); } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
   }
 
+  const hookOffset = 3 + incomingStatements.length;
+  const hookResults = [retraction, unretraction].filter(h => h !== null).map(h => h!.read(results, hookOffset));
+  // One audit batch: the revert's own event and any validity changes its hooks made.
   await writeAuditEvents(env, [{
     entryId: id, actorId: change.actorId, event: "reverted",
     payload: { target_seq: target.seq, reverted_reason: target.reason, channel: change.channel },
-  }]);
+  }, ...validityEvents(change, ...hookResults)]);
 
-  const result: UndoResult = { status: "reverted", targetSeq: target.seq };
+  const result: UndoResult = { status: "reverted", targetSeq: target.seq, validity: hookResults.length ? outcomeOf(...hookResults) : NO_VALIDITY_CHANGE };
 
   // Undo of a merge or replace re-creates the incoming memory it absorbed, as its own row — never
   // through captureEntry, which could merge it right back in. Fires for every merge a to_version
@@ -499,11 +512,12 @@ export function revertedMessage(id: string, result: Extract<UndoResult, { status
   if (result.deferredIncoming) {
     text += ` ${result.deferredIncoming} of the memories this restored are still being indexed for semantic search (findable by keyword in the meantime); POST /vectorize-pending until remaining is 0.`;
   }
-  return text;
+  return text + validityReplySuffix(result.validity, id, "undo");
 }
 
 export function restoredMessage(id: string, result: Extract<UndoResult, { status: "restored" }>): string {
-  return result.mirrorSource ? mirrorRestoreWarning(id, result.mirrorSource) : `Restored entry ${id} from the trash.`;
+  return (result.mirrorSource ? mirrorRestoreWarning(id, result.mirrorSource) : `Restored entry ${id} from the trash.`)
+    + validityReplySuffix(result.validity, id, "undo");
 }
 
 /** `toVersion` is always defined here: `pruned` is only reachable when the caller named one. */
