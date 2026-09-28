@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (198 queries, 102 exceptions, 18 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (199 queries, 102 exceptions, 18 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1463,7 +1463,10 @@ describe("the checker over the real source tree", () => {
     // MOVED (T-0089.1.1, merge of release/v4 ebc8010d): recomputed from a real check:scope run on the merged
     // tree, not by adding two independently-tracked totals: Track 1's 196/102/17 plus release/v4's own queries
     // (Track 7's calibration and standing-cache reads, lanes Q/R/D, BE-2) land at 198/102/18/1.
-    ).toEqual({ queries: 198, exempt: 102, checked: 18, outerJoin: 1 });
+    // Deliberate: +1 query (198 -> 199) for T-0089.2.1 (src/memory/validity.ts supersedeStatements): the
+    // supersede UPDATE pins `e.workspace_id = ?` in its own compare-and-set, which the checker reads as
+    // a scope clause, so it needs no exemption.
+    ).toEqual({ queries: 199, exempt: 102, checked: 18, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

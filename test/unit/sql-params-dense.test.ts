@@ -143,3 +143,23 @@ describe("trash.ts builders are dense (T-0089.1.2, T-0089.4.7, T-0089.4.9)", () 
     for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
   });
 });
+
+// ── Track 2 validity builders (src/memory/validity.ts, T-0089.2.1) ──
+import { planSupersede, supersedeStatements, type Window } from "../../src/memory/validity";
+
+describe("validity.ts builders are dense (T-0089.2.1)", () => {
+  const change = { actorId: "u", channel: "rest" as const };
+  const w = (id: string, from: number, until: number | null): Window => ({ id, from, until, workspaceId: "ws", status: null });
+
+  it("supersedeStatements: close-older and close-newer, with and without a system guard", () => {
+    const pairs: [Window, Window][] = [[w("o", 1, null), w("n", 2, null)], [w("o", 5, null), w("n", 2, 9)], [w("o", 1, 8), w("n", 2, null)]];
+    for (const [older, newer] of pairs) {
+      for (const guard of [undefined, (p: Params) => `COALESCE(e.actor_id, '') = ${p.add("")} AND e.tags = ${p.add("[]")}`]) {
+        const { env, calls } = captureEnv();
+        const stmts = supersedeStatements(env, planSupersede(older, newer), older, newer, change, DEFAULTS, guard);
+        expect(stmts).toHaveLength(4);
+        for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+      }
+    }
+  });
+});

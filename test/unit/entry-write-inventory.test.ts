@@ -122,6 +122,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED 320 -> 336, 356 -> 372 (T-0089.2.1): revertEntry restores the validity window too.
   { file: 'src/memory/undo.ts', line: 336, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 372, kind: 'exempt' },
+  // NEW (T-0089.2.1): the supersede UPDATE (validity window closed; its validity snapshot rides in the same batch).
+  { file: 'src/memory/validity.ts', line: 90, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
