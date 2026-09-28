@@ -984,11 +984,11 @@ const I18N_EN = {
     // nothing. Draft, flagged for the copywriter.
     chartScopeNote: 'The chart shows every reviewed decision, on both the Open and Reviewed tabs.',
     // T7-E round 3 (18-copy-deck.md section 8.6): the localized calibration
-    // rate sentence, built client-side once GET /decisions/calibration
-    // returns its structured numbers next to the English server line. The
-    // field names below (LEDGER_LINE_FIELDS, ledger.js) are placeholders
-    // pending T7-C's real ones; this key itself is final per the deck.
+    // sentences, built client-side from GET /decisions/calibration's `kind`
+    // field ("rate", "in_line" or "no_range") next to the English server line.
     lineRate: "So far, when you were about {stated}% sure, you were right {hit}% of the time, based on {n} decisions.",
+    lineInLine: 'So far, how sure you were roughly matches how things turned out, based on {n} decisions.',
+    lineNoRange: "You'll see how often you're right once 5 decisions share a similar confidence. You have {n} so far.",
   },
   loops: {
     title: 'Open loops',
@@ -1010,8 +1010,6 @@ const I18N_EN = {
     doneToast: 'Marked done',
     notTaskToast: 'No longer a commitment',
     receivedToast: 'Marked received',
-    undo: 'Undo',
-    undoFailed: 'Could not undo: {message}',
     fromName: 'from {name}',
     dueDate: 'due {date}',
     wasDueDate: 'was due {date}',
@@ -2190,7 +2188,9 @@ const I18N_IT = {
     tableCaption: 'La tua sicurezza dichiarata, accanto a quanto spesso le decisioni si sono avverate',
     caption: 'Punteggio di accuratezza: {brier}. Più basso è meglio: 0 è perfetto, e dire sempre 50% dà 0,25.',
     chartScopeNote: 'Il grafico mostra tutte le decisioni valutate, sia in Aperte sia in Valutate.',
-    lineRate: 'Finora, quando eri sicuro al {stated}% circa, hai avuto ragione il {hit}% delle volte, su {n} decisioni.',
+    lineRate: 'Finora, le scelte che davi al {stated}% circa si sono rivelate giuste il {hit}% delle volte, su {n} decisioni.',
+    lineInLine: 'Finora la tua sicurezza corrisponde più o meno a come sono andate le cose, su {n} decisioni.',
+    lineNoRange: 'Vedrai quanto spesso hai ragione quando 5 decisioni avranno una sicurezza simile. Finora ne hai {n}.',
   },
   loops: {
     title: 'Impegni aperti',
@@ -2209,8 +2209,6 @@ const I18N_IT = {
     doneToast: 'Segnato come fatto',
     notTaskToast: 'Non è più un impegno',
     receivedToast: 'Segnato come ricevuto',
-    undo: 'Annulla',
-    undoFailed: 'Impossibile annullare: {message}',
     fromName: 'da {name}',
     dueDate: 'scade il {date}',
     wasDueDate: 'scadeva il {date}',

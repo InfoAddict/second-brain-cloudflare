@@ -228,16 +228,16 @@ function decisionOutcomeToast(result) {
 }
 
 /**
- * The toast for "Too early to tell" (result "unknown"): a review date when
- * `review_at` is present (T7-C's structured field on POST
- * /decisions/outcome, src/decisions/outcome.ts), formatted the same way
- * ledger.reviewAround does; "no more reviews" when the field is present but
- * null (re-arming exhausted); the Worker's own reply when the field is
- * absent entirely, from a Worker that predates it.
+ * The toast for "Too early to tell" (result "unknown"): "no more reviews"
+ * when `reviews_done` (T7-C's structured field on POST /decisions/outcome,
+ * src/decisions/outcome.ts) is true (re-arming exhausted); a review date from
+ * `review_at`, formatted the same way ledger.reviewAround does, otherwise;
+ * the Worker's own reply when `reviews_done` is absent entirely, from a
+ * Worker that predates it.
  */
 function decisionUnknownToast(data) {
-  if (!('review_at' in data)) return data.message
-  if (data.review_at == null) return t('due.outcomeToastNoMore')
+  if (!('reviews_done' in data)) return data.message
+  if (data.reviews_done) return t('due.outcomeToastNoMore')
   return t('due.outcomeToastLater', { date: formatDateUI(data.review_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
 }
 

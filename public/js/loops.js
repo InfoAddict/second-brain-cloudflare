@@ -222,23 +222,14 @@ async function resolveLoop(id, action, btn) {
     dropFromLoopsQueue(id)
     if (typeof renderBoard === 'function' && typeof briefData !== 'undefined' && briefData) renderBoard(briefData)
 
-    showToast(loopResolvedToast(action, inbound), {
-      action: t('loops.undo'),
-      onAction: async () => {
-        try {
-          const undoRes = await fetch(`${WORKER_URL}/undo`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-            body: JSON.stringify({ id }),
-          })
-          const undoData = await undoRes.json()
-          if (!undoData.ok) throw new Error(undoData.error || 'failed')
-          loadLoopsQueue()
-        } catch (e) {
-          showToast(t('loops.undoFailed', { message: e.message }))
-        }
-      },
-    })
+    if (typeof undoToast === 'function') {
+      undoToast(loopResolvedToast(action, inbound), id, {
+        onUndone: () => {
+          if (typeof loadLoopsQueue === 'function') loadLoopsQueue()
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch (e) {
     if (btn) btn.disabled = false
     if (action !== 'done') showToast(t('loops.notTaskFailed', { message: e.message }))

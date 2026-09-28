@@ -69,7 +69,7 @@ function load(pages: any[] = []) {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   installI18n(ctx, "en");
-  for (const f of ["public/utils.js", "public/js/loops.js"]) {
+  for (const f of ["public/utils.js", "public/js/undo.js", "public/js/loops.js"]) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
   ctx.__els = els;

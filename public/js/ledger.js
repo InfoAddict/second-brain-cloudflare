@@ -289,26 +289,20 @@ function setLedgerState(state) {
 }
 
 /**
- * Placeholder field names for the calibration rate line's structured
- * numbers (18-copy-deck.md section 8.6). GET /decisions/calibration does
- * not return these yet; T7-C will report the real names once it does, and
- * this is the one place to rename them.
- */
-const LEDGER_LINE_FIELDS = { statedPct: 'line_stated_pct', hitPct: 'line_hit_pct', n: 'line_n' }
-
-/**
- * The calibration sentence, localized when the structured fields above are
- * present, or the server's own English sentence when they are not (an
- * older Worker, or before T7-C ships them) — pure, so a test can cover both
- * shapes without a fetch.
+ * The calibration sentence, localized from GET /decisions/calibration's
+ * structured fields (18-copy-deck.md section 8.6, T7-C's real contract:
+ * `kind` is "rate", "in_line" or "no_range"; `stated`/`hit` are percentages,
+ * set only when kind is "rate"), or the server's own English sentence when
+ * `kind` is absent (an older Worker) - pure, so a test can cover every shape
+ * without a fetch.
  */
 function calibrationSentence(result) {
   if (!result) return ''
-  const statedPct = result[LEDGER_LINE_FIELDS.statedPct]
-  const hitPct = result[LEDGER_LINE_FIELDS.hitPct]
-  const n = result[LEDGER_LINE_FIELDS.n]
-  if (statedPct == null || hitPct == null || n == null) return result.line || ''
-  return t('ledger.lineRate', { stated: statedPct, hit: hitPct, n })
+  const { kind, stated, hit, n } = result
+  if (kind === 'rate' && stated != null && hit != null && n != null) return t('ledger.lineRate', { stated, hit, n })
+  if (kind === 'in_line' && n != null) return t('ledger.lineInLine', { n })
+  if (kind === 'no_range' && n != null) return t('ledger.lineNoRange', { n })
+  return result.line || ''
 }
 
 function renderLedgerSentence(result) {

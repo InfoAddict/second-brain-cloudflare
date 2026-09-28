@@ -358,7 +358,7 @@ describe("decision rows in the due sheet (T7-E, Design 7.2)", () => {
   });
 
   it("Can't tell yet toast names the next date, from the structured review_at field", async () => {
-    const ctx = load([decisionResponse(), { ok: true, id: "d1", review_at: Date.UTC(2026, 11, 26, 12), message: "OK, I'll ask again around Dec 26, 2026." }]);
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", review_at: Date.UTC(2026, 11, 26, 12), reviews_done: false, message: "OK, I'll ask again around Dec 26, 2026." }]);
     await ctx.loadDueQueue();
 
     await ctx.resolveDecision("d1", "unknown", { disabled: false });
@@ -368,8 +368,8 @@ describe("decision rows in the due sheet (T7-E, Design 7.2)", () => {
     expect(ctx.__toasts[0].message).toBe("Okay. Review again around Dec 26, 2026");
   });
 
-  it("Can't tell yet toast says no more reviews when review_at is null (re-arming exhausted)", async () => {
-    const ctx = load([decisionResponse(), { ok: true, id: "d1", review_at: null, message: "OK, no more reviews for this one." }]);
+  it("Can't tell yet toast says no more reviews when reviews_done is true (re-arming exhausted)", async () => {
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", review_at: null, reviews_done: true, message: "OK, no more reviews for this one." }]);
     await ctx.loadDueQueue();
 
     await ctx.resolveDecision("d1", "unknown", { disabled: false });
@@ -377,7 +377,7 @@ describe("decision rows in the due sheet (T7-E, Design 7.2)", () => {
     expect(ctx.__toasts[0].message).toBe("Okay. No more reviews for this one");
   });
 
-  it("falls back to the Worker's own reply when review_at is absent (a Worker that predates it)", async () => {
+  it("falls back to the Worker's own reply when reviews_done is absent (a Worker that predates it)", async () => {
     const ctx = load([decisionResponse(), { ok: true, id: "d1", message: "OK, I'll ask again around Dec 26, 2026." }]);
     await ctx.loadDueQueue();
 

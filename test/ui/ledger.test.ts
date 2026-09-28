@@ -45,15 +45,31 @@ const readyResult = () => ({
 const notReadyResult = () => ({ ready: false, n: 4, needed: 10, line: "You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 4 so far." });
 
 describe("ledger math (pure, no DOM)", () => {
-  it("round 3: calibrationSentence localizes once the structured fields are present", () => {
+  it("round 4 (T7-C's real fields): calibrationSentence localizes the rate kind", () => {
     const { calibrationSentence } = load();
 
-    const withFields = calibrationSentence({ line: "So far, your 74% calls came true 52% of the time, based on 14 decisions.", line_stated_pct: 74, line_hit_pct: 52, line_n: 14 });
+    const withFields = calibrationSentence({ line: "So far, your 74% calls came true 52% of the time, based on 14 decisions.", kind: "rate", stated: 74, hit: 52, n: 14 });
 
     expect(withFields).toBe("So far, when you were about 74% sure, you were right 52% of the time, based on 14 decisions.");
   });
 
-  it("round 3: calibrationSentence falls back to the server's own sentence when the structured fields are absent", () => {
+  it("round 4: calibrationSentence localizes the in_line kind", () => {
+    const { calibrationSentence } = load();
+
+    const line = calibrationSentence({ line: "So far, how you did roughly matches how sure you were.", kind: "in_line", stated: null, hit: null, n: 9 });
+
+    expect(line).toBe("So far, how sure you were roughly matches how things turned out, based on 9 decisions.");
+  });
+
+  it("round 4: calibrationSentence localizes the no_range kind", () => {
+    const { calibrationSentence } = load();
+
+    const line = calibrationSentence({ line: "You'll see how you did once you have enough similar calls.", kind: "no_range", stated: null, hit: null, n: 3 });
+
+    expect(line).toBe("You'll see how often you're right once 5 decisions share a similar confidence. You have 3 so far.");
+  });
+
+  it("round 4: calibrationSentence falls back to the server's own sentence when kind is absent (a Worker that predates it)", () => {
     const { calibrationSentence } = load();
 
     const withoutFields = calibrationSentence({ line: "So far, your 74% calls came true 52% of the time, based on 14 decisions." });
