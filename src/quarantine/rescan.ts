@@ -13,7 +13,7 @@ import { heldTagsFor, holdStatements } from "./hold";
 import { NEEDS_RESCAN_TAG, withoutNeedsRescan } from "./tags";
 import { MIRRORED_SOURCES } from "../constants";
 import { deleteEntryVectors } from "../vectorize/batch";
-import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
+import { changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
 import { auditEvent } from "../lib/audit";
 
 /** Rows scanned per nightly run: a few is enough to drain any realistic backlog (a >32 KB write
@@ -41,6 +41,8 @@ export async function runQuarantineRescan(
 ): Promise<{ scanned: number; held: number }> {
   const { results } = await env.DB.prepare(
     // scope-exempt: cron: nightly maintenance, corpus-wide by design like every other pass in this job
+    // validity: any: a hold decision does not depend on whether the fact is currently valid — a
+    // row past its valid_until still owes its unscanned middle a check before it can ever surface again
     `SELECT id, content, tags, source, workspace_id, vector_ids FROM entries WHERE tags LIKE ? LIMIT ?`,
   ).bind(`%"${NEEDS_RESCAN_TAG}"%`, limit).all<RescanRow>();
   const rows = results ?? [];
@@ -83,18 +85,23 @@ async function rescanOne(env: Env, ctx: { waitUntil(promise: Promise<unknown>): 
   }
 
   const heldTags = heldTagsFor(requestedTags, score.reasons);
-  const casColumns = { tags: row.tags, workspace_id: row.workspace_id, vector_ids: row.vector_ids ?? null };
+  // ADV-1 (spec P3): the same two values feed both guards below, unmodified, so they can never
+  // drift apart. Spelled out by hand rather than through buildCasGuard (which always emits an
+  // `e.` prefix): snapshotStatement's own SELECT aliases the row `entries e`, but holdStatements'
+  // UPDATE targets plain `entries`, unaliased — the two guards need different prefixes for the
+  // identical check, which buildCasGuard's one fixed prefix cannot express for both at once.
+  const casColumns = { tags: row.tags, workspace_id: row.workspace_id };
   const batch = [
     // The row's requested (non-quarantine) tags become the recorded prior state, same shape as
     // every other hold: the caller asked for `requestedTags`, and quarantine is what happened to it.
     snapshotStatement(env, {
       entryId: row.id, reason: "status", change, content: { kind: "unchanged" }, nextTags: requestedTags,
       meta: { rescan: true }, now,
-      guard: p => buildCasGuard(p, casColumns),
+      guard: p => `e.tags = ${p.add(casColumns.tags)} AND e.workspace_id = ${p.add(casColumns.workspace_id)}`,
     }),
     ...holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: cfg.VERSION_KEEP }, {
       entryId: row.id, reasons: score.reasons, score: score.score, signals: score.signals, change, heldTags, now,
-      guard: p => `tags = ${p.add(row.tags)} AND workspace_id = ${p.add(row.workspace_id)}`,
+      guard: p => `tags = ${p.add(casColumns.tags)} AND workspace_id = ${p.add(casColumns.workspace_id)}`,
     }),
   ];
   const results = await env.DB.batch(batch);

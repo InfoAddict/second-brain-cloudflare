@@ -1468,7 +1468,10 @@ describe("the checker over the real source tree", () => {
     // (T5 recall_log + T2 validity/supersede/retraction work, see history above) are
     // independently-tracked deltas from the same base — recomputed against the real scanner output
     // after combining rather than hand-reconciling the two.
-    ).toEqual({ queries: 227, exempt: 115, checked: 29, outerJoin: 1 });
+    // MOVED 227/115 -> 228/116 (T-0089.4.2, Lane W follow-up): +1 query, +1 documented exception —
+    // the nightly quarantine-rescan pass's NEEDS_RESCAN_TAG candidate SELECT (scope-exempt: cron,
+    // corpus-wide by design like every other pass in the nightly job).
+    ).toEqual({ queries: 228, exempt: 116, checked: 29, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

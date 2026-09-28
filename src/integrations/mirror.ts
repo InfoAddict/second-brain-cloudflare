@@ -205,7 +205,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
         if (changesOf(results[1]) === 0) continue;
 
         if (heldTags) {
-          // No pre-commit re-embed (saves a model call): a held update is never vectorized.
+          // No pre-commit re-embed here (saves a model call): a held update is never vectorized.
           // The row's PRIOR vectors are deleted after commit, same as deprecateEntry (5.3 point 1).
           if (oldVectorIds.length) {
             try {
