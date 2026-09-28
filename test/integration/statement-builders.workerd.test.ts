@@ -38,6 +38,10 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("statement builders on workerd 
         "snapshot revert with seq and nonce": () => snapshotStatement(env, {
           entryId: "e1", reason: "revert", change, content: { kind: "next", content: "x" }, nextTags: [], skipNoOp: false, expectNewestSeq: 3, meta: { nonce: "n" }, now: 8,
         }),
+        "snapshot validity, tags unchanged, guarded": () => snapshotStatement(env, {
+          entryId: "e1", reason: "validity", change, content: { kind: "unchanged" }, nextTags: "unchanged", nextState: { valid_until: 9 },
+          guard: p => `e.valid_until IS ${p.add(null)}`, meta: { cause: "supersede", by: "e2" }, now: 10,
+        }),
         "snapshot many": () => snapshotManyStatement(env, { entryIds: ["e1", "e2"], reason: "rollup", change, content: { kind: "suffix" }, now: 9 }),
         "prune": () => pruneStatement(env, "e1", 20),
         "prune many": () => pruneManyStatement(env, ["e1", "e2"], 20),

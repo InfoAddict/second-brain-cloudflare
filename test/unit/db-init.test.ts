@@ -21,6 +21,8 @@ const MIGRATION: [column: string, alter: string][] = [
   ["when_kind", `ALTER TABLE entries ADD COLUMN when_kind TEXT`],
   ["when_source", `ALTER TABLE entries ADD COLUMN when_source TEXT`],
   ["when_label", `ALTER TABLE entries ADD COLUMN when_label TEXT`],
+  ["valid_from", `ALTER TABLE entries ADD COLUMN valid_from INTEGER`],
+  ["valid_until", `ALTER TABLE entries ADD COLUMN valid_until INTEGER`],
 ];
 // Tenancy (v3) ALTERs exist for upgraded brains, but on fresh brains these columns
 // ship inside the base CREATE (see BASE_COLUMNS), so unlike MIGRATION they are not
@@ -290,7 +292,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 66 -> 70 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
       // MOVED 70 -> 71 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER.
       // MOVED 71 -> 72 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER.
-      expect(migrated).toBe(72); // 31 base objects + 20 ALTERs + 15 post-column objects + the email-index CREATE
+      // MOVED 72 -> 74 (T-0089.2.1) by the valid_from and valid_until ALTERs.
+      expect(migrated).toBe(74); // 31 base objects + 22 ALTERs + 15 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -631,7 +634,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 64 -> 65 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER — wasted on a fresh brain
     // (the CREATE above already has the column), same as every other ALTER a fresh CREATE subsumes.
     // MOVED 65 -> 66 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER, wasted the same way.
-    expect(cold).toBe(66); // one probe, then the 65 statements a new brain needs
+    // MOVED 66 -> 68 (T-0089.2.1) by the valid_from and valid_until ALTERs.
+    expect(cold).toBe(68); // one probe, then the 67 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
@@ -652,6 +656,8 @@ describe("initializeDatabase against real SQLite", () => {
       `ALTER TABLE entries ADD COLUMN when_kind TEXT`,
       `ALTER TABLE entries ADD COLUMN when_source TEXT`,
       `ALTER TABLE entries ADD COLUMN when_label TEXT`,
+      `ALTER TABLE entries ADD COLUMN valid_from INTEGER`,
+      `ALTER TABLE entries ADD COLUMN valid_until INTEGER`,
     ]);
     // schema.sql ships the whole v3 tenancy set — users (with default_share,
     // removed_at and last_used_at), workspaces, memberships, entry_events,

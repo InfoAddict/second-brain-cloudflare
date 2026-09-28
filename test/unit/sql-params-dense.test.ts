@@ -30,6 +30,20 @@ describe("every generated statement numbers its placeholders densely", () => {
     }
   }
 
+  for (const nextTags of [["a"], "unchanged"] as const) {
+    for (const withGuard of [false, true]) {
+      it(`validity snapshot tags=${JSON.stringify(nextTags)} guard=${withGuard}`, () => {
+        const b = buildSnapshot({
+          ...base, reason: "validity", nextTags: nextTags === "unchanged" ? "unchanged" : [...nextTags],
+          nextState: { valid_until: null, valid_from: 7 },
+          guard: withGuard ? p => `e.valid_until IS ${p.add(null)} AND e.workspace_id = ${p.add("w")}` : undefined,
+          meta: { cause: "supersede", by: "x" },
+        });
+        expect(denseProblem(b.sql, b.bindings)).toBeNull();
+      });
+    }
+  }
+
   it("the many-row forms bind one parameter for the ids", () => {
     const ids = Array.from({ length: 101 }, (_, i) => `e${i}`);
     for (const b of [buildSnapshotMany({ entryIds: ids, reason: "status", change, content: { kind: "unchanged" }, now: 1 }),
