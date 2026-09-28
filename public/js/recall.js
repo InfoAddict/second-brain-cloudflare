@@ -316,14 +316,18 @@ ${entry.hop > 0 ? `<span class="tag-chip tag-chip--hop">${escHtml(tPlural('recal
     ${(() => {
       const badge = sourceBadge(entry.source)
       const at = Number(entry.created_at) || 0
-      if (!entry.source && !at) return ''
+      const stated = entry.valid_from_stated && entry.validity_state === 'current'
+        ? `<span class="card-time">${escHtml(t('validity.trueSince', { from: formatDateUI(entry.valid_from, { year: 'numeric', month: 'short', day: 'numeric' }) }))}</span>`
+        : ''
+      if (!entry.source && !at && !stated) return ''
       return `<div class="card-meta">
         <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
         ${at ? `<span class="card-time" title="${escAttr(new Date(at).toLocaleString(localeTag()))}">${escHtml(relativeTime(at))}</span>` : ''}
+        ${stated}
       </div>`
     })()}
     <div class="card-footer">
-<div class="card-tags">${standingBadgeHtml(entry.tags)}${projectChipsHtml(entry.tags)}${humanTags(entry.tags).map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>
+<div class="card-tags">${validityChipHtml(entry)}${standingBadgeHtml(entry.tags)}${projectChipsHtml(entry.tags)}${humanTags(entry.tags).map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>
 <div class="card-actions">
   ${
     entry.id

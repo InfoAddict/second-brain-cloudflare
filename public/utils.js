@@ -1118,6 +1118,30 @@ function heldChipHtml(tags) {
 }
 
 /**
+ * T-0101.6.1 (spec 14 section 7.6): Replaced, Ended or Check - the three
+ * validity states worth a glance on a card (recent.js's list cards and
+ * recall.js's result cards both call this, and recall.js loads before
+ * recent.js in index.html, so this lives beside the other shared chip
+ * helpers rather than in either caller). Current and Wrong show nothing here
+ * (Wrong already has its own status control on the sheet); a chip on every
+ * card would be no signal at all, the same restraint heldChipHtml above
+ * applies. Checked first: a row can be both replaced and built on a
+ * retracted source, and "needs a look" outranks "superseded".
+ */
+function validityChipHtml(entry) {
+  if (entry.retracted_source) {
+    return `<span class="tag-chip validity-chip validity-chip--check">${escHtml(t('validity.chipCheck'))}</span>`
+  }
+  if (entry.validity_state === 'replaced') {
+    return `<span class="tag-chip validity-chip validity-chip--replaced">${escHtml(t('validity.chipReplaced'))}</span>`
+  }
+  if (entry.validity_state === 'ended') {
+    return `<span class="tag-chip validity-chip validity-chip--ended">${escHtml(t('validity.chipEnded'))}</span>`
+  }
+  return ''
+}
+
+/**
  * S5 (5.7): the canonical-edit label's date ("YYYY-MM-DD"), or null when the
  * row carries none - mirrors editedCanonicalAt (src/quarantine/tags.ts).
  * The caller checks the date against EDITED_CANONICAL_LABEL_DAYS (7); this

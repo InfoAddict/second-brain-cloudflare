@@ -82,6 +82,18 @@ function graphNodeColor(n) {
   return n.clusterColor || '#9a958a'
 }
 
+/**
+ * T-0101.6.1 (spec 14 section 7.6): a node whose window has closed reads the
+ * same as one marked wrong — dimmed, not removed, since the edges into it
+ * are still part of the story. GET /graph's nodes carry `validUntil` (not
+ * `validity_state`; see src/routes/graph.ts), so a node counts as closed the
+ * moment it has an end, whether that came from a replacement or an explicit
+ * end date.
+ */
+function isDimmedGraphNode(n) {
+  return n.status === 'deprecated' || n.validUntil != null
+}
+
 function initGraphSim(canvas, nodes, edges) {
   const dpr = window.devicePixelRatio || 1
   const rect = canvas.getBoundingClientRect()
@@ -457,7 +469,7 @@ function initGraphSim(canvas, nodes, edges) {
     }
     ctx.setLineDash([])
     for (const l of links) {
-      const dim = l.s.status === 'deprecated' || l.t.status === 'deprecated'
+      const dim = isDimmedGraphNode(l.s) || isDimmedGraphNode(l.t)
       const lit = hover && (l.s === hover || l.t === hover)
       // Edge dash encodes provenance: solid = you linked, dashed = auto-inferred, dotted = system.
       ctx.setLineDash(
@@ -475,7 +487,7 @@ function initGraphSim(canvas, nodes, edges) {
     ctx.setLineDash([])
     for (const n of nodes) {
       const r = nodeRadius(n)
-      ctx.globalAlpha = n.status === 'deprecated' ? 0.4 : 1
+      ctx.globalAlpha = isDimmedGraphNode(n) ? 0.4 : 1
       ctx.fillStyle = graphNodeColor(n)
       ctx.beginPath()
       ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
@@ -508,7 +520,7 @@ function initGraphSim(canvas, nodes, edges) {
     if (SHOW_LABELS && cam.scale >= 0.5) {
       for (const n of nodes) {
         if (n === hover) continue
-        labelPill(shortLabel(n), n.x, n.y + nodeRadius(n) + 4, false, n.status === 'deprecated' ? 0.5 : 1)
+        labelPill(shortLabel(n), n.x, n.y + nodeRadius(n) + 4, false, isDimmedGraphNode(n) ? 0.5 : 1)
       }
     }
     // Cluster labels: a bold, cluster-colored pill above each cluster's top edge.

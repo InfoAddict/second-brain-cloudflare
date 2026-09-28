@@ -329,6 +329,12 @@ const I18N_EN = {
     reasonDue: 'Date changed',
     reasonMirror: 'Updated by sync',
     reasonRevert: 'Put back to an earlier version',
+    // Draft, not in the 7.6 copy deck: history.items carries no cause/by/until
+    // for a validity-caused row (only entry.timeline does, which the SH-1
+    // history UI does not read - see validity.evChanged and
+    // test/ui/validity-labels.test.ts's "history.items gap" test), so this is
+    // a generic label rather than the per-cause validity.history* strings.
+    reasonValidity: 'Validity changed',
     byClient: 'by {actor} via {client}',
     byAgent: 'by {actor} via an AI tool',
     byDashboard: 'by {actor}',
@@ -953,6 +959,39 @@ const I18N_EN = {
     },
     moreInsightsGeneric: 'More insights are waiting →',
   },
+  // T-0101.6.1 (Track 2 Task D3, spec 14 section 7.6): validity labels, one
+  // block, inserted directly before stale so the copy deck's own placement
+  // note stays checkable by a diff.
+  validity: {
+    trueFromUntil: 'True from {from} until {until}',
+    trueSince: 'True since {from}',
+    replacedBy: 'Replaced by: {preview}',
+    ended: 'No longer true since {until}',
+    retractedSource: 'Built on a memory that was later retracted',
+    chipReplaced: 'Replaced',
+    chipEnded: 'Ended',
+    chipCheck: 'Check',
+    restoredToast: 'Marked as wrong. "{preview}" is current again.',
+    restoredToastMany: 'Marked as wrong. {n} older memories are current again.',
+    flaggedToast: '{n} memories built on it were flagged for a check.',
+    // The 7.6 deck also gives per-cause history-row strings (historyReplaced,
+    // historyCurrentAgain, historyCurrentAgainDeleted, historyReplacedAgain,
+    // historyEndSet, historyEndMoved), left out of this catalog rather than
+    // shipped unreachable: entry.history.items (what the SH-1 timeline
+    // renders) carries no cause/by/until/preview for a reason:"validity" row,
+    // only entry.timeline does, and the current UI never reads entry.timeline
+    // once entry.history is present. See history.reasonValidity's generic
+    // fallback and the failing test documenting this gap
+    // (test/ui/validity-labels.test.ts, "history.items gap"). Add these keys
+    // back once that backend field lands.
+    //
+    // Draft, not in the 7.6 copy deck: generic event-list labels for the
+    // three validity event names src/lib/audit.ts writes, for the fallback
+    // plain-event timeline (pre-SH-1 Workers, no rich history).
+    evSuperseded: 'Superseded an older memory',
+    evChanged: 'Validity changed',
+    evFlagged: 'Flagged for a check',
+  },
   stale: {
     title: 'May be out of date',
     intro:
@@ -960,6 +999,13 @@ const I18N_EN = {
     empty: 'Nothing looks out of date.',
     loadFailed: 'Could not load what may be out of date.',
     lastConfirmed: 'Last confirmed {date}',
+    reasonAge: 'Not confirmed in {n} days',
+    // The 7.6 deck also gives reasonDate ("Its date has passed"), left out
+    // here: GET /stale sends no valid_until (src/routes/admin.ts's GET /stale
+    // selects only id, content, tags, source, created_at, last_updated), so
+    // an expired-but-not-yet-superseded row can't be told apart client-side.
+    // See test/ui/validity-labels.test.ts's "GET /stale gap" test.
+    reasonRetracted: 'Built on a memory that was later retracted',
     keep: 'Keep',
     keepFailed: 'Could not keep this memory: {message}',
     more: '{n} more',
@@ -1653,6 +1699,7 @@ const I18N_IT = {
     reasonDue: 'Data modificata',
     reasonMirror: 'Aggiornato dalla sincronizzazione',
     reasonRevert: 'Riportato a una versione precedente',
+    reasonValidity: 'Validità cambiata',
     byClient: 'da {actor} tramite {client}',
     byAgent: 'da {actor} tramite uno strumento di IA',
     byDashboard: 'da {actor}',
@@ -2241,6 +2288,22 @@ const I18N_IT = {
     },
     moreInsightsGeneric: 'Altri insight in attesa →',
   },
+  validity: {
+    trueFromUntil: 'Valido dal {from} al {until}',
+    trueSince: 'Valido dal {from}',
+    replacedBy: 'Sostituito da: {preview}',
+    ended: 'Non più valido dal {until}',
+    retractedSource: 'Basato su un ricordo poi ritrattato',
+    chipReplaced: 'Sostituito',
+    chipEnded: 'Concluso',
+    chipCheck: 'Da verificare',
+    restoredToast: 'Segnato come errato. "{preview}" è di nuovo valido.',
+    restoredToastMany: 'Segnato come errato. {n} ricordi precedenti sono di nuovo validi.',
+    flaggedToast: '{n} ricordi basati su di esso sono da verificare.',
+    evSuperseded: 'Ha sostituito un ricordo precedente',
+    evChanged: 'Validità cambiata',
+    evFlagged: 'Segnalato per una verifica',
+  },
   stale: {
     title: 'Potrebbe non essere aggiornato',
     intro:
@@ -2248,6 +2311,8 @@ const I18N_IT = {
     empty: 'Nulla sembra non aggiornato.',
     loadFailed: 'Impossibile caricare cosa potrebbe non essere aggiornato.',
     lastConfirmed: 'Confermato il {date}',
+    reasonAge: 'Non confermato da {n} giorni',
+    reasonRetracted: 'Basato su un ricordo poi ritrattato',
     keep: 'Tieni',
     keepFailed: 'Impossibile tenere questa memoria: {message}',
     more: 'Altri {n}',

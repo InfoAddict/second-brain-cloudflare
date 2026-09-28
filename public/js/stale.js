@@ -69,6 +69,23 @@ function loadMoreStale(btn) {
   loadStaleQueue({ append: true })
 }
 
+/**
+ * T-0101.6.1 (spec 14 section 7.6): why this landed in the review queue.
+ * GET /stale sends no `reason` field and no `valid_until` (src/routes/admin.ts's
+ * GET /stale handler selects only id, content, tags, source, created_at,
+ * last_updated), so "its date has passed" cannot be told apart from an
+ * ordinary age-out here — only age (from last_updated) and retracted-source
+ * (from the tag) are derivable client-side. See test/ui/validity-labels.test.ts's
+ * "GET /stale gap" tests.
+ */
+function staleReasonLine(e) {
+  if ((e.tags || []).includes('retracted-source')) return t('stale.reasonRetracted')
+  const confirmed = e.last_updated || e.created_at
+  if (!confirmed) return ''
+  const days = Math.floor((Date.now() - confirmed) / 86400000)
+  return t('stale.reasonAge', { n: Math.max(days, 0) })
+}
+
 function staleRow(e) {
   // The date the claim was last confirmed, not when it was written. "Out of
   // date" is an assertion about age, and the reviewer cannot rule on it without
@@ -77,9 +94,11 @@ function staleRow(e) {
   const when = confirmed
     ? t('stale.lastConfirmed', { date: formatDateUI(confirmed, { year: 'numeric', month: 'short', day: 'numeric' }) })
     : ''
+  const reason = staleReasonLine(e)
   return `
     <div class="stale-row" id="stale-row-${escAttr(e.id)}">
       <p class="stale-text">${escHtml(e.content)}</p>
+      ${reason ? `<span class="stale-reason">${escHtml(reason)}</span>` : ''}
       ${when ? `<span class="stale-when">${escHtml(when)}</span>` : ''}
       <div class="stale-actions">
         <button type="button" class="card-action-btn" data-stale-action="edit"><i class="ti ti-pencil"></i> ${escHtml(t('memories.edit'))}</button>

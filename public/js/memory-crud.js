@@ -404,6 +404,85 @@ function viewStatusLabel(status) {
   return status
 }
 
+/**
+ * T-0101.6.1 (spec 14 section 7.6, Task D3): the sheet's status row for a
+ * replaced or ended memory, so it never reads a bare "Trusted" once it has a
+ * validity window. `wrong` keeps its own label (viewStatusLabel handles it)
+ * since being marked wrong is a stronger statement than a validity window
+ * closing on its own.
+ */
+function validityStatusRowHtml(entry) {
+  const state = entry.validity_state
+  if (!state || state === 'wrong') return null
+  const shortDate = (ms) => formatDateUI(ms, { year: 'numeric', month: 'short', day: 'numeric' })
+  if (state === 'replaced' && entry.superseded_by) {
+    const from = shortDate(entry.valid_from)
+    const until = shortDate(entry.valid_until)
+    const label = t('validity.trueFromUntil', { from, until })
+    const link = `<a href="#" onclick="openValidityLink('${escAttr(entry.superseded_by.id)}'); return false;">${escHtml(t('validity.replacedBy', { preview: entry.superseded_by.preview }))}</a>`
+    return `<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(label)}</strong></div><div class="view-brain-row view-brain-row--validity">${link}</div>`
+  }
+  if (state === 'ended') {
+    const until = shortDate(entry.valid_until)
+    return `<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(t('validity.ended', { until }))}</strong></div>`
+  }
+  // state === 'current'
+  if (entry.valid_from_stated) {
+    const from = shortDate(entry.valid_from)
+    return `<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(t('validity.trueSince', { from }))}</strong></div>`
+  }
+  return null
+}
+
+/**
+ * The link on a Replaced-by row: opens the replacement's own sheet.
+ * `hydrateView` cannot do this — it re-renders the sheet ALREADY open on
+ * `viewOpenId`, and a click here means jumping to a DIFFERENT memory — so
+ * this fetches the replacement fresh and opens it, the same convention as
+ * graph-canvas.js's openNodeView (down to the empty-content offline fallback:
+ * the preview text is not passed through the inline onclick attribute, since
+ * escAttr breaks that handler the moment a memory's content has a quote in
+ * it — see the escAttr/onclick warning atop stale.js's onStaleListClick).
+ */
+async function openValidityLink(id) {
+  try {
+    const res = await fetch(`${WORKER_URL}/entry?id=${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+    })
+    const data = await res.json()
+    if (data.ok && data.entry) {
+      openView(data.entry, null)
+      return
+    }
+    throw new Error('entry fetch failed')
+  } catch {
+    openView({ id, content: '', tags: [] }, null)
+  }
+}
+
+/**
+ * The Wrong toast (spec 14 section 7.6): names the one memory a retraction
+ * restored, counts several, and separately notes anything flagged for a
+ * check. `null` for an ordinary status change with no validity side effects.
+ */
+function validityRestoredToastMessage(validity) {
+  if (!validity) return null
+  const restored = validity.restored || []
+  const flagged = Number(validity.flagged) || 0
+  if (!restored.length && !flagged) return null
+  let message = null
+  if (restored.length === 1) {
+    message = t('validity.restoredToast', { preview: restored[0].preview })
+  } else if (restored.length > 1) {
+    message = t('validity.restoredToastMany', { n: restored.length })
+  }
+  if (flagged > 0) {
+    const flaggedMsg = t('validity.flaggedToast', { n: flagged })
+    message = message ? `${message} ${flaggedMsg}` : flaggedMsg
+  }
+  return message
+}
+
 /** Volatility is a promise about the future, so it is worth spelling out. */
 function viewVolatility(volatility) {
   if (volatility === 'durable') return [t('memories.volDurable'), t('memories.volDurableGloss')]
@@ -482,7 +561,11 @@ function renderViewBrain(entry) {
     rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.kind'))}</span><strong>${escHtml(viewKindLabel(kind))}</strong></div>`)
   }
   if (status) {
-    rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(viewStatusLabel(status))}</strong></div>`)
+    const validityRow = status !== 'deprecated' ? validityStatusRowHtml(entry) : null
+    rows.push(validityRow || `<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(viewStatusLabel(status))}</strong></div>`)
+  }
+  if (entry.retracted_source) {
+    notes.push(t('validity.retractedSource'))
   }
   const volPair = volatility ? viewVolatility(volatility) : null
   if (volPair) {
@@ -548,6 +631,8 @@ async function selectViewStatus(status, entry) {
     // guide), but appending a full sentence after it makes this one a "toast
     // with a consequence", which does take one.
     if (data.indexed === false) message += '. ' + t('status.keywordOnly')
+    const validityMessage = validityRestoredToastMessage(data.validity)
+    if (validityMessage) message = validityMessage
     undoToast(message, entry.id, {
       onUndone: () => {
         if (typeof hydrateView === 'function') hydrateView(entry.id)
@@ -864,6 +949,10 @@ function timelineEventLabel(event) {
     // T3/T4 lane S5 (16-t3-t4-trust-spec.md 7.9).
     held: 'history.evHeld',
     released: 'history.evReleased',
+    // T-0101.6.1: src/lib/audit.ts's three validity event names.
+    superseded: 'validity.evSuperseded',
+    validity_changed: 'validity.evChanged',
+    flagged: 'validity.evFlagged',
   }
   return keys[event] ? t(keys[event]) : event || ''
 }

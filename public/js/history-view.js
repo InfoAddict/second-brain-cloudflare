@@ -14,6 +14,12 @@ const HISTORY_REASON_KEYS = {
   due: 'reasonDue',
   mirror: 'reasonMirror',
   revert: 'reasonRevert',
+  // T-0101.6.1: entry.history.items sends reason:"validity" for a supersede,
+  // retraction, unretraction or explicit end-date change, but (unlike
+  // entry.timeline) carries no cause/by/until to say which one - see
+  // history.reasonValidity's comment and this feature's failing test
+  // documenting the gap.
+  validity: 'reasonValidity',
 }
 
 /**

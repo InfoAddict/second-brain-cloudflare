@@ -1209,6 +1209,20 @@
         flex-shrink: 0;
       }
 
+      /* T-0101.6.1: Replaced and Ended are a past-tense fact about the row,
+         not a problem - the same calm accent-ink treatment as standing and
+         shared. Check means "look at this one", the held chip's --warn. */
+      .validity-chip--replaced,
+      .validity-chip--ended {
+        color: var(--accent-ink);
+        border-color: var(--accent-ink);
+      }
+
+      .validity-chip--check {
+        color: var(--warn);
+        border-color: var(--warn);
+      }
+
       .card-tags .tag-chip:first-child {
         background: var(--accent-soft);
         color: var(--accent-ink);
@@ -2583,6 +2597,14 @@
         margin-bottom: 8px;
       }
 
+      /* T-0101.6.1: why this row is in the queue, above the confirmed date. */
+      .stale-reason {
+        display: block;
+        font-size: 12px;
+        color: var(--warn);
+        margin-bottom: 2px;
+      }
+
       .stale-actions {
         display: flex;
         gap: 8px;
@@ -3474,6 +3496,18 @@
       .view-brain-note--warn {
         color: var(--warn);
         font-family: var(--font-sans);
+      }
+
+      /* T-0101.6.1: the Replaced-by link under a replaced memory's status row. */
+      .view-brain-row--validity {
+        justify-content: flex-start;
+        margin-top: -2px;
+      }
+
+      .view-brain-row--validity a {
+        color: var(--accent-ink);
+        font-size: 13px;
+        text-decoration: underline;
       }
 
       /* Citation chips in an answer, and the card they point at. */

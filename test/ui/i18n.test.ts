@@ -566,6 +566,10 @@ describe("dashboard i18n", () => {
       by: "historyReasonLabel() in public/js/history-view.js, keyed by HISTORY_REASON_KEYS[item.reason]",
     },
     {
+      prefix: "validity.ev",
+      by: "timelineEventLabel() in public/js/memory-crud.js, keyed by the audit event name (superseded/validity_changed/flagged)",
+    },
+    {
       keys: ["status.trustedHelp", "status.unconfirmedHelp", "status.wrongHelp"],
       by: "renderViewStatus() in public/js/memory-crud.js, keyed by STATUS_HELP_KEYS[status]",
     },
