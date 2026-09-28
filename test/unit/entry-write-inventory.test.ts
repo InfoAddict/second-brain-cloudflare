@@ -79,16 +79,18 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED (Task 7, T-0089.7.1/.2/.3): Design 2.1/4.1/5.1's standing/decision/commitment
   // cross-validation and tag composition landed ahead of the duplicate check, shifting every
   // site below it down by the same amount; none of these sites themselves changed shape.
+  // MOVED (review fix, NIT 5: entry.ts's INSERT gained when_label): every site below the
+  // INSERT shifted down by 4; the sites above it are unchanged.
   { file: 'src/capture/entry.ts', line: 315, kind: 'snapshot' },
   { file: 'src/capture/entry.ts', line: 359, kind: 'snapshot' },
   { file: 'src/capture/entry.ts', line: 455, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 493, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 500, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 502, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 541, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 585, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 594, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 596, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 497, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 504, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 506, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 545, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 589, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 598, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 600, kind: 'exempt' },
   { file: 'src/capture/lifecycle.ts', line: 128, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 196, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
@@ -111,14 +113,17 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED (Task 8, T-0089.7.1/.2/.3): the C13 done-guard and the received/stop_standing
   // branches landed ahead of the existing done/not_a_task branch, shifting these down; two
   // new snapshot sites are stop_standing's own tag-only write and resolveDecisionOutcome's.
-  { file: 'src/memory/actions.ts', line: 70, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 128, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 142, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 154, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 166, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 225, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 280, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 291, kind: 'snapshot' },
+  // MOVED (review fix, MAJOR 2: resolveDecisionOutcome's note now lands in the same CAS
+  // batch instead of a second appendToEntry version): the import removal shifted the first
+  // five sites up by 1; the rewritten function body shifted its own two sites down further.
+  { file: 'src/memory/actions.ts', line: 69, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 127, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 141, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 153, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 165, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 246, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 287, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 298, kind: 'snapshot' },
   // MOVED 218 -> 220, 605 -> 607 (T-0089.1.1 round 2): the trash insert is a plain INSERT, with a comment saying why.
   // MOVED 220 -> 221, 607 -> 608 (T-0089.1.1 round 3): trash.ts imports the shared edge readability guard.
   { file: 'src/memory/trash.ts', line: 221, kind: 'trash' },
@@ -160,7 +165,7 @@ const HYGIENE_EXEMPT = new Set([
   "src/capture/classify.ts:78", "src/routes/admin.ts:1550", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
-  "src/capture/entry.ts:493", "src/capture/entry.ts:585",
+  "src/capture/entry.ts:497", "src/capture/entry.ts:589",
 ]);
 
 describe("write-path inventory guard", () => {

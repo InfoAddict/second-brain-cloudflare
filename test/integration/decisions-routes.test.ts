@@ -128,7 +128,7 @@ describe("GET /decisions/calibration", () => {
 });
 
 describe("budgets", () => {
-  it("GET /decisions costs one statement plus identity; GET /decisions/calibration costs one plus identity", async () => {
+  it("GET /decisions costs two statements plus identity; GET /decisions/calibration costs one plus identity", async () => {
     seedDecision("b1");
     const issued = (fn: () => Promise<unknown>) => {
       const before = sqlite.issued.length;
@@ -136,8 +136,10 @@ describe("budgets", () => {
     };
     const decisionsCost = await issued(() => worker.fetch(req("GET", "/decisions?state=all", { token: ownerToken }), env, ctx));
     const calibrationCost = await issued(() => worker.fetch(req("GET", "/decisions/calibration", { token: ownerToken }), env, ctx));
-    // Identity resolution itself is one statement; the route's own read is one more.
-    expect(decisionsCost).toBe(2);
+    // Identity resolution itself is one statement. GET /decisions costs two more: the page
+    // itself, and its own count (a review found COUNT(*) OVER() reports 0 total on an
+    // out-of-range page, MINOR 3), computed as a second, independently-scoped statement.
+    expect(decisionsCost).toBe(3);
     expect(calibrationCost).toBe(2);
   });
 });

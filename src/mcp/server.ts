@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { Env } from "../env";
 import { RECALL_MAX_TOP_K, SEMANTIC_UNAVAILABLE_DETAIL, VECTORIZE_FIX_HINT } from "../constants";
 import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
-import { partitionIgnoredTags, t7ReplyText, validateT7Capture, type T7CaptureInput } from "../capture/t7-capture";
+import { COUNTERPARTY_NAME_MAX_CHARS, partitionIgnoredTags, t7ReplyText, validateT7Capture, type T7CaptureInput } from "../capture/t7-capture";
 import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
 import { getTrashedEntry } from "../memory/trash";
@@ -552,8 +552,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         confidence: z.number().optional().describe("0 to 1 (e.g. 0.7 for 70%). Pass only with decision: true, and only if the user stated it or clearly implied it — never ask for it."),
         confidence_source: z.enum(["stated", "inferred"]).optional().describe("\"stated\" if the user gave a number or a clear phrase like \"pretty sure\"; \"inferred\" otherwise (the default). Requires decision: true."),
         review_by: z.string().optional().describe("When to bring this decision up again; defaults to 90 days out. Requires decision: true; use when instead for anything else."),
-        owed_by: z.string().max(64).optional().describe("Someone promised the user something: their name. Use when for the promised date."),
-        owed_to: z.string().max(64).optional().describe("The user promised someone something: their name. Use when for the promised date."),
+        owed_by: z.string().max(COUNTERPARTY_NAME_MAX_CHARS).optional().describe("Someone promised the user something: their name. Use when for the promised date."),
+        owed_to: z.string().max(COUNTERPARTY_NAME_MAX_CHARS).optional().describe("The user promised someone something: their name. Use when for the promised date."),
       },
     },
     async ({ content, tags, project, source, volatility, workspace, team, when, when_kind, standing, decision, confidence, confidence_source, review_by, owed_by, owed_to }) => {

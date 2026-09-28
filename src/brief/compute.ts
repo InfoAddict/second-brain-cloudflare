@@ -182,6 +182,7 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
          SUM(CASE WHEN ${OPEN_INBOUND_SQL} THEN 1 ELSE 0 END) AS owed_to_me,
          SUM(CASE WHEN instr(lower(tags), '"${LEDGER_TAG}"') > 0
                    AND (tags LIKE '%"outcome:right"%' OR tags LIKE '%"outcome:wrong"%' OR tags LIKE '%"outcome:mixed"%')
+                   AND tags NOT LIKE '%"status:deprecated"%'
               THEN 1 ELSE 0 END) AS decisions_resolved,
          SUM(CASE WHEN ${DUE_SQL} AND when_at <= ? THEN 1 ELSE 0 END) AS due,
          COUNT(*) AS total

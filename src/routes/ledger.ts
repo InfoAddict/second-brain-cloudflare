@@ -11,7 +11,7 @@ import { scopeWhere } from "../lib/scope";
 import { resolveDecisionOutcome } from "../memory/actions";
 import type { DecisionOutcomeResult } from "../decisions/outcome";
 import {
-  calibrationQuery, decisionsActionable, decisionsListQuery, parseDecisionListRow, parseDecisionOutcomeRow,
+  calibrationQuery, decisionsActionable, decisionsCountQuery, decisionsListQuery, parseDecisionListRow, parseDecisionOutcomeRow,
   type DecisionState,
 } from "../decisions/queries";
 import { calibrate } from "../decisions/calibration";
@@ -27,8 +27,10 @@ export async function handleLedgerRoutes(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response | null> {
-  // GET /decisions — the decision log (Design 4.4). One statement: rows, total (window
-  // function) and edited_since_recorded (an EXISTS) together.
+  // GET /decisions — the decision log (Design 4.4). Two statements: rows (with
+  // edited_since_recorded, an EXISTS) and the true total, independent of paging (MINOR 3: a
+  // window-function count only ever counts the rows a page itself returns, so an out-of-range
+  // page reported 0 even with real matches on an earlier page).
   if (url.pathname === "/decisions" && request.method === "GET") {
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
@@ -43,8 +45,13 @@ export async function handleLedgerRoutes(
 
     const scope = scopeWhere(auth);
     const actionable = decisionsActionable(auth);
-    const { sql, bindings } = decisionsListQuery(scope, actionable, { state: stateParam as DecisionState, limit, offset });
-    const { results } = await env.DB.prepare(sql).bind(...bindings).all();
+    const state = stateParam as DecisionState;
+    const list = decisionsListQuery(scope, actionable, { state, limit, offset });
+    const count = decisionsCountQuery(scope, actionable, state);
+    const [{ results }, totalRow] = await Promise.all([
+      env.DB.prepare(list.sql).bind(...list.bindings).all(),
+      env.DB.prepare(count.sql).bind(...count.bindings).first() as Promise<{ total: number } | null>,
+    ]);
     const rows = (results as Record<string, unknown>[]).map(parseDecisionListRow);
 
     return json({
@@ -52,7 +59,7 @@ export async function handleLedgerRoutes(
       decisions: rows.map(({ id, content, created_at, confidence, confidence_source, outcome, review_at, rearms, edited_since_recorded }) => ({
         id, content, created_at, confidence, confidence_source, outcome, review_at, rearms, edited_since_recorded,
       })),
-      total: (results[0] as Record<string, unknown> | undefined)?.total as number ?? 0,
+      total: totalRow?.total ?? 0,
       limit,
       offset,
     });

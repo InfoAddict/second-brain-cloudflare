@@ -169,7 +169,7 @@ export async function captureEntry(
   // write, and fold in whichever mode's own tags into this capture's tag list. At most one
   // of standing/decision/commitment ever applies (validateT7Capture refuses the rest).
   let t7Reply: T7ReplyInfo | undefined;
-  let t7When: { at: number; kind: "due"; source: "explicit" } | undefined;
+  let t7When: { at: number; kind: "due"; source: "explicit"; label: string } | undefined;
   if (opts.t7) {
     const validation = validateT7Capture(opts.t7);
     if (validation) return { status: "t7_refused", error: validation.error };
@@ -178,7 +178,7 @@ export async function captureEntry(
       const decisionResult = buildDecisionCapture(opts.t7, c, Date.now(), { reviewDefaultDays: cfg.DECISION_REVIEW_DEFAULT_DAYS, timezone: cfg.TIMEZONE });
       if ("error" in decisionResult) return { status: "t7_refused", error: decisionResult.error };
       t.push(...decisionResult.tags);
-      t7When = { at: decisionResult.when_at, kind: decisionResult.when_kind, source: decisionResult.when_source };
+      t7When = { at: decisionResult.when_at, kind: decisionResult.when_kind, source: decisionResult.when_source, label: decisionResult.when_label };
       t7Reply = { kind: "decision", when_at: decisionResult.when_at, confidence: decisionResult.confidence };
     } else if (opts.t7.owed_by !== undefined || opts.t7.owed_to !== undefined) {
       const commitment = buildCommitmentTags(opts.t7);
@@ -452,10 +452,14 @@ export async function captureEntry(
 
   // versioning: exempt: creation — a new row has no prior state to keep
   await env.DB.prepare(
-    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source, when_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, c, JSON.stringify(finalTags), source, now, now, "[]", writeCtx.workspaceId, writeCtx.actorId,
     resolvedWhen?.at ?? null, resolvedWhen?.kind ?? null, resolvedWhen?.source ?? null,
+    // Only a decision's review date carries a stored label (Design 4.1: "Review: " + shortDecision(content),
+    // bare — no English prefix, see decisions/capture.ts's reviewLabel comment); the regex/caller-`when`
+    // paths never generate one, matching every other when_label writer in this codebase.
+    (resolvedWhen && "label" in resolvedWhen) ? resolvedWhen.label : null,
   ).run();
 
   // Indexed once the outcome is known, with the tags the row will actually keep: a system capture can

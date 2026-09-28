@@ -80,30 +80,50 @@ function parseTags(tagsJson: string): string[] {
 
 export type DecisionState = "open" | "resolved" | "all";
 
+/** The state filter shared by decisionsListQuery and decisionsCountQuery, so the two can never disagree. */
+function decisionStateFilter(state: DecisionState): string {
+  return state === "open" ? `AND tags NOT LIKE '%"outcome:%'`
+    : state === "resolved" ? `AND tags LIKE '%"outcome:%'`
+      : "";
+}
+
 /**
  * GET /decisions (Design 4.4): id, content (200), created_at, confidence, confidence_source,
  * outcome, review_at, rearms, edited_since_recorded — the last an EXISTS on entry_versions for
  * the row, inside this same statement, so listing decisions costs one D1 read regardless of
  * page size. Scoped the same way as calibrationQuery (P7.7): personal or authored by the caller.
+ *
+ * The total is a SEPARATE statement (decisionsCountQuery), not a `COUNT(*) OVER()` on this one:
+ * a window function only ever counts the rows this statement itself returns, so a page past the
+ * last match returns zero rows and the window count would report 0 even though real rows exist
+ * on an earlier page — a paging client reads that as "no data" (review finding, MINOR 3).
  */
 export function decisionsListQuery(
   scope: ScopeClause, actionable: ScopeClause, opts: { state: DecisionState; limit: number; offset: number },
 ): SqlWithBindings {
   const bounded = boundedScope(scope);
-  const stateFilter = opts.state === "open" ? `AND tags NOT LIKE '%"outcome:%'`
-    : opts.state === "resolved" ? `AND tags LIKE '%"outcome:%'`
-      : "";
   // scope-exempt: by-id: correlated to entries.id, which the outer WHERE below already scopes —
   // same shape as memory/versions.ts's NEWEST_SEQ.
   const sql = `SELECT id, substr(content, 1, 200) AS content, created_at, tags, when_at,
-      EXISTS(SELECT 1 FROM entry_versions v WHERE v.entry_id = entries.id) AS edited_since_recorded,
-      COUNT(*) OVER() AS total
+      EXISTS(SELECT 1 FROM entry_versions v WHERE v.entry_id = entries.id) AS edited_since_recorded
     FROM entries
-    WHERE ${LEDGER_INDEXED} AND tags NOT LIKE '%"status:deprecated"%' ${stateFilter}
+    WHERE ${LEDGER_INDEXED} AND tags NOT LIKE '%"status:deprecated"%' ${decisionStateFilter(opts.state)}
       AND ${bounded.clause} AND ${actionable.clause}
     ORDER BY created_at DESC, id DESC
     LIMIT ? OFFSET ?`;
   return { sql, bindings: [...bounded.bindings, ...actionable.bindings, opts.limit, opts.offset] };
+}
+
+/** The true total for decisionsListQuery's own filter, independent of paging (MINOR 3). */
+export function decisionsCountQuery(scope: ScopeClause, actionable: ScopeClause, state: DecisionState): SqlWithBindings {
+  const bounded = boundedScope(scope);
+  // scope-checked: bounded rewrites scope's IN-list into a json_each form when it has more than
+  // one binding (same helper and reasoning as calibrationQuery above); both shapes still scope
+  // by workspace_id, only the placeholder count changes.
+  const sql = `SELECT COUNT(*) AS total FROM entries
+    WHERE ${LEDGER_INDEXED} AND tags NOT LIKE '%"status:deprecated"%' ${decisionStateFilter(state)}
+      AND ${bounded.clause} AND ${actionable.clause}`;
+  return { sql, bindings: [...bounded.bindings, ...actionable.bindings] };
 }
 
 export interface DecisionListRow {

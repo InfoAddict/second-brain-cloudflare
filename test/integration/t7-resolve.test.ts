@@ -65,13 +65,13 @@ describe("resolve outcome", () => {
     expect(versions).toHaveLength(1);
   });
 
-  it("an outcome note is appended, versioned, on top of the outcome's own version", async () => {
+  it("an outcome note lands in the SAME version as the outcome itself, so one undo reverts both (review MAJOR 2)", async () => {
     seedRow("d1", { tags: ["ledger:decision", "confidence:0.70"] });
     const r = await resolveDecisionOutcome(env, ctx, owner, "d1", "right", "Shipped early.", change());
     expect(r.ok).toBe(true);
     expect(await rowTags("d1")).toEqual(["ledger:decision", "confidence:0.70", "outcome:right"]);
     const versions = (await sqlite.db.prepare(`SELECT * FROM entry_versions WHERE entry_id = 'd1'`).all()).results as any[];
-    expect(versions).toHaveLength(2);
+    expect(versions).toHaveLength(1);
     const content = await sqlite.db.prepare(`SELECT content FROM entries WHERE id = 'd1'`).first() as any;
     expect(content.content).toContain("Outcome (");
     expect(content.content).toContain("right");
@@ -103,15 +103,16 @@ describe("resolve outcome", () => {
     if (r3.ok) expect(r3.reply).toBe("OK, no more reviews for this one.");
   });
 
-  it("a failed note append keeps the outcome and says so", async () => {
+  it("the outcome and its note land together in one write even with the embedding service down", async () => {
     seedRow("d4");
     const failingKV = { get: async () => null, put: async () => { throw new Error("kv down"); }, delete: async () => {}, list: async () => ({ keys: [], list_complete: true, cacheStatus: null }) };
     const noAiEnv = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: failingKV as any, AI: undefined as any });
     const r = await resolveDecisionOutcome(noAiEnv, ctx, owner, "d4", "right", "a note", change());
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.reply).toBe("Outcome recorded; the note could not be saved.");
-    // The outcome itself still landed even though the note append failed.
+    if (r.ok) expect(r.reply).toMatch(/^Recorded: .+ went right\. Undo is available\.$/);
     expect(await rowTags("d4")).toContain("outcome:right");
+    const content = await sqlite.db.prepare(`SELECT content FROM entries WHERE id = 'd4'`).first() as any;
+    expect(content.content).toContain("a note");
   });
 
   it("outcome on a non-decision is refused", async () => {

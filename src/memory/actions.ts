@@ -15,7 +15,6 @@ import { LEDGER_TAG, STANDING_TAG } from "../tags/t7";
 import { OWED_TO_ME_TAG } from "../commitments/direction";
 import { standingTouched, type StandingCacheConfig } from "../standing/cache";
 import { buildOutcomeUpdate, isLedgerDecision, outcomeNoteText, type DecisionOutcomeResult } from "../decisions/outcome";
-import { appendToEntry } from "../capture/store";
 
 export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true" | "received" | "stop_standing";
 export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number; content?: string } | { ok: false; error: string; status: number };
@@ -183,10 +182,27 @@ export async function resolveEntryAction(
   return { ok: false, error: `Could not ${verb} — try again`, status: 409 };
 }
 
+/** "\n\n[Update Sep 28, 2026]: Outcome (2026-09-28): right. Shipped early." — same dated-suffix
+ * shape src/capture/store.ts's appendToEntry uses for every other append, so an outcome note
+ * reads like any other addition to the memory. */
+function outcomeNoteSuffix(result: DecisionOutcomeResult, note: string, now: number): string {
+  const timestamp = new Date(now).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  return `\n\n[Update ${timestamp}]: ${outcomeNoteText(result, note, now)}`;
+}
+
 /**
- * `resolve(id, "outcome", result, note?)` and `POST /decisions/outcome` (Design 4.2). Kept
- * separate from resolveEntryAction: it takes different parameters (result, note) and writes
- * the note as a second, versioned append after the CAS batch commits.
+ * `resolve(id, "outcome", result, note?)` and `POST /decisions/outcome` (Design 4.2). A note
+ * lands in the SAME CAS batch as the tag/when_* change — one version, so one undo reverts the
+ * whole action (a review found that a separate append version let an undo strip only the note
+ * and leave the outcome tag in place, while the reply still promised "Undo is available.").
+ *
+ * The row's vector is deliberately NOT re-embedded for the note: a background re-embed here
+ * raced this same function's own undo path (its CAS write landing between the caller's read and
+ * revertEntry's own guard check reported a spurious "stale", not a real conflict) and re-fetching
+ * the row inside the batch's own transaction is not available through the batch() API. The
+ * decision's own content, which is what the calibration and recall paths actually care about,
+ * is unaffected; only the appended note text is unindexed until the row is next edited by
+ * something else.
  */
 export async function resolveDecisionOutcome(
   env: Env, ctx: AuditContext, identity: Identity, id: string,
@@ -204,6 +220,8 @@ export async function resolveDecisionOutcome(
     const priorWhen = { when_at: row.when_at ?? null, when_kind: row.when_kind ?? null, when_label: row.when_label ?? null, when_source: row.when_source ?? null };
     const now = Date.now();
     const update = buildOutcomeUpdate(tags, result, row.content as string, now, { reviewDefaultDays: cfg.DECISION_REVIEW_DEFAULT_DAYS, timezone: cfg.TIMEZONE });
+    const trimmedNote = note?.trim();
+    const nextContent = trimmedNote ? `${row.content as string}${outcomeNoteSuffix(result, trimmedNote, now)}` : (row.content as string);
     const casColumns = { tags: row.tags, content: row.content, workspace_id: row.workspace_id, ...priorWhen };
     const nextWhen: WhenChange = update.nextWhen;
     const snapshot = snapshotStatement(env, {
@@ -211,10 +229,13 @@ export async function resolveDecisionOutcome(
       // when_* too — this is a "status"-reason version (spec 4.2) that also changes when_*,
       // unlike an ordinary status change, so it needs the same escape hatch "due"-reason
       // versions get automatically.
-      entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags: update.nextTags, nextWhen, meta: { decision_outcome: result, when: true }, now,
+      entryId: id, reason: "status", change,
+      content: trimmedNote ? { kind: "next", content: nextContent } : { kind: "unchanged" },
+      nextTags: update.nextTags, nextWhen, meta: { decision_outcome: result, when: true }, now,
       guard: p => buildCasGuard(p, casColumns),
     });
     const p = new Params();
+    const contentIdx = trimmedNote ? p.add(nextContent) : undefined;
     const tagsIdx = p.add(JSON.stringify(update.nextTags));
     const whenAtIdx = p.add(update.nextWhen.when_at);
     const whenKindIdx = p.add(update.nextWhen.when_kind);
@@ -222,28 +243,14 @@ export async function resolveDecisionOutcome(
     const idIdx = p.add(id);
     // versioning: snapshot
     const statement = env.DB.prepare(
-      `UPDATE entries AS e SET tags = ${tagsIdx}, when_at = ${whenAtIdx}, when_kind = ${whenKindIdx}, when_source = ${whenSourceIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`,
+      `UPDATE entries AS e SET ${contentIdx ? `content = ${contentIdx}, ` : ""}tags = ${tagsIdx}, when_at = ${whenAtIdx}, when_kind = ${whenKindIdx}, when_source = ${whenSourceIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`,
     ).bind(...p.values());
     const results = await env.DB.batch([snapshot, statement, pruneStatement(env, id, cfg.VERSION_KEEP)]);
     if (changesOf(results[1]) === 0) continue;
 
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { decision_outcome: result, prior: { tags, ...priorWhen }, ...channelPayload(change) } });
 
-    let reply = update.reply;
-    const trimmedNote = note?.trim();
-    if (trimmedNote) {
-      let appended = false;
-      try {
-        appended = await appendToEntry(
-          env, id, row.content as string, outcomeNoteText(result, trimmedNote, now), update.nextTags, "api", cfg, undefined,
-          { workspaceId: row.workspace_id as string, actorId: identity.userId }, change, undefined, row.workspace_id as string,
-        );
-      } catch (e) {
-        console.error("Outcome note append failed (non-fatal):", e);
-      }
-      if (!appended) reply = "Outcome recorded; the note could not be saved.";
-    }
-    return { ok: true, id, reply };
+    return { ok: true, id, reply: update.reply };
   }
   return { ok: false, error: "Could not resolve, try again", status: 409 };
 }

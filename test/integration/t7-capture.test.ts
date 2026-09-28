@@ -120,6 +120,8 @@ describe("POST /capture — decision", () => {
     expect(tags).toContain("confidence-source:stated");
     expect(db.entries[0].when_kind).toBe("due");
     expect(db.entries[0].when_source).toBe("explicit");
+    // NIT (review): when_label must actually be written, not just computed and discarded.
+    expect(db.entries[0].when_label).toBe("Decided to hire Dana for the design lead role");
   });
 
   it("logs a decision with no confidence, and never implies a question was asked", async () => {

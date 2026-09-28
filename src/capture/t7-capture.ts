@@ -41,6 +41,53 @@ export function validateT7Capture(input: T7CaptureInput): { error: string } | nu
   return null;
 }
 
+/** Shared with MCP's zod schema (mcp/server.ts), so the two surfaces cannot drift on the limit. */
+export const COUNTERPARTY_NAME_MAX_CHARS = 64;
+
+/**
+ * REST's own type/range guard for the raw JSON body (Design 2.1, 4.1, 5.1 fields). MCP gets the
+ * same checks for free from its zod schema at the transport boundary; REST parses `any`-typed
+ * JSON by hand, so this is the one place that must not skip a field just because a later branch
+ * (e.g. `decision: true`) reads it under a different code path — the review that found this
+ * (`decision: true` with a non-string `when` threw a 500 instead of a 400) is why every field is
+ * checked here, unconditionally, before anything else looks at the body.
+ */
+export function validateT7RestFields(body: Record<string, unknown>): { error: string } | null {
+  if (body.standing !== undefined && typeof body.standing !== "boolean") {
+    return { error: "standing must be a boolean. Nothing was saved." };
+  }
+  if (body.decision !== undefined && typeof body.decision !== "boolean") {
+    return { error: "decision must be a boolean. Nothing was saved." };
+  }
+  if (body.confidence !== undefined && typeof body.confidence !== "number") {
+    return { error: "confidence must be a number. Nothing was saved." };
+  }
+  if (body.confidence_source !== undefined && body.confidence_source !== "stated" && body.confidence_source !== "inferred") {
+    return { error: 'confidence_source must be "stated" or "inferred". Nothing was saved.' };
+  }
+  if (body.review_by !== undefined && typeof body.review_by !== "string") {
+    return { error: "review_by must be a string. Nothing was saved." };
+  }
+  // `when`/`when_kind` are shared with an ordinary (non-T7) capture, but a bad type must be
+  // caught here regardless of whether decision/owed_by/owed_to is also set — the crash this
+  // fixes happened precisely because the old check ran only on the non-decision branch.
+  if (body.when !== undefined && body.when !== null && typeof body.when !== "string") {
+    return { error: "when must be a string. Nothing was saved." };
+  }
+  if (body.when_kind !== undefined && typeof body.when_kind !== "string") {
+    return { error: "when_kind must be a string. Nothing was saved." };
+  }
+  for (const field of ["owed_by", "owed_to"] as const) {
+    const value = body[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string") return { error: `${field} must be a string. Nothing was saved.` };
+    if (value.length > COUNTERPARTY_NAME_MAX_CHARS) {
+      return { error: `${field} must be at most ${COUNTERPARTY_NAME_MAX_CHARS} characters. Nothing was saved.` };
+    }
+  }
+  return null;
+}
+
 /** What captureEntry actually did with a T7 request, for the MCP/REST reply layer to word. */
 export type T7ReplyInfo =
   | { kind: "standing"; applied: true }

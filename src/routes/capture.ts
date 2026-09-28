@@ -8,7 +8,7 @@ import { requireIdentity, type Identity } from "../lib/identity";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { scopeWrite, effectiveWriteTarget, readTeamParam, type WriteContext } from "../lib/scope";
 import { captureEntry } from "../capture/entry";
-import { partitionIgnoredTags, t7ReplyText, validateT7Capture, type T7CaptureInput } from "../capture/t7-capture";
+import { partitionIgnoredTags, t7ReplyText, validateT7Capture, validateT7RestFields, type T7CaptureInput } from "../capture/t7-capture";
 import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
@@ -92,13 +92,12 @@ export async function handleCaptureRoutes(
     const captureVol = readVolatility(body.volatility);
     if (captureVol.error) return json({ ok: false, error: captureVol.error }, 400);
 
-    if (body.confidence !== undefined && typeof body.confidence !== "number") return json({ ok: false, error: "confidence must be a number" }, 400);
-    if (body.confidence_source !== undefined && body.confidence_source !== "stated" && body.confidence_source !== "inferred") {
-      return json({ ok: false, error: 'confidence_source must be "stated" or "inferred"' }, 400);
-    }
-    if (body.review_by !== undefined && typeof body.review_by !== "string") return json({ ok: false, error: "review_by must be a string" }, 400);
-    if (body.owed_by !== undefined && typeof body.owed_by !== "string") return json({ ok: false, error: "owed_by must be a string" }, 400);
-    if (body.owed_to !== undefined && typeof body.owed_to !== "string") return json({ ok: false, error: "owed_to must be a string" }, 400);
+    // Every T7 field's type/range is checked here, unconditionally, before anything below
+    // branches on `decision` or reads a field under a different path (the class of bug a
+    // cross-vendor review found: decision:true skipped `when`'s own type guard and crashed
+    // parseExplicitWhen with a 500 instead of a 400).
+    const restFieldError = validateT7RestFields(body);
+    if (restFieldError) return json({ ok: false, error: restFieldError.error }, 400);
     const t7Input: T7CaptureInput = {
       standing: body.standing === undefined ? undefined : !!body.standing,
       decision: body.decision === undefined ? undefined : !!body.decision,

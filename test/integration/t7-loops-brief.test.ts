@@ -131,6 +131,20 @@ describe("dashboard brief aggregate and preview", () => {
     expect(ready.calibration?.ready).toBe(true);
     expect(ready.calibration?.n).toBe(10);
   });
+
+  it("excludes deprecated rows from decisions_resolved (NIT, review)", async () => {
+    for (let i = 0; i < 10; i++) {
+      sqlite.db.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, ?, 'api', ?, '[]', ?, ?)`,
+      ).bind(`r${i}`, "x", JSON.stringify(["ledger:decision", "outcome:right", "confidence:0.70", "confidence-source:stated"]), 1000, owner.personalWorkspaceId, owner.userId).run();
+    }
+    sqlite.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, ?, 'api', ?, '[]', ?, ?)`,
+    ).bind("dep1", "x", JSON.stringify(["ledger:decision", "outcome:right", "status:deprecated"]), 1000, owner.personalWorkspaceId, owner.userId).run();
+
+    const brief = await computeBrief(env, owner, true);
+    expect(brief.calibration?.n).toBe(10);
+  });
 });
 
 describe("MCP brief: decisions due for review, You owe, Owed to you", () => {
