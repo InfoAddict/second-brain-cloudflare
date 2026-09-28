@@ -108,7 +108,7 @@ describe("POST /undo maps every revertEntry result to its status and body", () =
   it("not_found: 404, the same text GET /entry would give for a missing id", async () => {
     const res = await restUndo("nope");
     expect(res.status).toBe(404);
-    expect(await res.json()).toMatchObject({ ok: false, error: "No entry found with ID: nope" });
+    expect(await res.json()).toMatchObject({ ok: false, error: "No memory found with ID: nope" });
   });
 
   it("forbidden: 403, the author-lock message, and nothing is written", async () => {
@@ -194,7 +194,7 @@ describe("MCP undo returns the specified sentence for every result", () => {
   });
 
   it("not_found", async () => {
-    expect(await mcpUndo(owner, "nope2")).toBe("No entry found with ID: nope2");
+    expect(await mcpUndo(owner, "nope2")).toBe("No memory found with ID: nope2");
   });
 
   it("forbidden", async () => {
@@ -222,7 +222,7 @@ describe("MCP undo returns the specified sentence for every result", () => {
     seed("f2", { content: "before" });
     await updateEntryContent(env, "f2", "after", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, { actorId: owner.userId, channel: "mcp" }, owner.personalWorkspaceId);
     (env.AI as any).run = vi.fn(async () => { throw new Error("AI down"); });
-    expect(await mcpUndo(owner, "f2")).toBe("Couldn't update entry f2: search re-index failed. Your memory is unchanged; try again.");
+    expect(await mcpUndo(owner, "f2")).toBe("Couldn't update memory f2: search did not update. The memory is unchanged. Try again.");
   });
 });
 
@@ -419,7 +419,7 @@ describe("not_found tells a caller who could read a row why it is gone, and only
     expect(res.status).toBe(404);
     const body = await res.json() as any;
     expect(body.gone).toBeUndefined();
-    expect(body.error).toBe("No entry found with ID: gone-stranger");
+    expect(body.error).toBe("No memory found with ID: gone-stranger");
   });
 
   it("MCP gives the same cause in its sentence", async () => {

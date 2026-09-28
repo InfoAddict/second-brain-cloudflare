@@ -135,13 +135,13 @@ describe("MCP HTTP handler (/mcp)", () => {
     });
 
     it("leaves an unrelated tool error untouched", async () => {
-      vi.mocked(createMcpHandler).mockReturnValue((() => Promise.resolve(toolErrorResponse("No entry found with ID: e1"))) as never);
+      vi.mocked(createMcpHandler).mockReturnValue((() => Promise.resolve(toolErrorResponse("No memory found with ID: e1"))) as never);
       const res = await handler.fetch(
         mcpPost({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "get", arguments: { id: "e1" } } }),
         env, ctx,
       );
       const payload = await res.json() as any;
-      expect(payload.result.content[0].text).toBe("No entry found with ID: e1");
+      expect(payload.result.content[0].text).toBe("No memory found with ID: e1");
     });
   });
 });

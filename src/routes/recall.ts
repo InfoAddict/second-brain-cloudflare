@@ -277,7 +277,7 @@ Be specific and complete. Concision means leaving out filler, never leaving out 
         project: rows,
       });
       if (!projectResult.synthesizedId) {
-        return json({ project: slug, error: "Could not create digest — project may have fewer than 10 eligible entries or was recently compressed", source_count: projectResult.entriesUsed });
+        return json({ project: slug, error: "Could not create digest: the project may have fewer than 10 eligible entries, or it was recently compressed.", source_count: projectResult.entriesUsed });
       }
       return json({ project: slug, synthesis: projectResult.text, entry_id: projectResult.synthesizedId, source_count: projectResult.entriesUsed });
     }
@@ -287,7 +287,7 @@ Be specific and complete. Concision means leaving out filler, never leaving out 
     });
 
     if (!result.synthesizedId) {
-      return json({ tag, error: "Could not create digest — tag may have fewer than 10 eligible entries or was recently compressed", source_count: result.entriesUsed });
+      return json({ tag, error: "Could not create digest: the tag may have fewer than 10 eligible entries, or it was recently compressed.", source_count: result.entriesUsed });
     }
 
     return json({ tag, synthesis: result.text, entry_id: result.synthesizedId, source_count: result.entriesUsed });

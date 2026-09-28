@@ -1431,7 +1431,7 @@ export async function handleAdminRoutes(
     // The single-id form keeps its precise errors, because a client asking about
     // one pattern can act on "not found" and the bulk form cannot.
     if (body.ids === undefined) {
-      if (!found.length) return json({ ok: false, error: `No entry found with ID: ${ids[0]}` }, 404);
+      if (!found.length) return json({ ok: false, error: `No memory found with ID: ${ids[0]}` }, 404);
       if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-insight")) {
         return json({ ok: false, error: "Entry is not a derived insight" }, 400);
       }

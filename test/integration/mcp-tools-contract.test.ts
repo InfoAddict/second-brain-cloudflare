@@ -428,7 +428,8 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
       // T-0089.1.2: forget moves to the trash, so it no longer claims to be permanent or unrecoverable.
       expect(forget).not.toMatch(/cannot be undone|permanently/i);
       expect(forget).toMatch(/trash/i);
-      expect(forget).toMatch(/removed for good after the retention period \(14 days/i);
+      expect(forget).toMatch(/retention period \(14 days/i);
+      expect(forget).toMatch(/undo brings it back/i);
     });
   });
 

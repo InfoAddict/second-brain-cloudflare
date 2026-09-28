@@ -54,7 +54,7 @@ describe("set_status reply names the meaning", () => {
     const id = "e-deprecated";
     sqlite.seed({ id, content: "some fact", createdAt: Date.now() });
     const text = await call("set_status", { id, status: "deprecated" });
-    expect(text).toBe(`Marked entry ${id} as wrong: it is hidden from recall and kept in its history. Undo is available.`);
+    expect(text).toBe(`Marked memory ${id} as wrong: it is hidden from recall and kept in its history. Undo is available.`);
   });
 
   it("canonical: marks it trusted", async () => {
