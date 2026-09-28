@@ -88,6 +88,7 @@ const OWNED_FILES = new Set([
   "src/recall/render.ts",
   "src/recall/validity-view.ts",
   "src/recall/keyword-rows.ts",
+  "src/recall/as-of.ts",
   "src/routes/recall.ts",
   "src/graph/traverse.ts",
   "src/when/input.ts",
@@ -106,9 +107,9 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   "src/brief/compute.ts": [110, 118, 127, 142, 344, 347],
   "src/compression/digest.ts": [145, 183, 257, 286, 296],
   "src/insight/weekly.ts": [354],
-  "src/mcp/server.ts": [489],
-  "src/routes/admin.ts": [609, 622, 634, 659, 732, 757, 806, 855, 860, 995, 1002, 1118, 1124, 1430, 1521, 1551, 1663],
-  "src/routes/entries.ts": [40, 62, 93],
+  "src/mcp/server.ts": [520],
+  "src/routes/admin.ts": [609, 622, 634, 659, 732, 757, 806, 855, 860, 999, 1006, 1122, 1128, 1434, 1525, 1555, 1667],
+  "src/routes/entries.ts": [41, 63, 94],
 };
 
 /**

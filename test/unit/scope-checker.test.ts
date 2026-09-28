@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (218 queries, 114 exceptions, 27 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (222 queries, 114 exceptions, 30 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1469,7 +1469,11 @@ describe("the checker over the real source tree", () => {
     // T-0089.2.1 lane A's supersede/retraction/cascade/updateEntryValidity scope-checked and scope-exempt
     // sites) are independently-tracked deltas from the same base — recomputed against the real scanner
     // output after combining rather than hand-reconciling the two.
-    ).toEqual({ queries: 220, exempt: 114, checked: 28, outerJoin: 1 });
+    // Deliberate: +2 queries, +2 scope-checked (220/114/28 -> 222/114/30) for Task B3 (src/recall/as-of.ts):
+    // the belief batch's two UNION branches are each scoped in JS (sScope/eScope ternaries the lexer
+    // cannot see); the entry_versions subqueries and the edges join ride on s.id/e.id, already-scoped
+    // by those same clauses.
+    ).toEqual({ queries: 222, exempt: 114, checked: 30, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

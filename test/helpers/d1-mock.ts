@@ -1105,11 +1105,11 @@ export class D1Mock {
             });
           return { results };
         }
-        if (s.includes("SELECT id, tags, valid_until FROM entries WHERE id IN")) {
-          // expandGraph deprecation and validity check (T-0089.2.1).
+        if (s.includes("SELECT id, tags, valid_from, valid_until, created_at FROM entries WHERE id IN")) {
+          // expandGraph deprecation and validity check (T-0089.2.1/2.2).
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, tags: e.tags, valid_until: e.valid_until ?? null }));
+            .map((e: any) => ({ id: e.id, tags: e.tags, valid_from: e.valid_from ?? null, valid_until: e.valid_until ?? null, created_at: e.created_at }));
           return { results };
         }
         if (s.includes("SELECT id, content, tags, source, created_at, valid_until FROM entries WHERE id IN") && !s.includes("tags NOT LIKE")) {
