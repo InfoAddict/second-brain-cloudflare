@@ -16,7 +16,7 @@ import { getTrashedEntry, restoreEntry } from "./trash";
 import { isManagedMirror, mirrorRestoreWarning } from "../integrations/mirror";
 import {
   buildCasGuard, canRevert, changesOf, loadHistory, ownSnapshotLandedSql, pruneStatement, snapshotStatement, Params,
-  type VersionRow, type WhenChange,
+  type StateChange, type VersionRow, type WhenChange,
 } from "./versions";
 
 export type UndoResult =
@@ -49,10 +49,11 @@ export type UndoResult =
 interface EntryRow {
   id: string; workspace_id: string; actor_id: string; content: string; tags: string; source: string;
   vector_ids: string; when_at: number | null; when_kind: string | null; when_source: string | null; when_label: string | null;
+  valid_from: number | null; valid_until: number | null;
   content_bytes: number; tags_bytes: number;
 }
 
-const ENTRY_COLUMNS = "id, workspace_id, actor_id, content, tags, source, vector_ids, when_at, when_kind, when_source, when_label, "
+const ENTRY_COLUMNS = "id, workspace_id, actor_id, content, tags, source, vector_ids, when_at, when_kind, when_source, when_label, valid_from, valid_until, "
   + "length(CAST(content AS BLOB)) AS content_bytes, length(CAST(tags AS BLOB)) AS tags_bytes";
 
 /** Which merge (by its version seq) a re-created row's fact came from. No content, no owner fields:
@@ -69,6 +70,8 @@ const whenEqual = (a: WhenChange, b: WhenChange) =>
   && (a.when_kind ?? null) === (b.when_kind ?? null)
   && (a.when_source ?? null) === (b.when_source ?? null)
   && (a.when_label ?? null) === (b.when_label ?? null);
+const validityEqual = (a: StateChange, b: StateChange) =>
+  (a.valid_from ?? null) === (b.valid_from ?? null) && (a.valid_until ?? null) === (b.valid_until ?? null);
 const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
 
 /**
@@ -207,7 +210,7 @@ export async function revertEntry(
   const restoredTagsRaw: string[] = JSON.parse(target.tags);
   const restoredTags = isPerson ? withUserEditMarker(restoredTagsRaw) : restoredTagsRaw;
 
-  const targetState = JSON.parse(target.state || "{}") as WhenChange;
+  const targetState = JSON.parse(target.state || "{}") as StateChange;
   const targetMeta = JSON.parse(target.meta || "{}") as Record<string, unknown>;
 
   /**
@@ -269,11 +272,21 @@ export async function revertEntry(
     ? { when_at: targetState.when_at ?? null, when_kind: targetState.when_kind ?? null, when_source: targetState.when_source ?? null, when_label: targetState.when_label ?? null }
     : undefined;
 
+  // Validity (T-0089.2.1), by the same rule: a validity version, a revert that restored it (a redo),
+  // or a full rollback. Only from a state that recorded the keys: a version written before Track 2
+  // has none, and its columns are then left alone rather than read as "open since created_at".
+  const recordsValidity = "valid_until" in targetState;
+  const restoreValidity = recordsValidity && (toVersion !== undefined || target.reason === "validity" || targetMeta.validity === true);
+  const nextValidity: StateChange | undefined = restoreValidity
+    ? { valid_from: targetState.valid_from ?? null, valid_until: targetState.valid_until ?? null }
+    : undefined;
+
   const currentWhen: WhenChange = { when_at: row.when_at, when_kind: row.when_kind, when_source: row.when_source, when_label: row.when_label };
   const contentChanged = restoredContent !== row.content;
   const tagsChanged = sortedTagJson(restoredTags) !== sortedTagJson(JSON.parse(row.tags));
   const whenChanged = restoreWhen && !whenEqual(nextWhen!, currentWhen);
-  if (!contentChanged && !tagsChanged && !whenChanged) return { status: "no_change" };
+  const validityChanged = restoreValidity && !validityEqual(nextValidity!, { valid_from: row.valid_from, valid_until: row.valid_until });
+  if (!contentChanged && !tagsChanged && !whenChanged && !validityChanged) return { status: "no_change" };
 
   const currentStatus = getStatus(JSON.parse(row.tags));
   const targetStatus = getStatus(restoredTagsRaw);
@@ -309,6 +322,9 @@ export async function revertEntry(
   const whenSet = restoreWhen
     ? `, when_at = ${p.add(nextWhen!.when_at ?? null)}, when_kind = ${p.add(nextWhen!.when_kind ?? null)}, when_source = ${p.add(nextWhen!.when_source ?? null)}, when_label = ${p.add(nextWhen!.when_label ?? null)}`
     : "";
+  const validitySet = restoreValidity
+    ? `, valid_from = ${p.add(nextValidity!.valid_from ?? null)}, valid_until = ${p.add(nextValidity!.valid_until ?? null)}`
+    : "";
   const vectorIdsSet = nextVectorIds !== undefined ? `, vector_ids = ${p.add(nextVectorIds)}` : "";
   // Round 6: replacing vector_ids also pins the value this undo read, so the row decides which upload
   // won and the old ids retired below are exactly the ones this commit replaced.
@@ -317,7 +333,7 @@ export async function revertEntry(
   // updated_at clamped strictly past its own previous value (the digest mark guard trusts it
   // plus byte length; a same-millisecond, same-length revert with no clamp would leave it unmoved).
   // versioning: snapshot
-  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = MAX(${p.add(now)}, COALESCE(e.updated_at, e.created_at) + 1)${vectorIdsSet}${whenSet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)}${vectorIdsGuard} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
+  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = MAX(${p.add(now)}, COALESCE(e.updated_at, e.created_at) + 1)${vectorIdsSet}${whenSet}${validitySet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)}${vectorIdsGuard} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
   // Embedded before the batch, like the main content above, so the insert below can carry its own
   // vector_ids the way restoreEntry does (U14). Each insert is guarded by the SAME "this request's own
@@ -366,10 +382,11 @@ export async function revertEntry(
   // above already carries — no extra statement — the same margin the merge writer uses (1024 bytes).
   const contentIsFullCopy = contentChanged
     && !(restoredContent.startsWith(row.content) && !row.content.includes("\0") && !restoredContent.includes("\0"));
-  const projectedStateBytes = utf8Bytes(JSON.stringify({ when_at: row.when_at, when_kind: row.when_kind, when_source: row.when_source, when_label: row.when_label }));
+  const projectedStateBytes = utf8Bytes(JSON.stringify({ when_at: row.when_at, when_kind: row.when_kind, when_source: row.when_source, when_label: row.when_label, valid_from: row.valid_from, valid_until: row.valid_until }));
   const metaCandidate = {
     nonce, target_seq: target.seq, reverted_reason: target.reason,
     ...(restoreWhen ? { when: true } : {}),
+    ...(restoreValidity ? { validity: true } : {}),
     ...(recreatedForMeta.length ? { recreated_incoming: recreatedForMeta } : {}),
   };
   const projectedRowBytes = (contentIsFullCopy ? row.content_bytes : 0) + row.tags_bytes + projectedStateBytes + utf8Bytes(JSON.stringify(metaCandidate)) + 1024;
@@ -389,7 +406,7 @@ export async function revertEntry(
       snapshotStatement(env, {
         entryId: id, reason: "revert", change,
         content: contentChanged ? { kind: "next", content: restoredContent } : { kind: "unchanged" },
-        nextTags: restoredTags, nextWhen, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
+        nextTags: restoredTags, nextWhen, nextState: nextValidity, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
         // Recorded whenever this revert restores the date, so a later undo of THIS version (a redo)
         // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
         // recreated_incoming carries only ids and which merge each belongs to (never content, never

@@ -21,7 +21,12 @@ export type EntryEventName =
   | "insight_dismissed"
   | "reverted"
   | "restored"
-  | "purged";
+  | "purged"
+  // Track 2 (T-0089.2.1, T-0089.2.4): a supersede closed this row's window, a retraction or an
+  // explicit write moved it, or a retraction flagged a memory built on the retracted one.
+  | "superseded"
+  | "validity_changed"
+  | "flagged";
 
 /** Where a change came from. Recorded on every version and on the events the domain layer writes. */
 export type AuditChannel = "rest" | "mcp" | `system:${string}` | "unspecified";

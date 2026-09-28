@@ -103,7 +103,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/entries/import.ts', line: 33, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 96, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 148, kind: 'snapshot' },
-  { file: 'src/lib/team-admin.ts', line: 591, kind: 'hard-delete' },
+  // MOVED 591 -> 592 (T-0089.2.1): the retraction-exempt marker above it.
+  { file: 'src/lib/team-admin.ts', line: 592, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
   { file: 'src/memory/actions.ts', line: 64, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 107, kind: 'snapshot' },
@@ -118,8 +119,11 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // REMOVED trash.ts:760 (T-0089.1.1 close-out): deleteForever no longer deletes a live entry at all;
   // it acts only on a trash row pinned by nonce.
   // MOVED 312 -> 316, 348 -> 352 (T-0089.1.1 round 2): revertEntry takes an optional trash nonce; same sites.
-  { file: 'src/memory/undo.ts', line: 320, kind: 'snapshot' },
-  { file: 'src/memory/undo.ts', line: 356, kind: 'exempt' },
+  // MOVED 320 -> 336, 356 -> 372 (T-0089.2.1): revertEntry restores the validity window too.
+  { file: 'src/memory/undo.ts', line: 336, kind: 'snapshot' },
+  { file: 'src/memory/undo.ts', line: 372, kind: 'exempt' },
+  // NEW (T-0089.2.1): the supersede UPDATE (validity window closed; its validity snapshot rides in the same batch).
+  { file: 'src/memory/validity.ts', line: 90, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },
@@ -154,6 +158,11 @@ const HYGIENE_EXEMPT = new Set([
   "src/capture/entry.ts:413", "src/capture/entry.ts:504",
 ]);
 
+const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");
+/** A SET of tags, a when_* column, or a validity column (T-0089.2.1): state undo must be able to restore. */
+const undoableStateWrite = (sql: string) =>
+  /\btags\s*=/i.test(setClause(sql)) || /\bwhen_(at|kind|label|source)\s*=/i.test(setClause(sql)) || /\bvalid_(from|until)\s*=/i.test(setClause(sql));
+
 describe("write-path inventory guard", () => {
   const sites = scanInventory();
 
@@ -179,14 +188,21 @@ describe("write-path inventory guard", () => {
     }
   });
 
-  it("every REST- or MCP-reachable write of tags or when_* is marked snapshot, trash or hard-delete", () => {
-    const setClause = (sql: string) => (/\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql)?.[1] ?? "");
-    const tagsOrWhenWrites = sites.filter(s => /\btags\s*=/i.test(setClause(s.sql)) || /\bwhen_(at|kind|label|source)\s*=/i.test(setClause(s.sql)));
+  it("every REST- or MCP-reachable write of tags, when_* or valid_* is marked snapshot, trash or hard-delete", () => {
+    const tagsOrWhenWrites = sites.filter(s => undoableStateWrite(s.sql));
     const reachable = tagsOrWhenWrites.filter(s => !HYGIENE_EXEMPT.has(`${s.file}:${s.line}`));
     expect(reachable.length).toBeGreaterThan(0);
     for (const s of reachable) {
       expect(["snapshot", "trash", "hard-delete"], `${s.file}:${s.line}`).toContain(s.markerKind);
     }
+  });
+});
+
+describe("undoable state writes", () => {
+  it("the inventory rule requires a snapshot marker on any SET of valid_from or valid_until", () => {
+    expect(undoableStateWrite(`UPDATE entries AS e SET valid_until = ?1 WHERE e.id = ?2`)).toBe(true);
+    expect(undoableStateWrite(`UPDATE entries SET valid_from = ?, valid_until = ? WHERE id = ?`)).toBe(true);
+    expect(undoableStateWrite(`UPDATE entries SET recall_count = 1 WHERE valid_until IS NULL`)).toBe(false);
   });
 });
 
