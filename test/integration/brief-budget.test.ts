@@ -19,6 +19,8 @@ import { req } from "../helpers/make-request";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { setDbReady } from "../../src/runtime/state";
 import type { Env } from "../../src/env";
+import { computeAgentBrief, computeLeanBrief } from "../../src/brief/compute";
+import type { Identity } from "../../src/lib/identity";
 
 let sq: SqliteD1 | null = null;
 afterEach(() => { sq?.close(); sq = null; setDbReady(false); });
@@ -56,6 +58,7 @@ function envOf(s: SqliteD1): Env {
   return makeTestEnv(dbOf(s) as any);
 }
 
+const MIN = 60_000;
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
 
@@ -82,30 +85,32 @@ describe("GET /brief", () => {
     const res = await worker.fetch(req("GET", "/brief"), envOf(sq), ctx);
     expect(res.status).toBe(200);
 
-    // Seven reads — six run concurrently (sources, patterns, activity,
-    // topics, the attention+loops aggregate, the loops preview), the
-    // resurface pick runs after (it needs the topics query's own result) —
-    // plus v3's fixed identity cost on this first request against a fresh
-    // database: one token→identity join, and the one-time tenant bootstrap
-    // (two lookups + one provisioning batch — memoised per database, so
-    // later app opens pay only the join). 7 + 1 + 3 = 11.
+    // Eight reads — seven run concurrently (sources, patterns, activity,
+    // topics, the attention+loops aggregate, the loops preview, the changes
+    // query), the resurface pick runs after (it needs the topics query's own
+    // result) — plus v3's fixed identity cost on this first request against a
+    // fresh database: one token→identity join, and the one-time tenant
+    // bootstrap (two lookups + one provisioning batch — memoised per
+    // database, so later app opens pay only the join). 8 + 1 + 3 = 12.
     //
     // The seventh concurrent read is the open-loops preview added in Task A
     // (brief v2): the count is free (folded into the attention aggregate),
-    // but its three preview rows cost their own SELECT. The resurface pick
-    // itself is exactly one query here because this fixture has no topic
-    // tags, so Task B's topic-preference probe never runs (see
-    // src/routes/brief.ts's pickResurface) — a brain with topics pays one
-    // query more on the days it picks fresh. If any of this goes up further,
-    // the endpoint got more expensive for every user on every app open —
-    // that is the decision this assertion asks you to make deliberately.
+    // but its three preview rows cost their own SELECT. The eighth is the S2
+    // "what AI tools changed" query (T-0089.4.3, 5.8's own Budget note: 11 →
+    // 12 cold, deliberate). The resurface pick itself is exactly one query
+    // here because this fixture has no topic tags, so Task B's
+    // topic-preference probe never runs (see src/routes/brief.ts's
+    // pickResurface) — a brain with topics pays one query more on the days it
+    // picks fresh. If any of this goes up further, the endpoint got more
+    // expensive for every user on every app open — that is the decision this
+    // assertion asks you to make deliberately.
     //
     // This is the COLD path: `users.last_used_at` is NULL on a brain nobody has
-    // authenticated against, so this request does owe the stamp. It is still 11,
+    // authenticated against, so this request does owe the stamp. It is still 12,
     // because the stamp is batched with the identity read rather than issued on
     // its own — a D1 batch is one subrequest whatever it carries. The write
     // really happens; the assertion below proves it landed.
-    expect(sq.issued).toHaveLength(11);
+    expect(sq.issued).toHaveLength(12);
     const stamped = await sq.db
       .prepare(`SELECT last_used_at FROM users WHERE last_used_at IS NOT NULL`)
       .first() as { last_used_at: number } | null;
@@ -134,11 +139,12 @@ describe("GET /brief", () => {
     const res = await worker.fetch(req("GET", "/brief"), env, ctx);
 
     expect(res.status).toBe(200);
-    // Seven reads and the identity batch. The bootstrap the first open paid for
+    // Eight reads and the identity batch (S2's changes query counted the same as
+    // every other concurrent read here). The bootstrap the first open paid for
     // is gone, and the stamp inside that batch is now a no-op the throttle
     // skips — the statement is still carried, but it matches no row and writes
     // nothing.
-    expect(sq.issued).toHaveLength(8);
+    expect(sq.issued).toHaveLength(9);
     expect(cold).toBeGreaterThan(sq.issued.length);
     expect(await stampedAt()).toBe(first);
   });
@@ -337,5 +343,73 @@ describe("GET /brief", () => {
     expect(data.loops.items).toHaveLength(3);
     expect(data.loops.items.map((i: any) => i.id)).toEqual(["t0", "t1", "t2"]);
     expect(data.loops.items[0]).toMatchObject({ content: "Task 0", source: expect.any(String) });
+  });
+
+  it("GET /brief returns changes", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "e1", content: "A memory", createdAt: now - 10 * HOUR });
+    sq.db.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind("ev1", "e1", "", "held", JSON.stringify({ channel: "rest", reasons: ["instruction"] }), now - HOUR).run();
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+    expect(data.changes).toMatchObject({ window_hours: 48, count: 1, held: 1, truncated: false });
+    expect(data.changes.items).toHaveLength(1);
+    expect(data.changes.items[0]).toMatchObject({ kind: "item", event: "held", id: "e1" });
+  });
+});
+
+/** S2 (T-0089.4.3): the MCP and lean briefs, measured the same way GET /brief is above —
+ * against real SQLite, counting every D1 call. The legacy '' workspace matches sq.seed()'s
+ * default, and an admin identity reads it the same way a pre-tenancy owner does. */
+describe("MCP and lean briefs (S2)", () => {
+  const identity: Identity = { userId: "u1", role: "admin", personalWorkspaceId: "", companyWorkspaceIds: [], defaultShare: "" };
+
+  it("MCP brief prints the block without held previews", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "e1", content: "The secret plan", createdAt: now - 10 * HOUR });
+    sq.db.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind("ev1", "e1", "", "held", JSON.stringify({ channel: "rest", reasons: ["instruction"] }), now - HOUR).run();
+
+    const env = envOf(sq);
+    sq.issued.length = 0;
+    const text = await computeAgentBrief(env, ctx, identity);
+    expect(text).toContain("What AI tools changed");
+    expect(text).toContain("Held: instruction");
+    expect(text).not.toContain("The secret plan");
+    // Pinned the same way GET /brief's cold/warm counts are above: the way this regresses is by
+    // someone adding "just one more" query to a Promise.all.
+    expect(sq.issued.length).toBe(8);
+  });
+
+  it("empty changes adds no text to the MCP brief", async () => {
+    sq = await migrated();
+    sq.seed({ id: "t1", content: "A task", createdAt: Date.now(), tags: ["task"] });
+    const text = await computeAgentBrief(envOf(sq), ctx, identity);
+    expect(text).not.toContain("What AI tools changed");
+  });
+
+  it("lean brief returns counts and groups only, never items", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    // QUARANTINE_STATUS_BURST defaults to 10 (src/config.ts): the "status" family only
+    // collapses into a group once a run reaches that length, so this seeds 10, not some
+    // smaller round number, to actually cross the real default threshold.
+    for (let i = 0; i < 10; i++) {
+      sq.seed({ id: `e${i}`, content: `Memory ${i}`, createdAt: now - i * HOUR });
+      sq.db.prepare(
+        `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).bind(`ev${i}`, `e${i}`, "u1", "status_changed", JSON.stringify({ channel: "mcp", status: "canonical" }), now - i * MIN).run();
+    }
+
+    const env = envOf(sq);
+    sq.issued.length = 0;
+    const data = await computeLeanBrief(env, ctx, identity);
+    expect(data.changes).toEqual({ count: 10, held: 0, groups: [{ family: "status", count: 10, client: null, at: expect.any(Number) }] });
+    expect((data.changes as any).items).toBeUndefined();
+    expect(sq.issued.length).toBe(5);
   });
 });

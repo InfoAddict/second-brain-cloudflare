@@ -107,7 +107,7 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // MOVED (merge of release/v4 d3b5b25c into v4/t7-c): Track 7's own reads (dueSplit/loopsSplit's
   // items+totals, now each marked directly; the standing-hydration read, now marked `any`) and
   // Track 9's dashboard aggregates shifted; recomputed against the real scanner output.
-  "src/brief/compute.ts": [116, 124, 133, 148, 465, 468],
+  "src/brief/compute.ts": [121, 129, 138, 153, 473, 476],
   // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): v4/t34-w's own class E
   // held-row exclusions and release/v4's own Track 2 lane B deltas shifted these; recomputed
   // against the real scanner output on the merged tree.

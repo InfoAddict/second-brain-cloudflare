@@ -263,10 +263,11 @@ describe("GET /brief — resurface pick query cost", () => {
     const data = await res.json() as any;
     expect(data.resurface?.id).toBe("old-topic");
 
-    // 6 parallel-batch reads + 1 identity batch + 2 resurface queries (probe,
-    // pick) = 9. The default stateless KV mock means every call re-selects
-    // fresh rather than hitting same-day stability, so this is the topic-
+    // 7 parallel-batch reads (S2, T-0089.4.3: getChanges joined the same
+    // Promise.all) + 1 identity batch + 2 resurface queries (probe, pick) =
+    // 10. The default stateless KV mock means every call re-selects fresh
+    // rather than hitting same-day stability, so this is the topic-
     // preferred branch on every request.
-    expect(sq.issued).toHaveLength(9);
+    expect(sq.issued).toHaveLength(10);
   });
 });

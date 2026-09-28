@@ -23,6 +23,7 @@ import { NOT_HELD_SQL } from "../quarantine/tags";
 import {
   excludedIds, readResurfaceState, withShown, writeResurfaceState,
 } from "../runtime/resurface-state";
+import { BRIEF_CHANGES_WINDOW_HOURS, getChanges, changesToRestJson, changesToLeanJson, renderChangesText } from "./changes";
 
 /** Yesterday and today, so an early-morning open still has something to show. */
 const RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -108,8 +109,12 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
   const since = now - RECENT_WINDOW_MS;
   const resurfaceBefore = now - RESURFACE_MIN_AGE_MS;
   const today = dayNumber(now);
+  // Resolved once, up front (S2, T-0089.4.3): getChanges needs it too, and computing it here
+  // instead of at its old spot below (once decisionsResolved was known) saves the second
+  // resolveConfig call that would otherwise cost every brief its own KV read.
+  const cfg = await resolveConfig(env);
 
-  const [recentRows, patternRows, activityRows, topicRows, attentionRow, loopItemRows] = await Promise.all([
+  const [recentRows, patternRows, activityRows, topicRows, attentionRow, loopItemRows, changesResult] = await Promise.all([
     // What arrived, and from where. Grouped rather than listed: the point is
     // "your brain grew, from these places", not another feed of rows.
     env.DB.prepare(
@@ -207,6 +212,9 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
        ) WHERE rn <= 3
        ORDER BY direction, rn`,
     ).bind(...scope.bindings).all(),
+
+    // What AI tools changed (S2, T-0089.4.3, 5.8): +1 statement, deliberately (spec Budget note).
+    getChanges(env, auth, BRIEF_CHANGES_WINDOW_HOURS, cfg),
   ]);
 
   const bySource = (recentRows.results as { source: string | null; n: number }[]).map(r => ({
@@ -282,7 +290,6 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
   // C11: gated on the aggregate's own decisions_resolved column, so the calibration read costs
   // nothing until the brain actually has enough resolved decisions to say anything with it.
   const decisionsResolved = (attentionRow?.decisions_resolved as number) ?? 0;
-  const cfg = await resolveConfig(env);
   let calibration: { ready: boolean; line: string; n: number } | undefined;
   if (decisionsResolved >= cfg.CALIBRATION_MIN_N) {
     const calibScope = briefWorkspaceScope(auth);
@@ -325,6 +332,7 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
       items: loopItems,
     },
     owed_to_me: (attentionRow?.owed_to_me as number) ?? 0,
+    changes: changesToRestJson(changesResult),
     ...(calibration ? { calibration } : {}),
   };
 }
@@ -555,10 +563,12 @@ export async function computeAgentBrief(
   projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string,
 ): Promise<string> {
   const cfg = await resolveConfig(env);
-  const [data, standingItems, calibration] = await Promise.all([
+  const [data, standingItems, calibration, changes] = await Promise.all([
     readAgentBrief(env, auth, { parts: ["due", "loops", "stale", "insights"], projectRows, layer, teamId }),
     standingBriefItems(env, ctx, auth, projectRows, layer, teamId),
     calibrationLine(env, auth, cfg),
+    // S2, T-0089.4.3: +1 statement, deliberately (spec Budget note).
+    getChanges(env, auth, BRIEF_CHANGES_WINDOW_HOURS, cfg, layer, teamId),
   ]);
   const extraSections: string[] = [];
   if (standingItems.length) {
@@ -567,6 +577,9 @@ export async function computeAgentBrief(
   // Design brief section list: "Calibration (one line, when ready)" — omitted, not the
   // not-ready wording, when there is nothing to say yet.
   if (calibration.ready) extraSections.push(`Calibration\n${calibration.line}`);
+  // Never touches `preview` — see renderChangesText's own comment (P7).
+  const changesText = renderChangesText(changes, cfg.TIMEZONE);
+  if (changesText) extraSections.push(`What AI tools changed\n${changesText}`);
   return formatAgentBrief(data, extraSections);
 }
 
@@ -580,9 +593,11 @@ export async function computeLeanBrief(
   env: Env, ctx: { waitUntil: (p: Promise<unknown>) => void }, auth: Identity,
   projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string,
 ) {
-  const [{ due, loops, owed_to_you }, standingItems] = await Promise.all([
+  const [{ due, loops, owed_to_you }, standingItems, changes] = await Promise.all([
     readAgentBrief(env, auth, { parts: ["due", "loops"], projectRows, layer, teamId }),
     standingBriefItems(env, ctx, auth, projectRows, layer, teamId),
+    // S2, T-0089.4.3, Q-H approved: +1 statement, counts and groups only, never items (6.2).
+    getChanges(env, auth, BRIEF_CHANGES_WINDOW_HOURS, undefined, layer, teamId),
   ]);
   return {
     ok: true,
@@ -591,6 +606,7 @@ export async function computeLeanBrief(
     loops: { open: loops?.total ?? 0, items: (loops?.items ?? []).slice(0, 3).map(({ id, content }) => ({ id, content })) },
     owed_to_you: { open: owed_to_you?.total ?? 0, items: (owed_to_you?.items ?? []).slice(0, 2).map(({ id, content }) => ({ id, content })) },
     standing: { items: standingItems.map(({ id, content }) => ({ id, content })) },
+    changes: changesToLeanJson(changes),
   };
 }
 
