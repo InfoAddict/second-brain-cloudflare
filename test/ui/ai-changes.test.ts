@@ -411,6 +411,16 @@ describe("Undo all confirms, loops pages until remaining 0, reports partial resu
     expect(ctx.__toasts.at(-1)?.message).toBe("Undid 1 of 3. 2 changed since, so they were left as they are.");
   });
 
+  it("caps the loop at 12 pages and reports a partial result when the server never reaches remaining 0 (adversary finding)", async () => {
+    // Every call returns the same never-finishing page - a stub for a server
+    // bug, or a group whose membership keeps growing from under the loop.
+    const ctx = load([{ ok: true, results: [{ id: "a", result: "reverted" }], done: false, remaining: 1, group: "grouptoken" }]);
+    ctx.aiChangeGroupAction("grouptoken", "undo", 100);
+    await ctx.__confirmOpts.onConfirm(false, () => {}, () => {});
+    expect(ctx.__fetchCalls).toHaveLength(12);
+    expect(ctx.__toasts.at(-1)?.message).toBe("Undid 12 of 100. 0 changed since, so they were left as they are.");
+  });
+
   it("release-all loops the same way and confirms with the release wording", async () => {
     const ctx = load([{ ok: true, results: [{ id: "a", result: "released" }], done: true, remaining: 0, group: "grouptoken" }]);
     ctx.aiChangeGroupAction("grouptoken", "release", 1);

@@ -208,6 +208,16 @@ async function aiChangeRelease(id, btn) {
 }
 
 /**
+ * A page is 5 (UNDO_GROUP_PAGE, src/memory/undo.ts), so 12 pages covers the
+ * 50-member UNDO_GROUP_MAX cap with room to spare. A server that never
+ * reports remaining: 0 (a bug, or a group whose membership keeps growing
+ * from under the loop) must not spin the tab forever - the cap stops the
+ * loop and reports whatever was actually done as a partial result (adversary
+ * finding, S4).
+ */
+const AI_CHANGE_GROUP_MAX_PAGES = 12
+
+/**
  * Undo all / Release all: confirm (openDangerConfirm, S4's own focus trap
  * comes free from the one shared sheet), then loop POST /undo/group while
  * `remaining` > 0 (5 per page), summing done vs skipped across every page
@@ -234,8 +244,10 @@ function aiChangeGroupAction(group, kind, total, until) {
       let doneCount = 0
       let skipped = 0
       let remaining = 1
+      let pages = 0
       try {
-        while (remaining > 0) {
+        while (remaining > 0 && pages < AI_CHANGE_GROUP_MAX_PAGES) {
+          pages++
           const res = await fetch(`${WORKER_URL}/undo/group`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
@@ -256,8 +268,10 @@ function aiChangeGroupAction(group, kind, total, until) {
         // DRAFT: the copywriter's aiChanges.partial reads "Undid", which is
         // the right verb for undo-all but not for release-all's own partial
         // outcome - no distinct release-partial key exists yet, flagged.
-        if (skipped > 0) {
-          showToast(tPlural('aiChanges.partial', skipped, { done: doneCount, n: doneCount + skipped, skipped }))
+        // `remaining > 0` here covers the page cap same as a real skip: some
+        // members were never attempted, so this is a partial result too.
+        if (skipped > 0 || remaining > 0) {
+          showToast(tPlural('aiChanges.partial', skipped, { done: doneCount, n: total, skipped }))
         } else if (isRelease) {
           showToast(t('held.released'))
         } else {
