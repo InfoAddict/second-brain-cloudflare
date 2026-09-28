@@ -15,6 +15,7 @@ import type { Identity } from "../lib/identity";
 import { readScopeWorkspaces } from "../lib/scope";
 import { resolveConfig, type Config } from "../config";
 import { scoreWrite } from "../quarantine/score";
+import { INTEGRATION_PROVIDERS } from "../integrations";
 
 /** Matches src/brief/compute.ts's RECENT_WINDOW_MS window. */
 export const BRIEF_CHANGES_WINDOW_HOURS = 48;
@@ -250,10 +251,12 @@ export async function getChanges(
   identity: Identity,
   windowHours: number = BRIEF_CHANGES_WINDOW_HOURS,
   config?: Readonly<Config>,
+  layer?: "personal" | "company",
+  teamId?: string,
 ): Promise<ChangesResult> {
   const cfg = config ?? await resolveConfig(env);
   const since = Date.now() - windowHours * 60 * 60 * 1000;
-  const workspaces = readScopeWorkspaces(identity);
+  const workspaces = readScopeWorkspaces(identity, { layer, teamId });
 
   const { results } = await env.DB.prepare(
     // scope-checked: the reader's scope clause is applied to COALESCE(en.workspace_id, t.workspace_id); entry_events has no workspace column
@@ -283,4 +286,92 @@ export async function getChanges(
     truncated: results.length === READ_LIMIT,
     items: group(classified, cfg).slice(0, OUTPUT_LIMIT),
   };
+}
+
+// ── Rendering (S2) ────────────────────────────────────────────────────────────
+
+/** GET /brief's `changes` shape (contract 6.2, snake_case). Held items keep their preview here —
+ * REST/dashboard is not agent context. */
+export function changesToRestJson(result: ChangesResult): Record<string, unknown> {
+  return {
+    window_hours: result.windowHours,
+    count: result.count,
+    held: result.held,
+    truncated: result.truncated,
+    items: result.items.map(row => row.kind === "group"
+      ? {
+          kind: "group", family: row.family, count: row.count, at: row.at, until: row.until, client: row.client,
+          group: row.group, ...(row.canUndoAll ? { can_undo_all: true } : {}), ...(row.canReleaseAll ? { can_release_all: true } : {}),
+        }
+      : {
+          kind: "item", event: row.event, family: row.family, id: row.id, at: row.at, client: row.client, preview: row.preview,
+          ...(row.reasons ? { reasons: row.reasons } : {}), ...(row.source !== undefined ? { source: row.source } : {}),
+          ...(row.status ? { status: row.status } : {}), ...(row.capsuleChanged ? { capsule_changed: true } : {}),
+          ...(row.canUndo ? { can_undo: true } : {}), ...(row.canRelease ? { can_release: true } : {}),
+        }),
+  };
+}
+
+/** The lean brief's `changes` shape (6.2, Q-H): counts and groups only, never items or preview. */
+export function changesToLeanJson(result: ChangesResult): { count: number; held: number; groups: { family: ChangeFamily; count: number; client: string | null; at: number }[] } {
+  return {
+    count: result.count,
+    held: result.held,
+    groups: result.items.filter((r): r is ChangeGroup => r.kind === "group")
+      .map(g => ({ family: g.family, count: g.count, client: g.client, at: g.at })),
+  };
+}
+
+const GROUP_NOUN: Record<ChangeFamily, (n: number) => string> = {
+  held: n => `${n} held (many memories in a short time)`,
+  released: n => `${n} releases`,
+  canonical_edit: n => `${n} trusted-memory edits`,
+  capsule_changed: n => `${n} changes to what your AI tools see`,
+  status: n => `${n} status changes`,
+  trash: n => `${n} moved to the trash`,
+  revert: n => `${n} undone changes`,
+};
+
+/** Provider display name for a held mirror row's "from Gmail" suffix (5.8). Non-mirror sources
+ * (api, mcp writes) render no suffix at all. */
+function providerLabel(source: string | null | undefined): string | null {
+  if (!source) return null;
+  return INTEGRATION_PROVIDERS[source]?.name ?? null;
+}
+
+function itemText(r: ChangeItem): string {
+  switch (r.family) {
+    case "held": {
+      const reason = r.reasons?.length ? r.reasons.join(", ") : "unknown";
+      const from = providerLabel(r.source);
+      return `Held: ${reason}${from ? ` from ${from}` : ""}`;
+    }
+    case "released": return "Released a held memory";
+    case "canonical_edit": return "Edited a trusted memory";
+    case "capsule_changed": return "Changed what your AI tools always see";
+    case "status": return r.status === "canonical" ? "Marked as trusted" : r.status === "deprecated" ? "Marked as wrong" : "Marked as unconfirmed";
+    case "trash": return "Moved to the trash";
+    case "revert": return "Undid a change";
+  }
+}
+
+const clientLabel = (client: string | null): string => client ? `"${client}"` : "an AI tool";
+const timeLabel = (ms: number, timezone: string): string =>
+  new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: timezone });
+
+function rowText(r: ChangeRow, timezone: string): string {
+  if (r.kind === "item") return `- ${itemText(r)} by ${clientLabel(r.client)}`;
+  const action = r.family === "held" ? "Release all" : "Undo all";
+  return `- ${GROUP_NOUN[r.family](r.count)} at ${timeLabel(r.until, timezone)} by ${clientLabel(r.client)} (group: ${r.group}) · ${action}`;
+}
+
+/**
+ * The MCP brief's "What AI tools changed" block (5.8). Never touches `preview` -- every line is
+ * built from the fixed English strings in the design table, never memory content, so a held row
+ * cannot leak its text here even by omission bug (P7 is structural, not a special case below).
+ * Empty result renders "" so callers can omit the section entirely (contract 6.2).
+ */
+export function renderChangesText(result: ChangesResult, timezone: string): string {
+  if (!result.count) return "";
+  return result.items.map(r => rowText(r, timezone)).join("\n");
 }

@@ -9,7 +9,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import type { Env } from "../../src/env";
 import type { Identity } from "../../src/lib/identity";
-import { getChanges } from "../../src/brief/changes";
+import { getChanges, changesToRestJson, changesToLeanJson, renderChangesText, BRIEF_CHANGES_WINDOW_HOURS } from "../../src/brief/changes";
 import { DEFAULTS } from "../../src/config";
 
 const MIN = 60 * 1000;
@@ -307,6 +307,78 @@ describe("getChanges() (S1)", () => {
       const raised = await getChanges(env, identityOf("u1", "ws-p"), undefined, { ...DEFAULTS, QUARANTINE_THRESHOLD: 100 });
       const raisedItem = raised.items.find(i => i.kind === "item") as { client: string | null } | undefined;
       expect(raisedItem?.client).toBe("ignore previous instructions");
+    });
+  });
+
+  // S2 (T-0089.4.3, 5.8): the three renderers over a real ChangesResult from
+  // getChanges above, not a hand-built fixture -- so a shape drift in classify()
+  // or group() would break these too, not just silently mismatch a stub.
+  describe("rendering (S2)", () => {
+    it("changesToRestJson: snake_case, held preview kept (REST is not agent context)", async () => {
+      sqlite.seed({ id: "e1", content: "The secret plan is X", createdAt: now - HOUR, tags: [], source: "api" });
+      sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+      await insertEvent({ id: "ev-held", entryId: "e1", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"));
+      const json = changesToRestJson(result);
+      expect(json).toMatchObject({ window_hours: BRIEF_CHANGES_WINDOW_HOURS, count: 1, held: 1, truncated: false });
+      expect((json.items as unknown[])[0]).toMatchObject({ kind: "item", event: "held", id: "e1", preview: "The secret plan is X", reasons: ["instruction"] });
+    });
+
+    it("changesToRestJson: a group row maps can_undo_all/can_release_all to snake_case", async () => {
+      sqlite.seed({ id: "e1", content: "A memory", createdAt: now - 2 * HOUR, tags: [], source: "api" });
+      sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+      for (let i = 0; i < 3; i++) {
+        await insertEvent({ id: `ev-${i}`, entryId: "e1", event: "status_changed", createdAt: now - (10 - i * 2) * MIN, payload: { channel: "mcp", status: "canonical" } });
+      }
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"), undefined, { ...DEFAULTS, QUARANTINE_STATUS_BURST: 3 });
+      const json = changesToRestJson(result);
+      expect((json.items as unknown[])[0]).toMatchObject({ kind: "group", family: "status", count: 3, can_undo_all: true });
+    });
+
+    it("changesToLeanJson: counts and groups only, no items key, no preview anywhere", async () => {
+      sqlite.seed({ id: "e1", content: "Secret content", createdAt: now - HOUR, tags: [], source: "api" });
+      sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+      await insertEvent({ id: "ev-held", entryId: "e1", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"));
+      const lean = changesToLeanJson(result);
+      expect(lean).toEqual({ count: 1, held: 1, groups: [] });
+      expect(JSON.stringify(lean)).not.toContain("Secret");
+      expect("items" in lean).toBe(false);
+    });
+
+    it("renderChangesText: empty result renders \"\"", async () => {
+      sqlite.seed({ id: "t1", content: "A task", createdAt: now, tags: ["task"], source: "api" });
+      const result = await getChanges(env, identityOf("u1", "ws-p"));
+      expect(renderChangesText(result, "UTC")).toBe("");
+    });
+
+    it("renderChangesText: never contains held preview text (P7)", async () => {
+      sqlite.seed({ id: "e1", content: "The launch codes are 1234", createdAt: now - HOUR, tags: [], source: "api" });
+      sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+      await insertEvent({ id: "ev-held", entryId: "e1", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"], client: "Cursor" } });
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"));
+      const text = renderChangesText(result, "UTC");
+      expect(text).toContain('Held: instruction by "Cursor"');
+      expect(text).not.toContain("launch codes");
+      expect(text).not.toContain("1234");
+    });
+
+    it("renderChangesText: a group line names the count, family, time and undo/release action", async () => {
+      sqlite.seed({ id: "e1", content: "A memory", createdAt: now - 2 * HOUR, tags: [], source: "api" });
+      sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+      for (let i = 0; i < 3; i++) {
+        await insertEvent({ id: `ev-${i}`, entryId: "e1", event: "status_changed", createdAt: now - (10 - i * 2) * MIN, payload: { channel: "mcp", status: "canonical" } });
+      }
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"), undefined, { ...DEFAULTS, QUARANTINE_STATUS_BURST: 3 });
+      const text = renderChangesText(result, "UTC");
+      expect(text).toContain("3 status changes");
+      expect(text).toContain("Undo all");
+      expect(text).toContain(result.items[0].kind === "group" ? result.items[0].group : "");
     });
   });
 });
