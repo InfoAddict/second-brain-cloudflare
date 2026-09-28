@@ -355,8 +355,9 @@ export interface AgentBriefData {
   insights?: BriefSection;
 }
 
-/** The four agent-brief reads, each optional and each one bounded statement — due and loops
- * each split into two sections from the one partitioned statement (Design 5.3, C10). */
+/** The four agent-brief reads, each optional. stale and insights are one bounded statement each;
+ * due and loops each split into two sections, from two statements each (an items read and a
+ * separate totals aggregate — see dueSplit/loopsSplit below for why) (Design 5.3, C10). */
 export async function readAgentBrief(
   env: Env, auth: Identity,
   opts: { parts: BriefPart[]; projectRows?: ProjectRow[]; layer?: "personal" | "company"; teamId?: string },
@@ -371,44 +372,81 @@ export async function readAgentBrief(
     return { total: rows[0]?.total ?? 0, items: rows.slice(0, cap).map(({ id, content, when_at }) => ({ id, content, ...(when_at != null ? { when_at } : {}) })) };
   };
 
-  /** due (≤5) and decisions_due (≤3) from one statement, partitioned by whether the row is a
-   * logged decision (C10). A decision row's own when_at never appears under `due`. */
+  /** due (≤5) and decisions_due (≤3), partitioned by whether the row is a logged decision (C10).
+   * A decision row's own when_at never appears under `due`.
+   *
+   * Two statements, not the one window-function statement this used to be: PARTITION BY on a
+   * computed CASE (not a column) can't ride idx_entries_when's own (workspace_id, when_at)
+   * ordering, so SQLite materialized and sorted every due row to number and count each partition
+   * — a review found this reading 11,507 rows at 10k memories where 86 was enough. The items read
+   * is now a plain ORDER BY ... LIMIT per branch, which SQLite can satisfy by walking the index
+   * and stopping as soon as it has enough rows; the total is a separate, sort-free SUM/CASE
+   * aggregate over the same index (still one full pass, but a cheap one — no partition, no sort). */
   const dueSplit = async (): Promise<{ due: BriefSection; decisions_due: BriefSection }> => {
-    const { results } = await env.DB.prepare(
-      `SELECT id, content, when_at, is_decision, total FROM (
-         SELECT id, content, when_at,
-           (CASE WHEN instr(lower(tags), '"${LEDGER_TAG}"') > 0 THEN 1 ELSE 0 END) AS is_decision,
-           ROW_NUMBER() OVER (PARTITION BY (CASE WHEN instr(lower(tags), '"${LEDGER_TAG}"') > 0 THEN 1 ELSE 0 END) ORDER BY when_at ASC, id ASC) AS rn,
-           COUNT(*) OVER (PARTITION BY (CASE WHEN instr(lower(tags), '"${LEDGER_TAG}"') > 0 THEN 1 ELSE 0 END)) AS total
-         FROM entries WHERE ${DUE_SQL} AND when_at <= ? AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
-       ) WHERE (is_decision = 1 AND rn <= 3) OR (is_decision = 0 AND rn <= 5)`,
-    ).bind(now + DUE_WITHIN_MS, ...scope.bindings, ...mine.bindings).all();
-    const rows = results as unknown as { id: string; content: string; when_at: number; is_decision: number; total: number }[];
-    const toSection = (isDecision: number): BriefSection => {
+    const isDecisionSql = `instr(lower(tags), '"${LEDGER_TAG}"') > 0`;
+    const dueAt = now + DUE_WITHIN_MS;
+    const [itemsResult, totalsRow] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, content, when_at, is_decision FROM (
+           SELECT id, content, when_at, 0 AS is_decision FROM entries
+              WHERE ${DUE_SQL} AND when_at <= ? AND NOT (${isDecisionSql}) AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+              ORDER BY when_at ASC, id ASC LIMIT 5
+         )
+         UNION ALL
+         SELECT id, content, when_at, is_decision FROM (
+           SELECT id, content, when_at, 1 AS is_decision FROM entries
+              WHERE ${DUE_SQL} AND when_at <= ? AND ${isDecisionSql} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+              ORDER BY when_at ASC, id ASC LIMIT 3
+         )`,
+      ).bind(dueAt, ...scope.bindings, ...mine.bindings, dueAt, ...scope.bindings, ...mine.bindings).all(),
+      env.DB.prepare(
+        `SELECT
+           SUM(CASE WHEN NOT (${isDecisionSql}) THEN 1 ELSE 0 END) AS due_total,
+           SUM(CASE WHEN ${isDecisionSql} THEN 1 ELSE 0 END) AS decisions_due_total
+         FROM entries WHERE ${DUE_SQL} AND when_at <= ? AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}`,
+      ).bind(dueAt, ...scope.bindings, ...mine.bindings).first() as Promise<{ due_total: number; decisions_due_total: number } | null>,
+    ]);
+    const rows = itemsResult.results as unknown as { id: string; content: string; when_at: number; is_decision: number }[];
+    const toSection = (isDecision: number, total: number): BriefSection => {
       const matching = rows.filter(r => r.is_decision === isDecision);
-      return { total: matching[0]?.total ?? 0, items: matching.map(({ id, content, when_at }) => ({ id, content, when_at })) };
+      return { total, items: matching.map(({ id, content, when_at }) => ({ id, content, when_at })) };
     };
-    return { due: toSection(0), decisions_due: toSection(1) };
+    return { due: toSection(0, totalsRow?.due_total ?? 0), decisions_due: toSection(1, totalsRow?.decisions_due_total ?? 0) };
   };
 
-  /** loops (≤5, outbound, "You owe") and owed_to_you (≤5, inbound) from one statement,
-   * partitioned by direction (Design 5.3 L3). */
+  /** loops (≤5, outbound, "You owe") and owed_to_you (≤5, inbound), partitioned by direction
+   * (Design 5.3 L3). Same two-statement split as dueSplit above and for the same reason: a
+   * partitioned window read over idx_entries_task forced a full sorted scan of every open loop
+   * (11,507 rows at 10k where 86 was enough); a plain per-direction ORDER BY ... LIMIT lets the
+   * index walk stop early, with the totals taken from one sort-free aggregate. */
   const loopsSplit = async (): Promise<{ loops: BriefSection; owed_to_you: BriefSection }> => {
-    const { results } = await env.DB.prepare(
-      `SELECT id, content, is_inbound, total FROM (
-         SELECT id, content,
-           (CASE WHEN ${OWED_TO_ME_SQL} THEN 1 ELSE 0 END) AS is_inbound,
-           ROW_NUMBER() OVER (PARTITION BY (CASE WHEN ${OWED_TO_ME_SQL} THEN 1 ELSE 0 END) ORDER BY created_at DESC, id DESC) AS rn,
-           COUNT(*) OVER (PARTITION BY (CASE WHEN ${OWED_TO_ME_SQL} THEN 1 ELSE 0 END)) AS total
-         FROM entries WHERE ${TASK_INDEXED} AND ${OPEN_LOOP_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
-       ) WHERE rn <= 5`,
-    ).bind(...scope.bindings, ...mine.bindings).all();
-    const rows = results as unknown as { id: string; content: string; is_inbound: number; total: number }[];
-    const toSection = (isInbound: number): BriefSection => {
+    const [itemsResult, totalsRow] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, content, is_inbound FROM (
+           SELECT id, content, 0 AS is_inbound FROM entries
+              WHERE ${TASK_INDEXED} AND ${OPEN_OUTBOUND_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+              ORDER BY created_at DESC, id DESC LIMIT 5
+         )
+         UNION ALL
+         SELECT id, content, is_inbound FROM (
+           SELECT id, content, 1 AS is_inbound FROM entries
+              WHERE ${TASK_INDEXED} AND ${OPEN_INBOUND_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
+              ORDER BY created_at DESC, id DESC LIMIT 5
+         )`,
+      ).bind(...scope.bindings, ...mine.bindings, ...scope.bindings, ...mine.bindings).all(),
+      env.DB.prepare(
+        `SELECT
+           SUM(CASE WHEN ${OWED_TO_ME_SQL} THEN 0 ELSE 1 END) AS loops_total,
+           SUM(CASE WHEN ${OWED_TO_ME_SQL} THEN 1 ELSE 0 END) AS owed_to_you_total
+         FROM entries WHERE ${TASK_INDEXED} AND ${OPEN_LOOP_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}`,
+      ).bind(...scope.bindings, ...mine.bindings).first() as Promise<{ loops_total: number; owed_to_you_total: number } | null>,
+    ]);
+    const rows = itemsResult.results as unknown as { id: string; content: string; is_inbound: number }[];
+    const toSection = (isInbound: number, total: number): BriefSection => {
       const matching = rows.filter(r => r.is_inbound === isInbound);
-      return { total: matching[0]?.total ?? 0, items: matching.map(({ id, content }) => ({ id, content })) };
+      return { total, items: matching.map(({ id, content }) => ({ id, content })) };
     };
-    return { loops: toSection(0), owed_to_you: toSection(1) };
+    return { loops: toSection(0, totalsRow?.loops_total ?? 0), owed_to_you: toSection(1, totalsRow?.owed_to_you_total ?? 0) };
   };
 
   const stalePart = async (): Promise<BriefSection> => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
