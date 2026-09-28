@@ -116,7 +116,7 @@ async function readableAndDeprecatedAmong(
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
-): Promise<{ readable: Set<string>; deprecated: Set<string>; held: Set<string>; validUntil: Map<string, number | null> }> {
+): Promise<{ readable: Set<string>; deprecated: Set<string>; held: Set<string>; validUntil: Map<string, number | null>; effectiveFrom: Map<string, number> }> {
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
   const scopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
   // Scope bindings share the statement's bound-parameter budget with the ids.
@@ -125,14 +125,15 @@ async function readableAndDeprecatedAmong(
   const deprecated = new Set<string>();
   const held = new Set<string>();
   const validUntil = new Map<string, number | null>();
+  const effectiveFrom = new Map<string, number>();
   for (let i = 0; i < ids.length; i += take) {
     const batch = ids.slice(i, i + take);
     const ph = batch.map(() => "?").join(", ");
     // This verdict feeds both recall's current-only hops and connections/graph's include-everything view; the caller decides which to keep
     // scope-checked: scopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
-    // validity: any: valid_until rides along for whichever caller wants it; expandGraph itself decides current vs any
+    // validity: any: valid_until and valid_from ride along for whichever caller wants them; expandGraph itself decides current, as-of or any
     const { results } = await env.DB.prepare(
-      `SELECT id, tags, valid_until FROM entries WHERE id IN (${ph})${scopeSql}`
+      `SELECT id, tags, valid_from, valid_until, created_at FROM entries WHERE id IN (${ph})${scopeSql}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
     for (const r of results) {
       readable.add(r.id as string);
@@ -140,9 +141,10 @@ async function readableAndDeprecatedAmong(
       if (getStatus(tags) === "deprecated") deprecated.add(r.id as string);
       if (isHeld(tags)) held.add(r.id as string);
       validUntil.set(r.id as string, (r.valid_until as number | null | undefined) ?? null);
+      effectiveFrom.set(r.id as string, (r.valid_from as number | null | undefined) ?? (r.created_at as number));
     }
   }
-  return { readable, deprecated, held, validUntil };
+  return { readable, deprecated, held, validUntil, effectiveFrom };
 }
 
 /**
@@ -177,6 +179,11 @@ export async function expandGraph(
      */
     includeSuperseded?: boolean;
     only?: "personal" | "company"; teamId?: string;
+    /**
+     * As-of (spec 14 5.7 item 4): expand as of this moment T instead of now, and never expand a
+     * belief (a deprecated node) whatever includeDeprecated/includeSuperseded say.
+     */
+    asOf?: number;
   },
   env: Env,
   config: Readonly<Config> = DEFAULTS,
@@ -185,7 +192,7 @@ export async function expandGraph(
   const hops = Math.max(0, Math.min(config.GRAPH_MAX_HOPS, opts.hops));
   if (hops === 0 || seedIds.length === 0) return [];
   const includeSuperseded = opts.includeSuperseded ?? opts.includeDeprecated ?? false;
-  const now = Date.now();
+  const now = opts.asOf ?? Date.now();
   const fanoutCap = opts.fanoutCap ?? GRAPH_FANOUT_CAP;
   const maxNodes = opts.maxNodes ?? GRAPH_MAX_NODES;
   const scope = identity ? scopeWhereForRead(identity, { layer: opts.only, teamId: opts.teamId }) : null;
@@ -232,19 +239,26 @@ export async function expandGraph(
     // caller that also wants deprecated rows (and so, by the default above,
     // superseded ones too) has nothing to filter, so it issues no statement
     // and costs exactly what it did before tenancy (and before T-0089.2.1).
-    if (candidates.length && (identity || !opts.includeDeprecated || !includeSuperseded)) {
+    if (candidates.length && (identity || !opts.includeDeprecated || !includeSuperseded || opts.asOf !== undefined)) {
       // Held is treated exactly like deprecated (5.3): filtered whenever this
       // statement runs, never released by includeDeprecated. The one case it
       // does not cover — an identity-less caller that also wants deprecated
       // and superseded rows, where the statement is skipped entirely to cost
       // nothing beyond what a pre-tenancy caller always paid — is the
       // cron/backfill path (graph-hop-isolation.test.ts).
-      const { readable, deprecated, held, validUntil } = await readableAndDeprecatedAmong(
+      const { readable, deprecated, held, validUntil, effectiveFrom } = await readableAndDeprecatedAmong(
         [...new Set(candidates.map(c => c.id))], env, identity, opts.only, opts.teamId,
       );
       allowed = candidates
         .filter(c => {
           const until = validUntil.get(c.id) ?? null;
+          if (opts.asOf !== undefined) {
+            // Beliefs are not expanded (item 4): a deprecated node never crosses a hop, whatever
+            // includeDeprecated/includeSuperseded ask for. Validity is checked against T, not now.
+            const from = effectiveFrom.get(c.id) ?? 0;
+            return (!identity || readable.has(c.id)) && !deprecated.has(c.id)
+              && from <= now && (until === null || until > now) && !held.has(c.id);
+          }
           return (!identity || readable.has(c.id))
             && (opts.includeDeprecated || !deprecated.has(c.id))
             && (includeSuperseded || until === null || until > now)

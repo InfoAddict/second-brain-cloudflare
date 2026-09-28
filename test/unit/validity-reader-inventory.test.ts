@@ -88,6 +88,7 @@ const OWNED_FILES = new Set([
   "src/recall/render.ts",
   "src/recall/validity-view.ts",
   "src/recall/keyword-rows.ts",
+  "src/recall/as-of.ts",
   "src/routes/recall.ts",
   "src/graph/traverse.ts",
   "src/when/input.ts",
@@ -108,14 +109,14 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // Track 9's dashboard aggregates shifted; recomputed against the real scanner output.
   "src/brief/compute.ts": [116, 124, 133, 148, 465, 468],
   "src/compression/digest.ts": [145, 183, 257, 286, 296],
-  "src/insight/weekly.ts": [354],
-  // MOVED (merge 3e5961b7, release/v4 57583d10): admin.ts after line 900 +4, entries.ts +1; same queries.
-  // REMOVED mcp/server.ts:489 (T-0089.2.1 fix round): the digest tool's read now carries its own
-  // `validity: current` marker and predicate.
+  "src/insight/weekly.ts": [357],
+  // REMOVED mcp/server.ts:489 (T-0089.2.1 fix round, release/v4 d3b5b25c): the digest tool's read
+  // now carries its own `validity: current` marker and predicate.
   "src/mcp/server.ts": [],
-  // MOVED (merge of release/v4 d3b5b25c into v4/t7-c): Track 7's GET /loops direction/kind logic
-  // added lines above several of these sites; recomputed against the real scanner output.
-  "src/routes/admin.ts": [610, 623, 635, 660, 733, 758, 807, 856, 861, 1000, 1007, 1123, 1129, 1453, 1544, 1574, 1686],
+  // MOVED (merge of release/v4 c0eed34b into v4/t2-b): Track 7-C's GET /loops direction/kind logic
+  // and the decisions/commitments wiring added lines above several of these sites; recomputed
+  // against the real scanner output on the merged tree.
+  "src/routes/admin.ts": [611, 624, 636, 661, 734, 759, 808, 857, 862, 1001, 1008, 1124, 1130, 1454, 1545, 1575, 1689],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };

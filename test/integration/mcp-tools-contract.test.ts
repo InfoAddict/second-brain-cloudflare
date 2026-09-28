@@ -280,6 +280,16 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
       expect((await schemaFor("recall")).query?.description).toMatch(/resolve references/i);
     });
 
+    it("teaches as_of: what was true at a past date, corrections applied, a belief never the answer (T-0089.2.2)", async () => {
+      const recall = (await descriptions()).recall;
+      expect(recall).toMatch(/AS OF\./);
+      expect(recall).toMatch(/as_of/);
+      expect(recall).toMatch(/what was actually true then/i);
+      expect(recall).toMatch(/later corrections applied/i);
+      expect(recall).toMatch(/never the answer/i);
+      expect((await schemaFor("recall")).as_of?.description).toMatch(/past date/i);
+    });
+
     it("chooses on fit rather than on recency, score, or length", async () => {
       const recall = (await descriptions()).recall;
       expect(recall).toMatch(/most directly answers the question/i);
@@ -313,8 +323,8 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
     });
 
     it("stays short enough to work as a tool contract", async () => {
-      // 2200 before the Projects paragraph; that paragraph is the four-axis contract. 2500 before the one-sentence EXPLAIN paragraph (T-0089.5.1).
-      expect((await descriptions()).recall.length).toBeLessThan(2600);
+      // 2200 before the Projects paragraph; that paragraph is the four-axis contract. 2500 before the one-sentence EXPLAIN paragraph (T-0089.5.1). 3000 before the AS OF paragraph (T-0089.2.2).
+      expect((await descriptions()).recall.length).toBeLessThan(3000);
     });
 
     it("says when to ask for an explanation", async () => {

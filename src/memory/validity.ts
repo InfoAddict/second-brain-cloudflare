@@ -60,10 +60,14 @@ export function currentValiditySql(p: Params, alias: string, now: number): strin
  */
 export function supersededBySql(outer: string): string {
   // scope-checked: the closer s is pinned to the outer row's own workspace, which the embedding statement scopes
+  // R18 class sweep (review): a held (quarantined) row must not surface here either — it reads
+  // outside the candidate pipeline (recall's own NOT_HELD_SQL filter never runs over it), and the
+  // preview it returns is caller-facing content.
   return `CASE WHEN ${outer}.valid_until IS NULL THEN NULL ELSE (SELECT json_object('id', s.id, 'preview', substr(s.content, 1, 60))
        FROM edges g CROSS JOIN entries s ON s.id = g.source_id
       WHERE g.target_id = ${outer}.id AND g.type = 'supersedes'
         AND s.tags NOT LIKE '%"status:deprecated"%'
+        AND s.tags NOT LIKE '%"quarantine:%'
         AND s.workspace_id = ${outer}.workspace_id
         AND COALESCE(s.valid_from, s.created_at) = ${outer}.valid_until
       ORDER BY s.created_at DESC LIMIT 1) END`;

@@ -1,9 +1,18 @@
 import type { EdgeProvenance, EdgeType } from "../graph/types";
 import type { Identity } from "../lib/identity";
+import type { MemoryStatus } from "../memory/status";
 import type { EmbeddingQueryMode } from "./query-profile";
 import type { RankMultipliers } from "./math";
 import type { RootView } from "./root-selector";
 import type { SupersededBy, ValidityState } from "./validity-view";
+
+/** A deprecated memory found at as-of time T: what was believed then, later retracted (spec 14 5.7). */
+export interface RetractedBelief {
+  /** The record time of the newest version whose prior tags were not deprecated: when it was last marked wrong. */
+  retractedAt: number;
+  /** The id of the true-at-T result it replaced, when found via a `supersedes` edge; null when standalone. */
+  attachedTo: string | null;
+}
 
 export interface CompoundStaleSignal {
   count: number;
@@ -70,6 +79,19 @@ export interface RecallMatch {
   /** The live closer, when validityState is "replaced"; null otherwise. */
   supersededBy: SupersededBy | null;
   retractedSource: boolean;
+  /**
+   * As-of fields (spec 14 5.7), present only when `asOf` was set. A true-at-T result carries
+   * asOfTextChangedAt/statusAt/recordedAfterAsOf/asOfPruned/asOfTextHidden; a belief entry carries
+   * only retractedBelief.
+   */
+  asOfTextChangedAt?: number | null;
+  statusAt?: MemoryStatus | null;
+  recordedAfterAsOf?: boolean;
+  /** The oldest version history still kept ran out before reaching a row at or before T (item 6). */
+  asOfPruned?: boolean;
+  /** D-SH cut the version chain before reaching a row at or before T (item 6). */
+  asOfTextHidden?: boolean;
+  retractedBelief?: RetractedBelief | null;
 }
 
 export interface RecallSearchResult {
@@ -81,6 +103,8 @@ export interface RecallSearchResult {
   // memory has to be shortened for the response.
   queryTokens?: string[];
   compoundStale?: CompoundStaleSignal;
+  /** Present only when `asOf` was set (spec 14 5.7/5.9). */
+  asOf?: { at: number; notRecordedBefore: number | null };
 }
 
 export interface RecallDiagnostics {
@@ -177,6 +201,12 @@ export interface RecallInternalOptions {
   keywordPreRankedOverride?: boolean;
   /** Eval-only experiment switches; no route or MCP tool sets these. */
   variant?: RecallVariantFlags;
+  /**
+   * As-of recall (spec 14 5.7): what was actually true at this moment, not what is true now.
+   * Set, this skips parseTimePhrase's bounds, swaps the keyword and hydration predicates for
+   * validity-at-T, and appends retracted beliefs after every actually-true result.
+   */
+  asOf?: number;
 }
 
 export interface KeywordRow {

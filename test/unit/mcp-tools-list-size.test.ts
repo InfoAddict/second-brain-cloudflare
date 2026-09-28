@@ -7,14 +7,17 @@
  *   - Task 7 (standing/decision/commitment params on remember): 29,789 bytes,
  *     a growth of 1,335 — inside the spec's 1,600-byte budget for that task.
  *   - Task 8 (outcome/received/stop_standing on resolve): 30,423 bytes.
+ *   - merge of release/v4 c0eed34b into v4/t2-b (T7-C's decisions/commitments
+ *     tools/params plus lane B's own B4 as_of param and AS OF description
+ *     section): 32,232 bytes, moved deliberately below.
  *
- * PINNED_MAX_BYTES is an absolute ceiling with headroom for the remaining
- * Track 7 tasks, not a per-task delta budget (Task 7's own delta budget is
- * satisfied and recorded above; it does not re-apply to later tasks). A
- * change that pushes this past the ceiling should re-measure and move it
- * deliberately, with a comment naming why — the point is to catch a
- * accidental regrowth (a verbose description rewrite, a duplicated schema
- * block), not to forbid legitimate growth.
+ * PINNED_MAX_BYTES is an absolute ceiling with headroom for further growth,
+ * not a per-task delta budget (Task 7's own delta budget is satisfied and
+ * recorded above; it does not re-apply to later tasks). A change that pushes
+ * this past the ceiling should re-measure and move it deliberately, with a
+ * comment naming why — the point is to catch a accidental regrowth (a
+ * verbose description rewrite, a duplicated schema block), not to forbid
+ * legitimate growth.
  */
 import { describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -38,7 +41,7 @@ async function toolsListBytes(): Promise<number> {
   }
 }
 
-const PINNED_MAX_BYTES = 32000;
+const PINNED_MAX_BYTES = 32500;
 
 describe("tools/list size", () => {
   it("stays within the pinned byte ceiling", async () => {
