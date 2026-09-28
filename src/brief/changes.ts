@@ -13,6 +13,8 @@
 import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
 import { readScopeWorkspaces } from "../lib/scope";
+import { resolveConfig, type Config } from "../config";
+import { scoreWrite } from "../quarantine/score";
 
 /** Matches src/brief/compute.ts's RECENT_WINDOW_MS window. */
 export const BRIEF_CHANGES_WINDOW_HOURS = 48;
@@ -21,14 +23,12 @@ const READ_LIMIT = 200;
 const OUTPUT_LIMIT = 20;
 const GROUP_WINDOW_MS = 10 * 60 * 1000;
 
-/**
- * Group-collapse thresholds (5.8). The status family's mirrors Track 4's
- * QUARANTINE_STATUS_BURST default (src/config.ts, a different lane's
- * contract, not yet merged into this branch) -- reconcile the two once it
- * lands rather than importing a key that does not exist here yet.
- */
-const GROUP_THRESHOLD_STATUS = 10;
-const GROUP_THRESHOLD_OTHER = 5;
+// Group-collapse thresholds (5.8), now that Lane Q's real config keys exist
+// on this branch: the status family's threshold and every other family's
+// threshold, plus the scorer's own hold threshold for client names, are all
+// read from Config below (see thresholdFor and safeClient) rather than
+// compiled-in constants (the director's call, replacing S1's placeholder
+// 10/5 once both keys were real).
 
 export type ChangeFamily =
   | "held" | "released" | "canonical_edit" | "capsule_changed" | "status" | "trash" | "revert";
@@ -94,27 +94,19 @@ interface RawRow {
  * null (the brief renders that as "an AI tool") rather than put into agent
  * context verbatim -- a pure display-time check, no cost (5.8, Q5).
  *
- * Deliberately narrow: BE-5 accepts any DCR client_name, so this only needs
- * to catch a name shaped like an override or role-address attempt, not
- * reimplement the whole scorer (src/quarantine/score.ts, Track 4's own lane,
- * not built yet). Replace this with a real scoreWrite call once it lands --
- * see the module comment.
+ * BE-5 accepts any DCR client_name, and the brief puts names into agent
+ * context at session start, so a forged name is scored exactly like any
+ * other MCP-channel content: Lane Q's real scorer (src/quarantine/score.ts),
+ * not a local approximation of it. `mcpWritesInWindow` and
+ * `capsuleTagsChanged` are omitted on purpose -- a bare name can be neither
+ * a burst nor a capsule edit, so those signals have nothing to read here.
  */
-function clientNameIsSafe(name: string): boolean {
-  const t = name.toLowerCase();
-  return !(
-    /\b(ignore|disregard|forget|override)\s+(all\s+|any\s+)?(the\s+)?(previous|prior|above|earlier|preceding)\s+(instructions|prompts|rules|directions|messages)\b/.test(t)
-    || /\bsystem\s+(prompt|notice|message)\b/.test(t)
-    || /\byou are now\b/.test(t)
-    || /\bas an ai (assistant|model)\b/.test(t)
-  );
-}
-
-function safeClient(rawClient: unknown): string | null {
+function safeClient(rawClient: unknown, cfg: Readonly<Config>): string | null {
   if (typeof rawClient !== "string") return null;
   const name = rawClient.trim();
   if (!name) return null;
-  return clientNameIsSafe(name) ? name : null;
+  const result = scoreWrite({ content: name, tags: [], source: undefined, channel: "mcp", kind: "create" }, cfg);
+  return result.hold ? null : name;
 }
 
 function parsePayload(raw: string): Record<string, unknown> {
@@ -143,9 +135,9 @@ interface Classified {
 const STATUS_VALUES = new Set(["canonical", "draft", "deprecated"]);
 
 /** One row's classification, or null when it does not qualify for the line at all (5.8's "not listed"). */
-function classify(row: RawRow): Classified | null {
+function classify(row: RawRow, cfg: Readonly<Config>): Classified | null {
   const payload = parsePayload(row.payload);
-  const client = safeClient(payload.client);
+  const client = safeClient(payload.client, cfg);
   const base = {
     id: row.entry_id, event: row.event, actorId: row.actor_id, client,
     createdAt: row.created_at, preview: row.preview,
@@ -190,8 +182,8 @@ function groupKey(family: ChangeFamily, actorId: string, client: string | null, 
   return toBase64Url(JSON.stringify({ f: family, a: actorId, c: client, s: startMs, e: endMs }));
 }
 
-function thresholdFor(family: ChangeFamily): number {
-  return family === "status" ? GROUP_THRESHOLD_STATUS : GROUP_THRESHOLD_OTHER;
+function thresholdFor(family: ChangeFamily, cfg: Readonly<Config>): number {
+  return family === "status" ? cfg.QUARANTINE_STATUS_BURST : cfg.QUARANTINE_WRITE_BURST;
 }
 
 /**
@@ -199,7 +191,7 @@ function thresholdFor(family: ChangeFamily): number {
  * each other. `rows` must be newest-first, the order the query returns.
  * A run below its family's threshold stays as individual items.
  */
-function group(rows: Classified[]): ChangeRow[] {
+function group(rows: Classified[], cfg: Readonly<Config>): ChangeRow[] {
   const out: ChangeRow[] = [];
   let i = 0;
   while (i < rows.length) {
@@ -213,7 +205,7 @@ function group(rows: Classified[]): ChangeRow[] {
     ) j++;
     const run = rows.slice(i, j);
     const family = run[0].family;
-    if (run.length >= thresholdFor(family)) {
+    if (run.length >= thresholdFor(family, cfg)) {
       const at = run[run.length - 1].createdAt;
       const until = run[0].createdAt;
       out.push({
@@ -257,7 +249,9 @@ export async function getChanges(
   env: Env,
   identity: Identity,
   windowHours: number = BRIEF_CHANGES_WINDOW_HOURS,
+  config?: Readonly<Config>,
 ): Promise<ChangesResult> {
+  const cfg = config ?? await resolveConfig(env);
   const since = Date.now() - windowHours * 60 * 60 * 1000;
   const workspaces = readScopeWorkspaces(identity);
 
@@ -279,7 +273,7 @@ export async function getChanges(
      LIMIT 200`,
   ).bind(since, JSON.stringify(workspaces), identity.userId).all<RawRow>();
 
-  const classified = results.map(classify).filter((c): c is Classified => c !== null);
+  const classified = results.map(row => classify(row, cfg)).filter((c): c is Classified => c !== null);
   const held = classified.filter(c => c.family === "held").length;
 
   return {
@@ -287,6 +281,6 @@ export async function getChanges(
     count: classified.length,
     held,
     truncated: results.length === READ_LIMIT,
-    items: group(classified).slice(0, OUTPUT_LIMIT),
+    items: group(classified, cfg).slice(0, OUTPUT_LIMIT),
   };
 }
