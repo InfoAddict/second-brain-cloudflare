@@ -424,7 +424,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
       const projectRows = await resolveProjectArg(project, workspace, teamRead.teamId);
       if (typeof projectRows === "string") return { content: [{ type: "text", text: projectRows }] };
-      return { content: [{ type: "text", text: await computeAgentBrief(env, identity, projectRows, workspace, teamRead.teamId) }] };
+      return { content: [{ type: "text", text: await computeAgentBrief(env, ctx, identity, projectRows, workspace, teamRead.teamId) }] };
     },
   );
 

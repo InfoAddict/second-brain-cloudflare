@@ -17,6 +17,7 @@ import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
 import { OPEN_LOOP_SQL, withTaskDone, withoutTask } from "../memory/loops";
+import { OPEN_OUTBOUND_SQL, OPEN_INBOUND_SQL, directionOf, counterpartyOf, dueKindOf } from "../commitments/direction";
 import { getStatus, withStatus } from "../memory/status";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { withKind } from "../memory/kind";
@@ -1174,28 +1175,41 @@ export async function handleAdminRoutes(
     if (limit instanceof Response) return limit;
     const offset = intParam(url, "offset", { fallback: 0, min: 0 });
     if (offset instanceof Response) return offset;
+    // P7.8: defaults to "out" so every existing client (none of which send
+    // direction) keeps today's meaning, "things I owe". The dashboard asks
+    // for both explicitly.
+    const direction = url.searchParams.get("direction") ?? "out";
+    if (direction !== "out" && direction !== "in" && direction !== "all") {
+      return json({ ok: false, error: 'direction must be "out", "in" or "all"' }, 400);
+    }
+    const directionSql = direction === "out" ? OPEN_OUTBOUND_SQL : direction === "in" ? OPEN_INBOUND_SQL : OPEN_LOOP_SQL;
 
     const scope = scopeWhere(auth);
     const [rows, countRow] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, tags, source, created_at FROM entries
-         WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
+         WHERE ${directionSql} AND ${scope.clause}
          ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       ).bind(...scope.bindings, limit, offset).all(),
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${directionSql} AND ${scope.clause}`,
       ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
     ]);
 
     return json({
       ok: true,
-      entries: (rows.results as Record<string, any>[]).map(r => ({
-        id: r.id as string,
-        content: r.content as string,
-        source: r.source as string,
-        tags: parseTags(r.tags as string),
-        created_at: r.created_at as number,
-      })),
+      entries: (rows.results as Record<string, any>[]).map(r => {
+        const tags = parseTags(r.tags as string);
+        return {
+          id: r.id as string,
+          content: r.content as string,
+          source: r.source as string,
+          tags,
+          created_at: r.created_at as number,
+          direction: directionOf(tags),
+          ...(counterpartyOf(tags) ? { counterparty: counterpartyOf(tags) } : {}),
+        };
+      }),
       total: (countRow?.n as number) ?? 0,
       limit,
       offset,
@@ -1242,18 +1256,23 @@ export async function handleAdminRoutes(
     const now = Date.now();
     const upcomingBefore = now + DUE_WITHIN_MS;
 
-    const rowShape = (r: Record<string, any>) => ({
-      id: r.id as string,
-      content: (r.content as string).slice(0, DUE_CONTENT_CHARS),
-      // The nightly pass's short label when it set the when (src/when/pass.ts),
-      // else the first 80 characters of content as a fallback for the
-      // explicit/regex paths, which never generate one.
-      label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
-      tags: parseTags(r.tags as string),
-      when_at: r.when_at as number,
-      when_kind: r.when_kind as string,
-      when_source: r.when_source as string,
-    });
+    const rowShape = (r: Record<string, any>) => {
+      const tags = parseTags(r.tags as string);
+      return {
+        id: r.id as string,
+        content: (r.content as string).slice(0, DUE_CONTENT_CHARS),
+        // The nightly pass's short label when it set the when (src/when/pass.ts),
+        // else the first 80 characters of content as a fallback for the
+        // explicit/regex paths, which never generate one.
+        label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
+        tags,
+        when_at: r.when_at as number,
+        when_kind: r.when_kind as string,
+        when_source: r.when_source as string,
+        // Design 5.3: derived from tags in JS, no SQL change — rows already carry tags.
+        kind: dueKindOf(tags),
+      };
+    };
 
     const [overdueRows, overdueCount, upcomingRows, upcomingCount] = await Promise.all([
       env.DB.prepare(

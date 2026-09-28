@@ -135,7 +135,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
   // retryAfterMs rework added lines above this site; same site, shifted only.
   // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.
-  { file: 'src/routes/admin.ts', line: 1531, kind: 'exempt' },
+  // MOVED 1531 -> 1550 (Task 9, T-0089.7.1/.2/.3): GET /loops and GET /due gained direction/kind logic above this site.
+  { file: 'src/routes/admin.ts', line: 1550, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
   // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
@@ -156,7 +157,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:86", "src/staleness/pass.ts:96",
   "src/when/pass.ts:367",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1531", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1550", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   "src/capture/entry.ts:493", "src/capture/entry.ts:585",

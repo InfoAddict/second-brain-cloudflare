@@ -97,14 +97,16 @@ describe("MCP brief", () => {
     const text = await call("brief", { project: "site" });
     expect(text).toContain("Due");
     expect(text).toContain("due-0");
-    expect(text.split("Open commitments")[0]).not.toContain("due-7");
-    expect(text).toContain("Open commitments");
+    expect(text.split("You owe")[0]).not.toContain("due-7");
+    expect(text).toContain("You owe");
     expect(text).toContain("May be out of date (1)");
     expect(text).toContain("stale-1");
     expect(text).toContain("Pending insights (1)");
     expect(text).toContain("insight-1");
     expect(text).not.toContain("Other task");
-    expect(sqlite.issued).toHaveLength(5);
+    // Deliberate +1 (Task 9, C11): the full MCP brief always runs the calibration read now,
+    // reading only idx_entries_ledger rows.
+    expect(sqlite.issued).toHaveLength(6);
   });
 });
 

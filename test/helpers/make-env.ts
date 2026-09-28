@@ -66,7 +66,11 @@ export function makeTestDb() { return new D1Mock(); }
 
 export function makeKVMock(): KVNamespace {
   return {
-    get: vi.fn().mockResolvedValue(null),
+    // The real bulk form (get(keys: string[])) always returns a Map, even when
+    // empty — never null. src/standing/cache.ts's readStandingCaches relies on
+    // that platform contract; a bare mockResolvedValue(null) broke it the
+    // moment a non-standing-specific caller (the brief) started exercising it.
+    get: vi.fn(async (keyOrKeys: string | string[]) => (Array.isArray(keyOrKeys) ? new Map() : null)),
     put: vi.fn().mockResolvedValue(undefined),
     delete: vi.fn().mockResolvedValue(undefined),
     list: vi.fn().mockResolvedValue({ keys: [], list_complete: true, cacheStatus: null }),
@@ -78,7 +82,23 @@ export function makeKVMock(): KVNamespace {
 export function makeMemoryKV(): KVNamespace {
   const store = new Map<string, string>();
   return {
-    get: async (key: string) => store.get(key) ?? null,
+    // The real bulk form (get(keys: string[])) always returns a Map, even when
+    // empty — never null (see makeKVMock's identical note). `type: "json"`
+    // parses the stored string, matching real KV — callers like
+    // readStandingCaches rely on getting a parsed object back, not a string.
+    get: async (keyOrKeys: string | string[], type?: string) => {
+      const read = (k: string) => {
+        const v = store.get(k);
+        if (v === undefined) return null;
+        return type === "json" ? JSON.parse(v) : v;
+      };
+      if (Array.isArray(keyOrKeys)) {
+        const out = new Map<string, unknown>();
+        for (const k of keyOrKeys) out.set(k, read(k));
+        return out;
+      }
+      return read(keyOrKeys);
+    },
     put: async (key: string, value: string) => { store.set(key, String(value)); },
     delete: async (key: string) => { store.delete(key); },
     list: async (opts: { prefix?: string } = {}) => ({

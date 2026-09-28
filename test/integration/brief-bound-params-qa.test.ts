@@ -14,6 +14,7 @@ import type { Env } from "../../src/env";
 
 let sq: SqliteD1 | null = null;
 afterEach(() => { sq?.close(); sq = null; });
+const ctx = { waitUntil: (_: Promise<unknown>) => {} };
 
 async function measure(run: (env: Env) => Promise<unknown>) {
   sq = makeSqliteD1();
@@ -50,7 +51,7 @@ describe("brief with a 40-pattern project filter stays under D1's bound-paramete
       expect(await measure(env => computeBrief(env, admin(teams), true, [project]))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
     });
     it(`computeAgentBrief, admin in ${teams} teams`, async () => {
-      expect(await measure(env => computeAgentBrief(env, admin(teams), [project]))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
+      expect(await measure(env => computeAgentBrief(env, ctx, admin(teams), [project]))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
     });
   }
 });

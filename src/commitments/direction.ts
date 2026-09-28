@@ -6,6 +6,7 @@
  */
 import { OPEN_LOOP_SQL } from "../memory/loops";
 import { PROJECT_SLUG_RE } from "../tags/system";
+import { LEDGER_TAG } from "../tags/t7";
 
 /** Bare marker written when someone else owes the user something (owed_by on capture). */
 export const OWED_TO_ME_TAG = "owed-to-me";
@@ -49,4 +50,24 @@ export function counterpartyName(slug: string): string {
     .filter(Boolean)
     .map((word) => word[0].toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+/** The counterparty tag's display name, or undefined when the row carries none (Design 5.3). */
+export function counterpartyOf(tags: readonly string[]): string | undefined {
+  const tag = tags.find(t => t.startsWith(COUNTERPARTY_TAG_PREFIX));
+  return tag ? counterpartyName(tag.slice(COUNTERPARTY_TAG_PREFIX.length)) : undefined;
+}
+
+export type DueKind = "decision" | "inbound" | "outbound" | "other";
+
+/**
+ * GET /due's `kind` (Design 5.3), derived from tags in JS — no SQL change, since rows already
+ * carry tags. A decision review always wins the label even if it also carried a task tag
+ * (it never does in practice: decision capture and commitment capture are mutually exclusive).
+ */
+export function dueKindOf(tags: readonly string[]): DueKind {
+  if (tags.includes(LEDGER_TAG)) return "decision";
+  if (tags.includes(OWED_TO_ME_TAG)) return "inbound";
+  if (tags.includes("task")) return "outbound";
+  return "other";
 }

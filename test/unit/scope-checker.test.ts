@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (199 queries, 102 exceptions, 18 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (200 queries, 102 exceptions, 18 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1466,7 +1466,9 @@ describe("the checker over the real source tree", () => {
     // Deliberate: +1 query (198 -> 199) for Track 7 Task 7 (src/capture/entry.ts, the standing memory
     // cap check inside captureEntry): one COUNT(*) of the workspace's live standing:active rows, run
     // only for a standing capture, scoped by `workspace_id = ?`.
-    ).toEqual({ queries: 199, exempt: 102, checked: 18, outerJoin: 1 });
+    // Deliberate: +1 query (199 -> 200) for Track 7 Task 9 (src/brief/compute.ts): the full MCP
+    // brief's calibration read (calibrationQuery), scoped by workspace and the actionable clause.
+    ).toEqual({ queries: 200, exempt: 102, checked: 18, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
