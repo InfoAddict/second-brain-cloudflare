@@ -198,7 +198,7 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
          SELECT id, content, source, tags, created_at,
            (CASE WHEN ${OWED_TO_ME_SQL} THEN 'in' ELSE 'out' END) AS direction,
            ROW_NUMBER() OVER (PARTITION BY (CASE WHEN ${OWED_TO_ME_SQL} THEN 1 ELSE 0 END) ORDER BY created_at DESC, id DESC) AS rn
-         FROM entries WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
+         FROM entries WHERE ${TASK_INDEXED} AND ${OPEN_LOOP_SQL} AND ${scope.clause}
        ) WHERE rn <= 3
        ORDER BY direction, rn`,
     ).bind(...scope.bindings).all(),
