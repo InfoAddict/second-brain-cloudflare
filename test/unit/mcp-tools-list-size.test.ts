@@ -10,6 +10,8 @@
  *   - merge of release/v4 c0eed34b into v4/t2-b (T7-C's decisions/commitments
  *     tools/params plus lane B's own B4 as_of param and AS OF description
  *     section): 32,232 bytes, moved deliberately below.
+ *   - S3 (T-0089.4.3, 5.9): undo's optional `group` param plus its own
+ *     description sentence: 32,529 bytes, moved deliberately below.
  *
  * PINNED_MAX_BYTES is an absolute ceiling with headroom for further growth,
  * not a per-task delta budget (Task 7's own delta budget is satisfied and
@@ -41,7 +43,7 @@ async function toolsListBytes(): Promise<number> {
   }
 }
 
-const PINNED_MAX_BYTES = 32500;
+const PINNED_MAX_BYTES = 32600;
 
 describe("tools/list size", () => {
   it("stays within the pinned byte ceiling", async () => {

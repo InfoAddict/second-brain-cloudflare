@@ -1504,7 +1504,12 @@ describe("the checker over the real source tree", () => {
     // deltas (+1 query, +1 documented exception: restampVectorWorkspace's isHeld re-check) and lane
     // D's own Task 11/12 deltas above are independently-tracked from the same base c870e5ac —
     // recomputed against the real scanner output on the merged tree, not hand-combined.
-    ).toEqual({ queries: 233, exempt: 116, checked: 32, outerJoin: 1 });
+    // Deliberate: +4 queries, +1 documented exception, +3 scope-checked (233/116/32 -> 237/117/35)
+    // for T3/T4 lane S3 (5.9, src/memory/undo.ts): undoGroup's three per-family batched prescans
+    // each carry their own workspace_id IN (?) scope-checked comment, and lowestQualifyingVersion's
+    // single-id lookup is scope-exempt (its caller already confirmed that id is in the reader's
+    // scope, just above).
+    ).toEqual({ queries: 237, exempt: 117, checked: 35, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
