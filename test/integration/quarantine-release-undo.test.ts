@@ -114,6 +114,20 @@ describe("reembed_failed leaves the row held", () => {
     expect(r.status).toBe("reembed_failed");
     expect(isHeld(JSON.parse(String(row("h3").tags)))).toBe(true);
   });
+
+  it("Vectorize outage cannot release a hold without an embedding", async () => {
+    await seedHeldByItsOwnHold("h-outage", ["work"]);
+    const unavailable = makeVectorizeMock({
+      upsert: vi.fn().mockRejectedValue(new Error("index unavailable")),
+      describe: vi.fn().mockRejectedValue(new Error("index unavailable")),
+    });
+    const outageEnv = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: unavailable, AI: makeAIMock() });
+
+    const result = await revertEntry(outageEnv, owner, "h-outage", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
+
+    expect(result.status).toBe("reembed_failed");
+    expect(isHeld(JSON.parse(String(row("h-outage").tags)))).toBe(true);
+  });
 });
 
 describe("undo again re-holds", () => {

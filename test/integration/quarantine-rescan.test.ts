@@ -80,6 +80,47 @@ describe("the nightly rescan holds a row whose unscanned middle carries the inje
   });
 });
 
+describe("rescan compare-and-set includes vector_ids", () => {
+  it("does not clear a vector uploaded after its row read", async () => {
+    sq = await migrated();
+    sq.seed({ id: "race", content: contentWithMiddleInjection(), createdAt: 1000, tags: [NEEDS_RESCAN_TAG], vectorIds: ["old"] });
+    const base = envFor(sq);
+    let injected = false;
+    const env = { ...base, DB: {
+      ...base.DB,
+      prepare: (sql: string) => base.DB.prepare(sql),
+      batch: async (statements: D1PreparedStatement[]) => {
+        if (!injected) {
+          injected = true;
+          await base.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ?`).bind('["fresh"]', "race").run();
+        }
+        return base.DB.batch(statements);
+      },
+    } as D1Database } as Env;
+
+    const result = await runQuarantineRescan(env, { waitUntil: () => {} }, DEFAULTS);
+    const row = sq.rows().find(r => r.id === "race") as Record<string, any>;
+    expect(result.held).toBe(0);
+    expect(JSON.parse(row.vector_ids as string)).toEqual(["fresh"]);
+    expect(JSON.parse(row.tags as string)).toContain(NEEDS_RESCAN_TAG);
+  });
+});
+
+describe("long-note write boundary", () => {
+  it("does not expose an unscanned middle injection before the nightly pass", async () => {
+    sq = await migrated();
+    const env = envFor(sq);
+    const { ctx } = makeCtx();
+    const result = await captureEntry(contentWithMiddleInjection(), [], "claude", env, ctx, undefined, { workspaceId: "", actorId: "u-1" }, undefined, { channel: "mcp" });
+
+    expect(result.status).toBe("stored");
+    if (result.status !== "stored") return;
+    expect(isHeld(result.tags)).toBe(true);
+    const row = sq.rows().find(r => r.id === result.id) as Record<string, any>;
+    expect(JSON.parse(row.vector_ids as string)).toEqual([]);
+  });
+});
+
 describe("the nightly rescan clears the marker on a benign row without holding it", () => {
   it("no injection anywhere: unheld, marker gone", async () => {
     sq = await migrated();
@@ -95,5 +136,20 @@ describe("the nightly rescan clears the marker on a benign row without holding i
     const tags: string[] = JSON.parse(row.tags as string);
     expect(isHeld(tags)).toBe(false);
     expect(tags).not.toContain(NEEDS_RESCAN_TAG);
+  });
+});
+
+describe("rescan covers the entire unscored middle", () => {
+  it("does not permanently clear the marker when a second score is also partial", async () => {
+    sq = await migrated();
+    const content = "a".repeat(50_000) + INSTRUCTION_TEXT + "b".repeat(50_000);
+    sq.seed({ id: "deep-middle", content, createdAt: 1000, tags: [NEEDS_RESCAN_TAG] });
+    const env = envFor(sq);
+
+    await runQuarantineRescan(env, { waitUntil: () => {} }, DEFAULTS);
+
+    const row = sq.rows().find(r => r.id === "deep-middle") as Record<string, any>;
+    const tags: string[] = JSON.parse(row.tags as string);
+    expect(isHeld(tags) || tags.includes(NEEDS_RESCAN_TAG)).toBe(true);
   });
 });
