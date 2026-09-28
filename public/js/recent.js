@@ -459,29 +459,11 @@ function onActorFilterChange(value) {
 
 // toggleEntryLayer lives in api.js (confirm + undo toast)
 
-// A brand-new brain has nothing to recall, so the usual prompt and its
-// suggestions would all come back empty. Say where things live instead.
+// A brand-new brain has nothing to recall, so the usual suggestions would all
+// come back empty - hide them rather than offer seven dead ends.
 function showFirstRunIfEmpty(isEmpty) {
-  const welcome = document.getElementById('recall-welcome')
   const suggestions = document.querySelector('.suggestions-row')
-  if (!welcome) return
-  if (!isEmpty) {
-    if (suggestions) suggestions.style.display = ''
-    welcome.classList.remove('first-run')
-    return
-  }
-  if (suggestions) suggestions.style.display = 'none'
-  welcome.classList.add('first-run')
-  welcome.innerHTML =
-    `<div class="eyebrow">${escHtml(t('home.firstRunEyebrow'))}</div>` +
-    `<div class="hero-line">${escHtml(t('home.firstRunHero'))}</div>` +
-    `<ol class="first-run-steps">` +
-    // Named after what is on screen. This used to point at a Remember tab and a
-    // Recall tab, both of which are now the one box above.
-    `<li>${escHtml(t('home.firstRunStep1'))}</li>` +
-    `<li>${escHtml(t('home.firstRunStep2'))}</li>` +
-    `<li>${escHtml(t('home.firstRunStep3'))}</li>` +
-    `</ol>`
+  if (suggestions) suggestions.style.display = isEmpty ? 'none' : ''
 }
 
 function renderRecent(entries) {

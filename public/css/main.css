@@ -741,42 +741,12 @@
         gap: 9px;
       }
 
-      #recall-welcome {
-        gap: 10px;
-      }
-
       /* ============================================================
        CONVERSATION: .ex-q a user bubble, .ex-a an answer on paper
        ============================================================ */
       #recall-messages {
         gap: 14px;
         padding: 20px 20px 10px;
-      }
-
-      /* opening hero */
-      .recall-hero {
-        padding: 6px 0 2px;
-        animation: bubble-in 0.4s var(--ease) both;
-      }
-
-      .recall-hero .eyebrow {
-        font-size: 11px;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-        color: var(--accent-ink);
-        margin-bottom: 13px;
-      }
-
-      .recall-hero .hero-line {
-        font-family: var(--font-sans);
-        font-size: 19px;
-        line-height: 1.5;
-        color: var(--text-primary);
-        max-width: 26em;
-      }
-
-      .recall-hero .hero-line .hashtag {
-        color: var(--accent-ink);
       }
 
       /* The user's own message: a bubble with one square lower corner (the
@@ -1705,21 +1675,6 @@
         font-size: 34px;
         margin-bottom: 4px;
         color: var(--text-secondary);
-      }
-
-      .first-run-steps {
-        margin: 14px 0 0;
-        padding-left: 20px;
-        text-align: left;
-        font-family: var(--font-sans);
-        font-size: 14px;
-        line-height: 1.65;
-        color: var(--text-secondary);
-        max-width: 460px;
-      }
-
-      .first-run-steps li {
-        margin-bottom: 8px;
       }
 
       /* ============ BOTTOM SHEETS ============ */
