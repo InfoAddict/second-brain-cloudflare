@@ -177,6 +177,17 @@ describe("absent when count is 0", () => {
     expect(board.kids).toHaveLength(0);
   });
 
+  it("gates on count alone, not held or items.length lining up with it by coincidence (NIT, UI review)", () => {
+    const ctx = baseCtx();
+    run(ctx);
+    const board = ctx.document.createElement("div");
+    // A malformed/defensive shape: held and items disagree with count, which
+    // never happens from a real GET /brief (changesToRestJson always keeps
+    // them consistent) - proves the gate reads `count` and only `count`.
+    ctx.renderAiChangesPanel(board, { changes: { count: 0, held: 3, items: [itemFixture()] } });
+    expect(board.kids).toHaveLength(0);
+  });
+
   it("appends its own panel, above where Needs a decision would render, when there is something to show", () => {
     const ctx = baseCtx();
     run(ctx);
@@ -185,8 +196,17 @@ describe("absent when count is 0", () => {
     expect(board.kids).toHaveLength(1);
     const panel = board.kids[0];
     expect(panel.dataset.panel).toBe("ai-changes");
-    expect(panel.className).toContain("span4");
+    // No span4 (MINOR, UI review): that put it beside "Needs a decision" in
+    // a two-column grid at 1280, the layout the move above it was meant to
+    // avoid. Full width comes from css/ai-changes.css's own
+    // [data-panel="ai-changes"] rule instead, checked below.
+    expect(panel.className).not.toMatch(/\bspan\d+\b/);
     expect(panel.body.innerHTML).toContain("AI tools changed 3 memories");
+  });
+
+  it("is full width at every breakpoint, including 1280 (MINOR, UI review)", () => {
+    const css = readFileSync(resolve(ROOT, "public/css/ai-changes.css"), "utf8");
+    expect(css).toMatch(/\[data-panel=["']ai-changes["']\]\s*\{[^}]*grid-column:\s*span 12/);
   });
 
   it("registers before renderDecisionPanel in BOARD_PANELS, so it renders above Needs a decision", () => {
@@ -244,10 +264,10 @@ describe("expanded rows with tool name or 'an AI tool'", () => {
     expect(html).toContain("via Cursor");
   });
 
-  it("falls back to 'an AI tool' when client is null", () => {
+  it("falls back to 'via an AI tool', never bare 'an AI tool' (NIT, UI review)", () => {
     const ctx = load();
     const html = ctx.aiChangesRowsHtml({ items: [itemFixture({ client: null })] });
-    expect(html).toContain("an AI tool");
+    expect(html).toContain("via an AI tool");
   });
 
   it("labels every family correctly, including held with its reason", () => {
@@ -264,11 +284,19 @@ describe("expanded rows with tool name or 'an AI tool'", () => {
     expect(ctx.aiChangeEventLabel(itemFixture({ family: "held", reasons: ["too_long"] }))).toBe("Held: too long");
   });
 
-  it("labels a group by its family, pluralized on the group's count, then the time", () => {
+  it("labels a group as 'what · via tool · time', the same field order as item rows (UI review, S4)", () => {
     const ctx = load();
-    const html = ctx.aiChangeGroupRowHtml(groupFixture({ family: "status", count: 1 }));
+    const html = ctx.aiChangeGroupRowHtml(groupFixture({ family: "status", count: 1, client: "Cursor" }));
     expect(html).toContain("1 status change");
     expect(html).not.toContain("1 status changes");
+    const meta = html.match(/ai-change-meta">([^<]*)</)?.[1];
+    expect(meta).toBeTruthy();
+    const whatAt = meta!.indexOf("status change");
+    const toolAt = meta!.indexOf("via Cursor");
+    const timeAt = meta!.search(/\d{1,2}:\d{2}/);
+    expect(whatAt).toBeGreaterThanOrEqual(0);
+    expect(whatAt).toBeLessThan(toolAt);
+    expect(toolAt).toBeLessThan(timeAt);
 
     const many = ctx.aiChangeGroupRowHtml(groupFixture({ family: "held", count: 4, can_undo_all: undefined, can_release_all: true }));
     expect(many).toContain("4 memories held");
@@ -331,6 +359,27 @@ describe("Undo all confirms, loops pages until remaining 0, reports partial resu
     ctx.__fetchCalls = fetchCalls;
     return ctx;
   }
+
+  it("the confirm dialog's time is the group row's own until, not the moment the dialog opened (MAJOR, UI review)", () => {
+    // The bug: aiChangeGroupAction computed formatDateUI(Date.now(), ...)
+    // instead of reading the group's own `until` - the row and the dialog
+    // showed two different times whenever they were not opened in the same
+    // instant. Frozen fixture value here (not Date.now()) makes the row's
+    // own display and the dialog's own display provably the same source.
+    const until = Date.parse("2026-09-28T16:44:00.000Z");
+    const ctx = baseCtx();
+    run(ctx);
+    const group = groupFixture({ until, count: 8, can_undo_all: true });
+
+    const rowHtml = ctx.aiChangeGroupRowHtml(group);
+    const rowTime = rowHtml.match(/\d{1,2}:\d{2}\s?[AP]M/)?.[0];
+    expect(rowTime).toBeTruthy();
+
+    ctx.aiChangeGroupAction(group.group, "undo", group.count, group.until);
+    const dialogTime = ctx.document.getElementById("confirm-body").textContent.match(/\d{1,2}:\d{2}\s?[AP]M/)?.[0];
+    expect(dialogTime).toBeTruthy();
+    expect(dialogTime).toBe(rowTime);
+  });
 
   it("shows a confirm, then loops /undo/group while remaining > 0, and reports the partial result", async () => {
     const ctx = load([

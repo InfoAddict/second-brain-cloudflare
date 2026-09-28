@@ -23,8 +23,20 @@ let aiChangesData = null
 function renderAiChangesPanel(board, brief) {
   const changes = (brief && brief.changes) || null
   aiChangesData = changes
+  // Gated on `count` alone (UI review, S4, NIT: confirm this is by design,
+  // not two zero counts lining up). `count` is changesToRestJson's own
+  // "memories affected, before grouping" total (src/brief/changes.ts) - the
+  // one field that answers "did anything happen", independent of `held`
+  // (a subset of count) and unaffected by how those changes happened to
+  // group into items vs group rows.
   if (!changes || !changes.count) return
-  const panel = boardPanel('ai-changes', { title: t('aiChanges.panelTitle'), sub: t('aiChanges.panelSub'), span: 4 })
+  // Full width at 1280 (UI review, S4, MINOR): span4 put it beside "Needs a
+  // decision" in the 12-column grid, a two-column layout the UX call to move
+  // it above that panel specifically ruled out. board.css has no span12
+  // class (every other panel only ever needs a fraction of the row), so
+  // css/ai-changes.css declares [data-panel="ai-changes"] full width
+  // directly instead of adding one for this sole caller.
+  const panel = boardPanel('ai-changes', { title: t('aiChanges.panelTitle'), sub: t('aiChanges.panelSub') })
   panel.body.innerHTML = aiChangesPanelBodyHtml(changes)
   board.appendChild(panel)
 }
@@ -58,8 +70,9 @@ function aiChangeRowHtml(row) {
   return row.kind === 'group' ? aiChangeGroupRowHtml(row) : aiChangeItemRowHtml(row)
 }
 
+/** Always "via {x}" - the fallback names the actor as "an AI tool" rather than skipping the word "via" (UI review, S4). */
 function aiChangeByLine(client) {
-  return client ? t('aiChanges.byTool', { tool: client }) : t('aiChanges.anAiTool')
+  return t('aiChanges.byTool', { tool: client || t('aiChanges.anAiTool') })
 }
 
 /** Explicit if-else, not a keyed lookup passed to the translate helper - the i18n test's static scanner flags a variable argument there as a new dynamic call site. */
@@ -136,12 +149,13 @@ function aiChangeItemRowHtml(item) {
 }
 
 function aiChangeGroupButtonsHtml(group) {
+  const until = Number(group.until) || 0
   if (group.can_release_all) {
     if (!aiChangeCanActOnHeld()) return `<div class="ai-change-lock-note">${escHtml(t('aiChanges.teammateNote'))}</div>`
-    return `<button type="button" class="ai-change-btn" onclick="aiChangeGroupAction('${escAttr(group.group)}', 'release', ${Number(group.count) || 0})">${escHtml(t('aiChanges.releaseAll'))}</button>`
+    return `<button type="button" class="ai-change-btn" onclick="aiChangeGroupAction('${escAttr(group.group)}', 'release', ${Number(group.count) || 0}, ${until})">${escHtml(t('aiChanges.releaseAll'))}</button>`
   }
   if (group.can_undo_all) {
-    return `<button type="button" class="ai-change-btn" onclick="aiChangeGroupAction('${escAttr(group.group)}', 'undo', ${Number(group.count) || 0})">${escHtml(t('aiChanges.undoAll'))}</button>`
+    return `<button type="button" class="ai-change-btn" onclick="aiChangeGroupAction('${escAttr(group.group)}', 'undo', ${Number(group.count) || 0}, ${until})">${escHtml(t('aiChanges.undoAll'))}</button>`
   }
   return ''
 }
@@ -150,9 +164,13 @@ function aiChangeGroupRowHtml(group) {
   const by = aiChangeByLine(group.client)
   const when = formatDateUI(group.until, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
   const what = aiChangeFamilyPhrase(group.family, group.count)
-  const label = t('aiChanges.group', { what, time: when })
+  // aiChanges.group is only ever "{what} · {time}" (two slots); the tool goes
+  // into the {time} slot alongside the real time so every row - item or group
+  // - reads the same "what · via tool · time" order (UI review, S4). No new
+  // copy: both halves are already-translated fragments, just composed here.
+  const label = t('aiChanges.group', { what, time: `${by} · ${when}` })
   return `<div class="ai-change-row ai-change-group" data-group="${escAttr(group.group)}">
-    <div class="ai-change-meta">${escHtml(`${label} · ${by}`)}</div>
+    <div class="ai-change-meta">${escHtml(label)}</div>
     ${aiChangeGroupButtonsHtml(group)}
   </div>`
 }
@@ -194,10 +212,15 @@ async function aiChangeRelease(id, btn) {
  * comes free from the one shared sheet), then loop POST /undo/group while
  * `remaining` > 0 (5 per page), summing done vs skipped across every page
  * into one final toast rather than one per page.
+ *
+ * `until` is the group row's own timestamp, not Date.now() (UI review, S4,
+ * MAJOR): the confirm text says "before {time}", and that has to be the same
+ * moment the row itself displays, not whatever time the dialog happened to
+ * open at.
  */
-function aiChangeGroupAction(group, kind, total) {
+function aiChangeGroupAction(group, kind, total, until) {
   const isRelease = kind === 'release'
-  const timeLabel = formatDateUI(Date.now(), { hour: 'numeric', minute: '2-digit' })
+  const timeLabel = formatDateUI(until, { hour: 'numeric', minute: '2-digit' })
   const title = isRelease ? t('aiChanges.releaseAll') : t('aiChanges.undoAll')
   const body = isRelease ? t('aiChanges.confirmReleaseAll', { n: total }) : t('aiChanges.confirmUndoAll', { n: total, time: timeLabel })
   const confirmLabel = isRelease ? t('aiChanges.releaseAll') : t('aiChanges.undoAll')

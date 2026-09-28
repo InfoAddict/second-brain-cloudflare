@@ -5,6 +5,14 @@
    used context-free here, the same class the decide panel's own rows use)
    and the expanded rows. */
 
+/* Full width at every breakpoint (UI review, S4, MINOR): the panel above
+   "Needs a decision" must never share a row with it. No span12 class exists
+   in board.css (nothing else needs the full row), so this panel states its
+   own width directly rather than adding one for a single caller. */
+[data-panel="ai-changes"] {
+  grid-column: span 12;
+}
+
 .ai-changes-summary {
   display: flex;
   align-items: center;
