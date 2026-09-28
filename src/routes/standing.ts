@@ -66,6 +66,10 @@ export async function handleStandingRoutes(
 
     return json({
       ok: true,
+      // The workspace's configured cap on active standing rows (Design 2.4's
+      // gate on the cache build, the same one that decides over_limit just
+      // above) - the dashboard cites this number rather than typing one in.
+      max: cfg.STANDING_MAX,
       standing: rows.map(row => {
         const tags = JSON.parse(row.tags ?? "[]") as string[];
         const held = isHeld(tags);

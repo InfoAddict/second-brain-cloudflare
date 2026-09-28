@@ -1,11 +1,10 @@
 /**
- * Backend gap found while wiring the copywriter's final over-limit copy
+ * GET /standing reports the workspace's configured standing limit
  * (18-copy-deck.md section 10, T7-E Task 14): "Not in use: only {max} can be
- * active" needs the workspace's configured STANDING_MAX so the dashboard
- * never types a number in (a brain can configure a different limit).
- * GET /standing (src/routes/standing.ts, Design 2.12) does not return it
- * today. This FAILS until the route adds a `limit` field (top-level, or per
- * over_limit row) carrying cfg.STANDING_MAX.
+ * active" needs it so the dashboard never types a number in (a brain can
+ * configure a different STANDING_MAX). src/routes/standing.ts's GET /standing
+ * returns it as a top-level `max` field, the same cfg.STANDING_MAX the route
+ * already reads to decide over_limit - no new config read, no new query.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULTS } from "../../src/config";
@@ -24,7 +23,7 @@ function insertStanding(sqlite: SqliteD1, id: string, createdAt: number): void {
   ).bind(id, `standing row ${id}`, createdAt).run();
 }
 
-describe("GET /standing reports the configured limit (backend gap)", () => {
+describe("GET /standing reports the configured limit", () => {
   const ctx = { waitUntil: (_: Promise<unknown>) => {} } as ExecutionContext;
   let sqlite: SqliteD1;
   let env: Env;
@@ -40,15 +39,23 @@ describe("GET /standing reports the configured limit (backend gap)", () => {
   });
   afterEach(() => sqlite.close());
 
-  it("an over_limit row carries the workspace's configured STANDING_MAX, so the dashboard never types a number in", async () => {
+  it("carries the workspace's configured STANDING_MAX as a top-level field, so the dashboard never types a number in", async () => {
+    const res = await worker.fetch(new Request("http://localhost/standing", { headers: { Authorization: `Bearer ${token}` } }), env, ctx);
+    const body = (await res.json()) as { ok: boolean; max: number };
+
+    expect(body.ok).toBe(true);
+    expect(body.max).toBe(DEFAULTS.STANDING_MAX);
+  });
+
+  it("still marks a row past the same limit as over_limit", async () => {
     // DEFAULTS.STANDING_MAX + 1 rows in one workspace: the oldest-ranked extra one is over_limit.
     for (let i = 0; i <= DEFAULTS.STANDING_MAX; i++) insertStanding(sqlite, `s${i}`, 1000 + i);
 
     const res = await worker.fetch(new Request("http://localhost/standing", { headers: { Authorization: `Bearer ${token}` } }), env, ctx);
-    const body = (await res.json()) as { standing: { id: string; reason?: string; limit?: number }[] };
+    const body = (await res.json()) as { max: number; standing: { id: string; reason?: string }[] };
     const overLimit = body.standing.find((s) => s.reason === "over_limit");
 
     expect(overLimit).toBeDefined();
-    expect(overLimit!.limit).toBe(DEFAULTS.STANDING_MAX);
+    expect(body.max).toBe(DEFAULTS.STANDING_MAX);
   });
 });

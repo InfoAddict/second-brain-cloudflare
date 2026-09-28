@@ -389,26 +389,25 @@ const STANDING_FILTER_VALUE = 'standing:active'
 /**
  * Copywriter final (18-copy-deck.md section 10): the over-limit line cites
  * the workspace's configured STANDING_MAX ("only {max} can be active"),
- * never a typed-in number. GET /standing does not return that value today
- * (backend gap, reported: test/integration/standing-limit-field.test.ts) -
- * read from `item.limit` for when it does, leaving the placeholder
- * unfilled (interpolate's own behavior) rather than guessing a number.
+ * never a typed-in number - GET /standing's own top-level `max` field
+ * (src/routes/standing.ts), the same config value the route already reads
+ * to decide over_limit.
  */
-function standingStateLabel(item) {
+function standingStateLabel(item, max) {
   if (item.firing) return t('standing.stateActive')
-  if (item.reason === 'over_limit') return t('standing.stateOverLimit', { max: item.limit })
+  if (item.reason === 'over_limit') return t('standing.stateOverLimit', { max })
   if (item.reason === 'not_indexed_yet') return t('standing.stateNotIndexed')
   if (item.reason === 'held') return t('standing.stateHeld')
   return t('standing.statePendingRefresh') // pending_refresh, or a future reason an older dashboard has no label for
 }
 
-function standingFilterRow(item) {
+function standingFilterRow(item, max) {
   const row = document.createElement('div')
   row.className = 'standing-filter-row'
   row.dataset.id = item.id
   row.innerHTML = `
     <div class="standing-filter-content">${escHtml(titleLine(item.content, 120))}</div>
-    <div class="standing-filter-state${item.firing ? ' standing-filter-state--active' : ''}">${escHtml(standingStateLabel(item))}</div>`
+    <div class="standing-filter-state${item.firing ? ' standing-filter-state--active' : ''}">${escHtml(standingStateLabel(item, max))}</div>`
   row.onclick = () => {
     if (typeof openView === 'function') {
       openView({ id: item.id, content: item.content, tags: ['standing:active'], created_at: item.created_at, workspace: item.workspace }, row)
@@ -430,7 +429,7 @@ async function loadStandingFilter() {
       return
     }
     list.innerHTML = ''
-    items.forEach((item) => list.appendChild(standingFilterRow(item)))
+    items.forEach((item) => list.appendChild(standingFilterRow(item, data.max)))
   } catch {
     list.innerHTML =
       `<div class="empty-state"><i class="ti ti-wifi-off"></i><span>${escHtml(t('standing.filterLoadFailed'))}</span></div>` +

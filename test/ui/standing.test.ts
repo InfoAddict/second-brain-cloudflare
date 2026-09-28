@@ -183,7 +183,7 @@ describe("filter lists firing state from /standing", () => {
   });
 
   it("fetches GET /standing and shows each item's firing state", async () => {
-    const ctx = load({ ok: true, standing: [item({ id: "s1", firing: true }), item({ id: "s2", firing: false, reason: "over_limit", limit: 50 })] });
+    const ctx = load({ ok: true, max: 50, standing: [item({ id: "s1", firing: true }), item({ id: "s2", firing: false, reason: "over_limit" })] });
 
     await ctx.loadStandingFilter();
 
@@ -206,7 +206,7 @@ describe("filter lists firing state from /standing", () => {
     expect(rows[1].innerHTML).toContain("Held");
   });
 
-  it("leaves the {max} placeholder literal rather than guessing a number when GET /standing has not shipped the limit field yet", async () => {
+  it("leaves the {max} placeholder literal rather than guessing a number when GET /standing omits max (an older Worker)", async () => {
     const ctx = load({ ok: true, standing: [item({ id: "s1", firing: false, reason: "over_limit" })] });
 
     await ctx.loadStandingFilter();
