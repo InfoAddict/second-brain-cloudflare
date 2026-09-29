@@ -213,6 +213,9 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // to maintain, and gives `WHERE event = 'held' ORDER BY created_at DESC LIMIT n` a direct,
   // index-only seek regardless of how much non-held noise shares the same window.
   idx_entry_events_held: `CREATE INDEX IF NOT EXISTS idx_entry_events_held ON entry_events(created_at DESC) WHERE event = 'held'`,
+  // The event readers' life-end subquery (quadratic in edits per memory without this index). No
+  // json_extract in the WHERE -- must never throw on a non-JSON payload; readers check trash=0 on top.
+  idx_entry_events_life_end: `CREATE INDEX IF NOT EXISTS idx_entry_events_life_end ON entry_events(entry_id) WHERE event IN ('purged', 'deleted')`,
   // Immutable administration audit trail. Same contract as entry_events:
   // application code only ever INSERTs here. Consumed by Phase 4.2.
   admin_events: `CREATE TABLE IF NOT EXISTS admin_events (id TEXT PRIMARY KEY, actor_id TEXT NOT NULL DEFAULT '', target_user_id TEXT NOT NULL DEFAULT '', workspace_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL)`,

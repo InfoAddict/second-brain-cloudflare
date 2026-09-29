@@ -40,9 +40,13 @@ async function mcpCall(name: string, args: Record<string, unknown>, user: Identi
   } finally { await client.close(); }
 }
 
+// Codex review, T-0102, director follow-up MAJOR: readEntryTimeline now filters events to
+// entries.created_at forward (round 2 re-review), so a row's own created_at must be at or before
+// its earliest seeded event, the way a real row's always is. Defaults to 0, well before every
+// bare bump() timestamp (100, 200, 300...) this file's own tests already use.
 const seed = (id: string, over: Record<string, unknown> = {}) => sqlite.db.prepare(
   `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, '[]', 'api', ?, NULL, '[]', ?, ?)`,
-).bind(id, over.content ?? "text", over.createdAt ?? 1000, over.workspaceId ?? owner.personalWorkspaceId, over.actorId ?? owner.userId).run();
+).bind(id, over.content ?? "text", over.createdAt ?? 0, over.workspaceId ?? owner.personalWorkspaceId, over.actorId ?? owner.userId).run();
 const events = async (id: string) => (await env.DB.prepare(`SELECT event, payload, created_at FROM entry_events WHERE entry_id = ? ORDER BY created_at, id`).bind(id)
   .all<{ event: string; payload: string; created_at: number }>()).results.map(r => ({ event: r.event, created_at: r.created_at, payload: JSON.parse(r.payload) as Record<string, any> }));
 const bump = (id: string, event: string, actorId: string, now: number, payload: Record<string, unknown> = {}) =>

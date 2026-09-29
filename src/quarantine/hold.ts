@@ -42,6 +42,8 @@ export interface HoldSnapshotInput<C> {
   nextTags: string[];
   meta: { hold: { reasons: HoldReason[]; score: number; signals: SignalHit["id"][] } };
   now: number;
+  /** Codex review, T-0102 D3: the SAME guard the UPDATE below uses -- see holdStatements' own note. */
+  guard?: (p: PlaceholderSink) => string;
 }
 
 export interface HoldDeps<C> {
@@ -93,6 +95,11 @@ export function heldTagsFor(requestedTags: readonly string[], reasons: readonly 
  * the vectors after commit, as deprecateEntry does), and the prune.
  */
 export function holdStatements<C>(env: Env, deps: HoldDeps<C>, input: HoldInput<C>): D1PreparedStatement[] {
+  // Codex review, T-0102 D3: the snapshot had no guard at all, so it landed unconditionally even
+  // when the UPDATE right below it lost its own compare-and-set (the write this hold is riding
+  // along with had gone stale in the meantime) -- a phantom hold-version row claiming a hold that
+  // never actually reached the entries row's tags. Same fix as D1 (undo.ts's revertGuard): the
+  // snapshot must be keyed on the exact same guard as the UPDATE, not a looser one.
   const snapshot = deps.snapshotStatement(env, {
     entryId: input.entryId,
     reason: "status",
@@ -101,6 +108,7 @@ export function holdStatements<C>(env: Env, deps: HoldDeps<C>, input: HoldInput<
     nextTags: input.heldTags,
     meta: { hold: { reasons: [...input.reasons], score: input.score, signals: input.signals.map(s => s.id) } },
     now: input.now,
+    guard: input.guard,
   });
 
   const p = new Placeholders();

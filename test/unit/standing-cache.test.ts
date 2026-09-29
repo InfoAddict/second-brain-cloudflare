@@ -84,7 +84,8 @@ describe("buildStandingCache", () => {
     insertEntry(sqlite, { id: "keep", tags: ["standing:active"], createdAt: 1 });
     insertEntry(sqlite, { id: "deprecated", tags: ["standing:active", "status:deprecated"], createdAt: 2 });
     insertEntry(sqlite, { id: "held", tags: ["standing:active", "conflict-held"], createdAt: 3 });
-    insertEntry(sqlite, { id: "quarantined", tags: ["standing:active", "quarantine:instruction"], createdAt: 4 });
+    // A recognized reason: isHeld/NOT_HELD_SQL match the five exact reasons this Worker writes.
+    insertEntry(sqlite, { id: "quarantined", tags: ["standing:active", "quarantine:hidden"], createdAt: 4 });
     const { vectorize } = makeStandingVectorize({ keep: [1, 1], deprecated: [1, 1], held: [1, 1], quarantined: [1, 1] });
     const { kv } = makeStandingKV();
     const cache = await buildStandingCache(envFor(sqlite, vectorize, kv), cfg, "ws-a");

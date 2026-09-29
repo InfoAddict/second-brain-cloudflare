@@ -35,13 +35,28 @@ export async function readEntryTimeline(
   // assignment IS the real happens-before order), not by whatever order a tied created_at otherwise
   // sorts in. Without it, a private event recorded in the same millisecond as the share event that
   // moved this row could sort as "newer" than the share and leak past the D-SH cut below.
+  //
+  // Round 3 re-review MAJOR: a reused id's earlier life always ends with a `purged` event (the
+  // trash retention sweep, or an explicit delete forever — both write that same event name) or a
+  // `deleted` event with payload.trash false (tier 3, too large for the trash to ever hold): every
+  // other event below the LATEST such end event for this id belongs to whoever's row is now gone,
+  // never this row's own history. `LIFE_START` is that end event's own rowid (0 when there has
+  // never been one) — insertion order again, not created_at: an old export's own created_at, or
+  // one a legacy client set in the future, said nothing true about when THIS Worker actually wrote
+  // either event, so comparing them was never sound (T-0102, director follow-up, this round
+  // supersedes the entryCreatedAt floor it replaces — no caller needs its own row read for this
+  // anymore, and no schema change: rowid is every SQLite table's own, always).
+  // First conjunct matches idx_entry_events_life_end's own WHERE syntactically (no json_extract in
+  // the index) -- see src/brief/changes.ts's lifeFilter for the full reasoning.
+  const LIFE_START = `COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = ev.entry_id
+       AND g.event IN ('purged', 'deleted') AND (g.event = 'purged' OR json_extract(g.payload, '$.trash') = 0)), 0)`;
   const query = inlineLabels
     ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at, u.name AS user_name
        FROM entry_events ev LEFT JOIN users u ON u.id = ev.actor_id AND (u.removed_at IS NULL OR u.removed_at = 0)
-       WHERE ev.entry_id = ? ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`
+       WHERE ev.entry_id = ? AND ev.rowid > ${LIFE_START} ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`
     : limit === undefined
-    ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? ORDER BY ev.created_at ASC, ev.rowid ASC`
-    : `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`;
+    ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? AND ev.rowid > ${LIFE_START} ORDER BY ev.created_at ASC, ev.rowid ASC`
+    : `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? AND ev.rowid > ${LIFE_START} ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`;
   const statement = env.DB.prepare(query);
   const { results } = await (limit === undefined && !inlineLabels ? statement.bind(id) : statement.bind(id, limit ?? 10))
     .all<{ actor_id: string; event: string; payload: string; created_at: number; user_name?: string | null }>();

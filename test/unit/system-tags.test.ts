@@ -8,7 +8,32 @@ import {
   PROJECT_TAG_PREFIX,
   projectTagError,
 } from "../../src/tags/system";
-import { COUNTERPARTY_TAG_PREFIX, LEDGER_TAG, OWED_TO_ME_TAG, STANDING_TAG, T7_TAG_PREFIXES } from "../../src/tags/t7";
+import {
+  CONFIDENCE_SOURCE_TAG_PREFIX,
+  CONFIDENCE_TAG_PREFIX,
+  COUNTERPARTY_TAG_PREFIX,
+  LEDGER_TAG,
+  LEDGER_TAG_PREFIX,
+  OUTCOME_TAG_PREFIX,
+  OWED_TO_ME_TAG,
+  REVIEW_REARMS_TAG_PREFIX,
+  STANDING_TAG,
+  STANDING_TAG_PREFIX,
+  T7_TAG_PREFIXES,
+} from "../../src/tags/t7";
+
+// Codex review, T-0102 A: isWorkerOwnedTag now recognizes T7 prefixes by their exact written
+// format, not by prefix alone, so a generic `${prefix}sample` probe no longer matches. One
+// realistic value per prefix, in the format the system actually writes.
+const T7_REALISTIC_VALUES: Record<string, string> = {
+  [STANDING_TAG_PREFIX]: STANDING_TAG,
+  [LEDGER_TAG_PREFIX]: LEDGER_TAG,
+  [CONFIDENCE_TAG_PREFIX]: "confidence:0.70",
+  [CONFIDENCE_SOURCE_TAG_PREFIX]: "confidence-source:stated",
+  [OUTCOME_TAG_PREFIX]: "outcome:right",
+  [REVIEW_REARMS_TAG_PREFIX]: "review-rearms:1",
+  [COUNTERPARTY_TAG_PREFIX]: `${COUNTERPARTY_TAG_PREFIX}priya`,
+};
 
 describe("Prompt Capsule system tags", () => {
   it("reserves capsule namespaces case-insensitively", () => {
@@ -109,10 +134,21 @@ describe("project tag namespace", () => {
 // worker-owned so they survive applyTagReplacement, but the bare words
 // "decision" and "standing" stay ordinary user tags (P7.2).
 describe("Track 7 reserved tag namespaces", () => {
-  it("reserves every T7 prefix, case-insensitively", () => {
+  it("reserves every T7 prefix, case-insensitively, for the format the system actually writes", () => {
     for (const prefix of T7_TAG_PREFIXES) {
-      expect(isWorkerOwnedTag(`${prefix}sample`), prefix).toBe(true);
-      expect(isWorkerOwnedTag(`${prefix.toUpperCase()}SAMPLE`), prefix).toBe(true);
+      const value = T7_REALISTIC_VALUES[prefix];
+      expect(value, `no realistic sample registered for ${prefix}`).toBeDefined();
+      expect(isWorkerOwnedTag(value), value).toBe(true);
+      expect(isWorkerOwnedTag(value.toUpperCase()), value).toBe(true);
+    }
+  });
+
+  it("does not reserve a value that merely shares a T7 prefix but isn't the system's own format", () => {
+    // Codex review, T-0102 A: precision fix -- counterparty: accepts any grammar-valid slug by
+    // design, so it is exempt from this negative case.
+    for (const prefix of T7_TAG_PREFIXES) {
+      if (prefix === COUNTERPARTY_TAG_PREFIX) continue;
+      expect(isWorkerOwnedTag(`${prefix}sample`), prefix).toBe(false);
     }
   });
 

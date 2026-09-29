@@ -40,12 +40,13 @@ function findCallSites(): { file: string; line: number; text: string }[] {
   return sites.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
 }
 
-const EXEMPT: { file: string; line: number; why: string }[] = [
-  {
-    file: "src/capture/store.ts", line: 86,
-    why: "storeEntry's own create-time embed. A held write never reaches storeEntry (class A takes the holdStatements batch instead), so the only content that lands here is already under the scorer's 32 KB budget — too few chunks for batching to matter.",
-  },
-];
+// Codex review, T-0102 F3 (MAJOR): storeEntry's own create-time embed used to be exempt here on
+// the theory that a held write never reaches it (class A) so content is always under the
+// scorer's 32 KB budget -- true for captureEntry's own call, false for two others that route
+// through storeEntry with never-scored content up to the full 128 KB cap
+// (vectorize/pending.ts's indexPendingRow, migration/embedding.ts's backfill). storeEntry now
+// always batchEmbeds, so there is nothing left to exempt.
+const EXEMPT: { file: string; line: number; why: string }[] = [];
 
 describe("every direct upsertEntryVectors call site passes batchEmbeds, or is exempted with a reason", () => {
   it("matches the exempt list exactly for the ones that don't", () => {

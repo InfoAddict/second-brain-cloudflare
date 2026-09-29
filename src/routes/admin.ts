@@ -24,7 +24,7 @@ import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
 import { vectorizeFilterState } from "../vectorize/scope";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
-import { notHeldSql } from "../quarantine/tags";
+import { notHeldSqlFor } from "../quarantine/tags";
 import { reasonOverPair, restatesRecent } from "../insight/reason";
 import { MAX_INSIGHTS_PER_RUN, RECENT_INSIGHT_WINDOW, rawInsightText } from "../insight/weekly";
 import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candidates";
@@ -545,6 +545,14 @@ export async function handleAdminRoutes(
     // total order, arbitrary within a tie, but the SAME arbitrary order for
     // every page of the same data, which is the whole requirement. It is
     // projected only to be sorted on; the response does not carry it.
+    //
+    // Round 3 re-review MAJOR: a reused id's earlier life always ends with a "purged" event or a
+    // "deleted" event with payload.trash false (tier 3) -- everything at or before the LATEST such
+    // end event for this id belongs to whoever's row is now gone, not the live row just joined in
+    // below. The extra AND clause is rowid, not created_at: insertion order is the true order this
+    // Worker wrote these two events in, whatever either one's own created_at claims.
+    // First conjunct matches idx_entry_events_life_end's own WHERE syntactically (no json_extract
+    // in the index) -- see src/brief/changes.ts's lifeFilter for the full reasoning.
     const { results } = await env.DB.prepare(
       `SELECT 'admin' AS kind, ae.id AS event_id, ae.event AS event, ae.actor_id AS actor_id,
               ae.target_user_id AS subject_id, '' AS entry_id, NULL AS title,
@@ -557,6 +565,8 @@ export async function handleAdminRoutes(
          FROM entry_events ev
          JOIN entries m ON m.id = ev.entry_id AND m.${scope.clause}
         WHERE ev.event IN ('shared', 'unshared', 'insight_confirmed', 'insight_dismissed')
+          AND ev.rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = ev.entry_id
+                AND g.event IN ('purged', 'deleted') AND (g.event = 'purged' OR json_extract(g.payload, '$.trash') = 0)), 0)
        ORDER BY created_at DESC, event_id DESC
        LIMIT ? OFFSET ?`,
     ).bind(...scope.bindings, limit, offset).all();
@@ -1688,8 +1698,8 @@ export async function handleAdminRoutes(
          AND b.tags NOT LIKE '%"status:deprecated"%'
          AND (a.valid_until IS NULL OR a.valid_until > ${dryRunNow})
          AND (b.valid_until IS NULL OR b.valid_until > ${dryRunNow})
-         AND ${notHeldSql("a")}
-         AND ${notHeldSql("b")}
+         AND ${notHeldSqlFor("a")}
+         AND ${notHeldSqlFor("b")}
          AND ${aScope.clause} AND ${bScope.clause}
        ORDER BY c.score DESC
        LIMIT ?`,

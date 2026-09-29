@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (232 queries, 115 exceptions, 32 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (242 queries, 119 exceptions, 36 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1513,15 +1513,53 @@ describe("the checker over the real source tree", () => {
     // MINOR/MAJOR follow-up: lowestQualifyingVersion's separate scope-exempt lookup merged into
     // classifyMember's single scope-checked chain scan (undo.ts), which now also carries the
     // actor check that closes the widened-group-key MAJOR. Net one fewer statement, not a new one.
-    // Deliberate, net no change (236/116/35 -> 237/116/36 -> 236/116/35) across two T-0102 rounds
-    // on brief/changes.ts's changeEventRows: finding 7 (final cloud review) first added an inScope
-    // workspace semi-join as its own scope-checked query; R22 (budget auditor MAJOR) then found
-    // that semi-join re-scanned the reader's entire entries/entries_trash id list on every brief
-    // with an event in its window, costing ~2 rows per memory regardless of RAW_EVENT_SCAN_LIMIT.
-    // The fix moves the workspace check to a per-row JOIN inside the already-1,000-row-capped raw
-    // scan (still scope-checked, since its clause is a JS-assembled fragment) instead of a separate
-    // query, landing back on the pre-finding-7 count with a materially cheaper query underneath it.
-    ).toEqual({ queries: 236, exempt: 116, checked: 35, outerJoin: 1 });
+    // Deliberate: +1 query, +1 documented exception (236/116/35 -> 237/117/35) for the Codex
+    // cross-vendor review (T-0102 B3, src/entries/import.ts): orphanEventsDelete clears an
+    // imported id's orphaned entry_events the same way orphanVersionsDelete already clears its
+    // orphaned entry_versions, scope-exempt by id for the same reason.
+    // Deliberate: +1 query, +1 scope-checked (237/117/35 -> 238/117/36) for the director follow-up
+    // (T-0102 MAJOR, cloud re-review): trash.ts's workspacePairs refactor keys the trash INSERT,
+    // the version DELETE, the edges DELETE and the entries DELETE on the identical (id, workspace)
+    // guard `retractionHook` already builds -- referencedEntryGuardSql's own EXISTS fragment is
+    // the new query, scope-checked (assembled here in JS from meta.workspacePairs).
+    // MOVED (director follow-up, T-0102 MINOR): orphanEventsDelete's own fix was itself wrong
+    // (deleting a permanent audit trail); it is gone, replaced by loadEventHistoryIds
+    // (src/entries/import.ts, scope-exempt by id, same shape) -- net -1 query, -1 exception
+    // against the total just above (238/117/36 -> 237/116/36).
+    // Deliberate: +2 queries, +2 documented exceptions (237/116/36 -> 239/118/36) for the round 3
+    // re-review's id-uniqueness fix (src/entries/import.ts, T-0089.1.1 close-out round 3):
+    //   1. ENTRY_INSERT_SQL_TEMPLATE reads entries and entries_trash now (`WHERE NOT EXISTS (...)
+    //      AND NOT EXISTS (...)`, checking both tables atomically in the same statement the id's
+    //      own row lands in) where it used to be a plain `VALUES` insert reading neither -- a
+    //      genuinely new query, scope-exempt by id the same way loadExistingIds' own pre-read is.
+    //   2. The new heldEventStatement's guarded `WHERE EXISTS (SELECT 1 FROM entries ...)` --
+    //      another new query, replacing auditEventStatement's unconditional form (src/lib/audit.ts,
+    //      no entries read, never counted here) so a held row's own audit event can never land on
+    //      an unrelated row that already owned a colliding id.
+    // loadEventHistoryIds (the query the comment above this one introduced) is gone -- finding 2 of
+    // the same round ("reverse the fresh-id remap") keeps a reused id outright now, with no history
+    // check to decide a remap -- but its own SELECT never read entries or entries_trash, so it was
+    // never counted here either way (net 0 on this total).
+    // Deliberate: +2 queries, +0 net exceptions (239/118/36 -> 241/118/36) for the round 4
+    // re-review MINOR ("every hard-delete path writes a life-end marker inside the same batch"):
+    // team-admin.ts's offboarding batch gained two new INSERT...SELECT statements, one reading
+    // entries and one reading entries_trash, each scope-exempt by the same reasoning as the rest
+    // of that batch's own by-workspace statements. trash.ts's own new tier-3 marker statement
+    // reads only json_each(...), no corpus table, so it adds no query here at all.
+    // Deliberate: +1 query, +1 documented exception (241/118/36 -> 242/119/36) for the round 5
+    // re-review MAJOR ("the tier-3 life-end marker insert has no guard"): that marker now selects
+    // FROM entries (guarded by entriesGuardSql, plus a NOT EXISTS on entries_trash) instead of a
+    // bare json_each(...) -- a genuinely new corpus-table read, scope-exempt the same way the
+    // entries DELETE it shares a guard with already is.
+    //
+    // Merge of release/v4 1cbc817b into v4/gate-fx2: brief/changes.ts's own changeEventRows carried
+    // an independent delta on this lane's own base (236/116/35 -> 237/116/36 -> 236/116/35, net no
+    // change): finding 7 added an inScope workspace semi-join as its own scope-checked query, R22
+    // (budget auditor MAJOR) then replaced that semi-join with a per-row JOIN inside the
+    // already-1,000-row-capped raw scan (still scope-checked, a JS-assembled fragment), landing
+    // back on the pre-finding-7 count underneath a materially cheaper query. Recomputed against the
+    // real scanner output on the merged tree, not hand-combined.
+    ).toEqual({ queries: 242, exempt: 119, checked: 36, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

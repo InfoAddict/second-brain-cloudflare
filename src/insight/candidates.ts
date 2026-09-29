@@ -27,7 +27,7 @@ import type { Env } from "../env";
 import { initializeDatabase } from "../db/init";
 import { VECTORIZE_GET_BY_IDS_BATCH, D1_MAX_BOUND_PARAMS } from "../constants";
 import { isInsightEligible, isAssistantAuthored } from "./eligibility";
-import { notHeldSql, NOT_HELD_SQL } from "../quarantine/tags";
+import { NOT_HELD_SQL, notHeldSqlFor } from "../quarantine/tags";
 import { MIN_GAP_MS, MIN_SIMILARITY, normalisePair, scoreCandidate, type ScorableEntry } from "./score";
 
 /**
@@ -387,8 +387,8 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
            AND b.tags NOT LIKE '%"status:deprecated"%'
            AND (a.valid_until IS NULL OR a.valid_until > ${now})
            AND (b.valid_until IS NULL OR b.valid_until > ${now})
-           AND ${notHeldSql("a")}
-           AND ${notHeldSql("b")}
+           AND ${notHeldSqlFor("a")}
+           AND ${notHeldSqlFor("b")}
          ORDER BY e.created_at DESC
          LIMIT 10`,
       ).bind(MIN_GAP_MS).all() as {

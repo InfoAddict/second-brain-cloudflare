@@ -44,7 +44,10 @@ function makeEnv() {
   const embeds: string[] = [];
   const env = {
     DB: d1.db, OAUTH_KV: makeMemoryKV(), VECTORIZE: vectorize as unknown as VectorizeIndex,
-    AI: { run: vi.fn(async (_m: string, input: { text: string[] }) => { embeds.push(input.text[0]); return { data: [bow(input.text[0])] }; }) },
+    // Codex review, T-0102 F3: storeEntry now always batchEmbeds (embedMany, one AI call for the
+    // whole chunk batch), so the mock must return one vector per input text like the real API,
+    // not just the first.
+    AI: { run: vi.fn(async (_m: string, input: { text: string[] }) => { embeds.push(...input.text); return { data: input.text.map(bow) }; }) },
     VECTORIZE_GRACE_MS: "0",
   } as unknown as Env;
   return { env, d1, vectorize, embeds };

@@ -6,13 +6,13 @@ import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus, withStatus } from "./status";
 import { withUserEditMarker } from "../tags/system";
-import { isHeld, QUARANTINE_TAG_PREFIX, type HoldReason } from "../quarantine/tags";
+import { isHeld, isRecognizedHoldTag, QUARANTINE_TAG_PREFIX, type HoldReason } from "../quarantine/tags";
 import { heldTagsFor } from "../quarantine/hold";
 import { deleteEntryVectors } from "../vectorize/batch";
 import { discardUpload, upsertEntryVectors, type StoredEntry } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { OWNER_WRITE_CONTEXT, readScopeWorkspaces, type WriteContext } from "../lib/scope";
-import { groupCandidates, safeClient, UNDO_GROUP_PAGE, type ChangeFamily, type DecodedGroup } from "../brief/changes";
+import { groupCandidates, UNDO_GROUP_PAGE, type ChangeFamily, type DecodedGroup } from "../brief/changes";
 import type { Config } from "../config";
 import { VERSION_ROW_BUDGET_BYTES, UNDO_MERGE_REEMBED_INLINE } from "../constants";
 import { getTrashedEntry, restoreEntry } from "./trash";
@@ -149,7 +149,9 @@ async function releaseHeldAfterEdit(
 ): Promise<UndoResult> {
   const holdVersion = chain.rows.find(isHoldVersion);
   const priorStatus = holdVersion ? getStatus(JSON.parse(holdVersion.tags)) : null;
-  const strippedCurrent = currentTags.filter(t => typeof t === "string" && !t.trim().toLowerCase().startsWith(QUARANTINE_TAG_PREFIX));
+  // Codex review, T-0102, director follow-up: strips only a recognized hold tag, never a 3.7 tag
+  // that merely shares the quarantine: prefix (isRecognizedHoldTag matches heldReason exactly).
+  const strippedCurrent = currentTags.filter(t => !isRecognizedHoldTag(t));
   const releasedTags = (getStatus(currentTags) === "draft" && priorStatus)
     ? withStatus(strippedCurrent, priorStatus)
     : strippedCurrent;
@@ -169,7 +171,17 @@ async function releaseHeldAfterEdit(
   }
 
   const now = Date.now();
-  const casColumns = { tags: row.tags, workspace_id: authorizedWorkspaceId, vector_ids: row.vector_ids ?? null };
+  // Round 3 re-review MAJOR (undo-group walk-back): minted here, not by writeAuditEvents' own
+  // default, so this version's meta.event_id and the "released" event it lands with below share
+  // the SAME id -- an exact link, never a time window or an actor/client re-check.
+  const eventId = crypto.randomUUID();
+  // Codex review, T-0102 D2: content added to the guard. Content is never touched by a release
+  // (the comment above this function says so), but the re-embed above ran against the content
+  // THIS call read -- a concurrent edit that changed content between that read and this commit
+  // would otherwise still pass (tags/workspace/vector_ids unchanged) and release text nobody
+  // reviewed: the re-embedded vectors, and the released tags, for a version of the row that no
+  // longer exists.
+  const casColumns = { tags: row.tags, content: row.content, workspace_id: authorizedWorkspaceId, vector_ids: row.vector_ids ?? null };
   const p = new Params();
   const tagsIdx = p.add(JSON.stringify(releasedTags));
   const vectorIdsIdx = p.add(JSON.stringify(newVectorIds));
@@ -180,7 +192,7 @@ async function releaseHeldAfterEdit(
     results = await env.DB.batch([
       snapshotStatement(env, {
         entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags: releasedTags,
-        meta: { release: { of_seq: ofSeq } }, now,
+        meta: { release: { of_seq: ofSeq }, event_id: eventId }, now,
         guard: p2 => buildCasGuard(p2, casColumns),
       }),
       // versioning: snapshot
@@ -198,6 +210,7 @@ async function releaseHeldAfterEdit(
   }
 
   await writeAuditEvents(env, [{
+    id: eventId,
     entryId: id, actorId: change.actorId, event: "released",
     payload: { of_seq: ofSeq, channel: change.channel, ...(change.client ? { client: change.client } : {}) },
   }]);
@@ -252,6 +265,16 @@ export async function revertEntry(
   /** Optional: the trash row the caller saw. Given, undo only restores that exact row, never reverts a live one. */
   trashNonce?: string,
   ctx?: ExecutionContext,
+  /**
+   * Round 4 re-review MAJOR (undo-group): the group's own classifyFromRows already found this
+   * member's newest version's seq at classification time -- given, this is checked fresh here,
+   * before any read-then-act work below (re-embedding included) rather than only at the write
+   * itself, since only the undo-group path's toVersion can already be stale by the time its own
+   * page reaches this member. A mismatch reports "stale" (the group maps it to changed_since) and
+   * touches nothing. Every other caller (the single-entry /undo route and MCP tool) has no prior
+   * classification to compare against, so this is always undefined for them.
+   */
+  expectedTipSeq?: number,
 ): Promise<UndoResult> {
   const row = await getReadableEntry(env, identity, id, ENTRY_COLUMNS) as EntryRow | null;
   if (row && trashNonce !== undefined) return { status: "not_found" };
@@ -307,6 +330,11 @@ export async function revertEntry(
   if (!chain.rows.length) return { status: "nothing_to_undo" };
 
   const newest = chain.rows[0];
+  // Round 4 re-review MAJOR: checked before any further work (re-embedding included) -- a third
+  // party's edit landing between classification and this call already moved this row's own tip,
+  // and toVersion (computed back at classification time) would otherwise still land, silently
+  // overwriting that edit.
+  if (expectedTipSeq !== undefined && newest.seq !== expectedTipSeq) return { status: "stale" };
 
   // 5.6: undo on a currently-held row releases it, whether or not the hold is the newest version.
   // The common case (hold IS newest) needs no dedicated path: falling through to the ordinary
@@ -469,10 +497,29 @@ export async function revertEntry(
   const hookRow = [{ id, workspaceId: authorizedWorkspaceId }];
   const retraction = retracting ? retractionHook(env, hookRow, landed, change, config, now, { cascade: true }) : null;
   const unretraction = undeprecating ? unretractionHook(env, hookRow, landed, change, config, now, { cascade: true }) : null;
+  // Round 6: replacing vector_ids also pins the value this undo read, so the row decides which
+  // upload won and the old ids retired below are exactly the ones this commit replaced. Read here,
+  // ahead of revertGuard below, so the guard can pin it too.
+  const readVectorIds = row.vector_ids ?? "[]";
   // Pinned at authorization (the caller's own scoped read), never at the write: a share/unshare
   // writes no version, so without this a concurrent move leaves MAX(seq) unchanged and an admin's
   // undo can commit into the row after it left their reach (U3, R2-7, Class 1).
-  const workspaceGuard = (guardP: Params) => buildCasGuard(guardP, { workspace_id: authorizedWorkspaceId });
+  //
+  // Codex review, T-0102 D1: the SAME guard the UPDATE uses, not a lighter one just for the
+  // snapshot. The snapshot's own guard used to be workspace_id alone, while the UPDATE also
+  // pinned vector_ids whenever this revert touches the vector index (nextVectorIds !== undefined)
+  // -- a concurrent re-embed that changed vector_ids between this read and the commit left the
+  // snapshot (workspace unchanged) landing while the UPDATE's own vector_ids pin made it lose,
+  // half-applying the revert: a phantom "revert" version in the history with the row's actual
+  // content and tags never touched. Every statement downstream of ownSnapshotLandedSql (the
+  // UPDATE, the retract/unretract hooks at `landed` above, the merge-recreate inserts below)
+  // trusts that a landed snapshot means a real, consistent revert; that is only true once the
+  // snapshot cannot land without the UPDATE being ABLE to land right behind it.
+  const revertGuard = (guardP: Params) => {
+    const cols: Record<string, unknown> = { workspace_id: authorizedWorkspaceId };
+    if (nextVectorIds !== undefined) cols.vector_ids = readVectorIds;
+    return buildCasGuard(guardP, cols);
+  };
   const p = new Params();
   // The when_* columns are set only when this revert is actually restoring the date. Rebinding them
   // from this call's own stale JS read, as every other column here does, would silently erase a date
@@ -484,14 +531,10 @@ export async function revertEntry(
     ? `, valid_from = ${p.add(nextValidity!.valid_from ?? null)}, valid_until = ${p.add(nextValidity!.valid_until ?? null)}`
     : "";
   const vectorIdsSet = nextVectorIds !== undefined ? `, vector_ids = ${p.add(nextVectorIds)}` : "";
-  // Round 6: replacing vector_ids also pins the value this undo read, so the row decides which upload
-  // won and the old ids retired below are exactly the ones this commit replaced.
-  const readVectorIds = row.vector_ids ?? "[]";
-  const vectorIdsGuard = nextVectorIds !== undefined ? ` AND e.vector_ids = ${p.add(readVectorIds)}` : "";
   // updated_at clamped strictly past its own previous value (the digest mark guard trusts it
   // plus byte length; a same-millisecond, same-length revert with no clamp would leave it unmoved).
   // versioning: snapshot
-  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = MAX(${p.add(now)}, COALESCE(e.updated_at, e.created_at) + 1)${vectorIdsSet}${whenSet}${validitySet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)}${vectorIdsGuard} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
+  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = MAX(${p.add(now)}, COALESCE(e.updated_at, e.created_at) + 1)${vectorIdsSet}${whenSet}${validitySet} WHERE e.id = ${p.add(id)} AND ${revertGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
   // Embedded before the batch, like the main content above, so the insert below can carry its own
   // vector_ids the way restoreEntry does (U14). Each insert is guarded by the SAME "this request's own
@@ -541,8 +584,12 @@ export async function revertEntry(
   const contentIsFullCopy = contentChanged
     && !(restoredContent.startsWith(row.content) && !row.content.includes("\0") && !restoredContent.includes("\0"));
   const projectedStateBytes = utf8Bytes(JSON.stringify({ when_at: row.when_at, when_kind: row.when_kind, when_source: row.when_source, when_label: row.when_label, valid_from: row.valid_from, valid_until: row.valid_until }));
+  // Round 3 re-review MAJOR (undo-group walk-back): minted here, not by writeAuditEvents' own
+  // default, so this version's meta.event_id and the "released"/"reverted" event it lands with
+  // below share the SAME id -- an exact link, never a time window or an actor/client re-check.
+  const eventId = crypto.randomUUID();
   const metaCandidate = {
-    nonce, target_seq: target.seq, reverted_reason: target.reason,
+    nonce, target_seq: target.seq, reverted_reason: target.reason, event_id: eventId,
     ...(restoreWhen ? { when: true } : {}),
     ...(restoreValidity ? { validity: true } : {}),
     ...(recreatedForMeta.length ? { recreated_incoming: recreatedForMeta } : {}),
@@ -564,7 +611,7 @@ export async function revertEntry(
       snapshotStatement(env, {
         entryId: id, reason: "revert", change,
         content: contentChanged ? { kind: "next", content: restoredContent } : { kind: "unchanged" },
-        nextTags: restoredTags, nextWhen, nextState: nextValidity, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
+        nextTags: restoredTags, nextWhen, nextState: nextValidity, skipNoOp: false, expectNewestSeq: newest.seq, guard: revertGuard,
         // Recorded whenever this revert restores the date, so a later undo of THIS version (a redo)
         // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
         // recreated_incoming carries only ids and which merge each belongs to (never content, never
@@ -622,9 +669,11 @@ export async function revertEntry(
   // "released", not "reverted" — so the changes line (5.8) and the agent-facing copy (5.5) can
   // tell the two apart without inspecting tags.
   await writeAuditEvents(env, [releasing ? {
+    id: eventId,
     entryId: id, actorId: change.actorId, event: "released",
     payload: { of_seq: target.seq, channel: change.channel, ...(change.client ? { client: change.client } : {}) },
   } : {
+    id: eventId,
     entryId: id, actorId: change.actorId, event: "reverted",
     payload: { target_seq: target.seq, reverted_reason: target.reason, channel: change.channel },
   }, ...validityEvents(change, ...hookResults)]);
@@ -752,73 +801,148 @@ async function resolveTrashGroup(
 }
 
 interface ChainRow {
-  seq: number; meta: string; reason: string; channel: string; actor_id: string; created_at: number; workspace_id: string;
+  entry_id: string; seq: number; meta: string; reason: string; channel: string; actor_id: string; created_at: number; workspace_id: string;
 }
 
 type MemberVerdict =
-  | { kind: "pending"; toVersion: number; workspaceId: string }
+  | {
+      kind: "pending"; toVersion: number; workspaceId: string;
+      /** Round 4 re-review MAJOR: this member's own newest version's seq, AT CLASSIFICATION TIME
+       * -- carried through to revertEntry as its own fresh compare-and-set, so a third party's
+       * edit landing in the gap between this classification and that later call (another page's
+       * worth of reverts, each with its own re-embed, can take real time) is caught before
+       * anything is written, not silently overwritten by a now-stale toVersion. */
+      tipSeq: number;
+    }
   | { kind: "done" }
   | { kind: "changed_since" }
   | { kind: "not_found" };
 
-/**
- * Whether this one memory is still owed the group's own revert, told from a stable, seq-based
- * cursor rather than a timestamp (reviewer MINOR: an undo landing in the group's own final
- * millisecond used to read as still-eligible on the next page, and paging repeated it instead of
- * advancing). `target_seq` is the "before this version" seq a plain revert always records
- * (metaCandidate above); a later version carrying `reason: "revert"` and that exact target_seq is
- * unambiguous proof this exact group-qualifying change was already undone, whatever time it
- * landed at. Nothing happening after the qualifying version at all (newest === toVersion) is
- * "pending"; anything else that happened since, and is not that proof, is a third party's edit
- * (reviewer MAJOR, R21 follow-up: the qualifying version's own actor must equal the group's own
- * actor, or a same-window edit by someone else using the same client label could be reverted).
- */
-async function classifyMember(env: Env, id: string, decoded: DecodedGroup, cfg: Readonly<Config>, scope: string[]): Promise<MemberVerdict> {
-  const { results } = await env.DB.prepare(
-    // scope-checked: en.workspace_id IN (?2) narrows to the reader's own scope; `id` also already
-    // comes from groupCandidates's own reader-scoped derivation, so this is defense in depth.
-    `SELECT ev.seq, ev.meta, ev.reason, ev.channel, ev.actor_id, ev.created_at, en.workspace_id
-     FROM entry_versions ev JOIN entries en ON en.id = ev.entry_id
-     WHERE ev.entry_id = ?1 AND en.workspace_id IN (SELECT value FROM json_each(?2))
-     ORDER BY ev.seq ASC LIMIT 500`,
-  ).bind(id, JSON.stringify(scope)).all<ChainRow>();
-  if (!results.length) return { kind: "not_found" };
+function parseVersionMeta(r: ChainRow): Record<string, unknown> {
+  try { return JSON.parse(r.meta || "{}"); } catch { return {}; }
+}
 
-  let toVersion: number | undefined;
-  let consumed = false;
-  for (const r of results) {
-    let meta: Record<string, unknown> = {};
-    try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no client / no target_seq */ }
-    if (toVersion === undefined) {
-      if (r.created_at >= decoded.start && r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
-        toVersion = r.seq;
-      }
-      continue;
-    }
-    if (r.reason === "revert" && meta.target_seq === toVersion) consumed = true;
+/**
+ * True exactly when `r` is the version one of the group's own recorded events produced (round 3
+ * re-review MAJOR: "the group's versions are exactly the versions linked to the group's own event
+ * ids. No time windows, and no matching by actor or client."). Every write that can join a group
+ * mints its own event id before its batch and stamps it into BOTH the version's own meta.event_id
+ * and the audit event it lands with moments later (src/capture/lifecycle.ts's applyStatus,
+ * src/memory/undo.ts's releaseHeldAfterEdit/revertEntry) -- a plain set-membership check, so a
+ * same-actor edit outside the group's own recorded events, or a third party's edit landing in
+ * between two of them, can never be mistaken for the group's own work, whatever its reason,
+ * channel, actor or client label happen to be.
+ */
+function isOwnVersion(r: ChainRow, ownEventIds: ReadonlySet<string>): boolean {
+  const id = parseVersionMeta(r).event_id;
+  return typeof id === "string" && ownEventIds.has(id);
+}
+
+/** Walks back from `rows[upto]` (inclusive) through consecutive own-versions. `ok` is true only
+ * when the run found exactly `ownEventIds.size` of them -- not fewer (something else broke the
+ * run before all of the group's own events for this member were accounted for) and, since a
+ * version's own event id is unique to it, never more. */
+function walkOwn(rows: readonly ChainRow[], upto: number, ownEventIds: ReadonlySet<string>): { firstIdx: number; ok: boolean } {
+  let idx = upto;
+  let count = 0;
+  while (idx >= 0 && isOwnVersion(rows[idx], ownEventIds)) { idx--; count++; }
+  return { firstIdx: idx + 1, ok: count === ownEventIds.size };
+}
+
+/**
+ * "Revert a member only if its group versions are contiguous and are the newest versions. In
+ * every other case, report changed_since and touch nothing: a version outside the group in
+ * between, one after, or any doubt" (round 3 re-review MAJOR). `ownEventIds` is this one member's
+ * own share of the group's event ids, from groupCandidates' own per-entry derivation (never this
+ * whole group's ids -- a different member's own events say nothing about this one).
+ */
+function classifyFromRows(rows: readonly ChainRow[] | undefined, ownEventIds: ReadonlySet<string>): MemberVerdict {
+  if (!rows?.length || !ownEventIds.size) return { kind: "not_found" };
+
+  const tip = rows.length - 1;
+  const atTip = walkOwn(rows, tip, ownEventIds);
+  if (atTip.ok) return { kind: "pending", toVersion: rows[atTip.firstIdx].seq, workspaceId: rows[atTip.firstIdx].workspace_id, tipSeq: rows[tip].seq };
+
+  // Not pending at the tip -- maybe it is already done: the newest version is a revert whose own
+  // target_seq matches exactly what this same walk computes over everything before it, the group's
+  // own work already undone (by this group's own undo call, or anyone else's -- once reverted to
+  // that exact version, it no longer matters who did it).
+  const newest = rows[tip];
+  if (tip > 0 && newest.reason === "revert") {
+    const target = parseVersionMeta(newest).target_seq;
+    const underRevert = walkOwn(rows, tip - 1, ownEventIds);
+    if (underRevert.ok && typeof target === "number" && rows[underRevert.firstIdx].seq === target) return { kind: "done" };
   }
-  if (toVersion === undefined) return { kind: "not_found" };
-  if (consumed) return { kind: "done" };
-  const newest = results[results.length - 1];
-  return newest.seq === toVersion ? { kind: "pending", toVersion, workspaceId: newest.workspace_id } : { kind: "changed_since" };
+  return { kind: "changed_since" };
+}
+
+/**
+ * `classifyFromRows`, for every id in one bulk read (Codex review, T-0102 R23, auditor MINOR): a
+ * separate SELECT per id meant each already-"done" member from a prior page's revert still cost
+ * its own statement to reclassify on every later call (paging is stateless, so every call
+ * rescans from ids[0]) -- growing by UNDO_GROUP_PAGE statements every page, 71 by the group's
+ * tenth page against this lane's 40-statement-per-page target. One query for the whole page's
+ * candidate ids keeps the read cost constant regardless of how many are already done. The window
+ * function caps each id's own chain at the same 500 rows the per-id form's LIMIT did -- SQLite
+ * has no per-group LIMIT, so it is expressed as a ROW_NUMBER filter instead.
+ */
+async function classifyMembers(
+  env: Env, ids: readonly string[], eventIdsByEntry: ReadonlyMap<string, ReadonlySet<string>>, scope: string[],
+): Promise<Map<string, MemberVerdict>> {
+  const out = new Map<string, MemberVerdict>();
+  if (!ids.length) return out;
+  const { results } = await env.DB.prepare(
+    // scope-checked: en.workspace_id IN (?2) narrows to the reader's own scope; ids also already
+    // come from groupCandidates's own reader-scoped derivation, so this is defense in depth.
+    `SELECT entry_id, seq, meta, reason, channel, actor_id, created_at, workspace_id FROM (
+       SELECT ev.entry_id AS entry_id, ev.seq AS seq, ev.meta AS meta, ev.reason AS reason,
+         ev.channel AS channel, ev.actor_id AS actor_id, ev.created_at AS created_at, en.workspace_id AS workspace_id,
+         ROW_NUMBER() OVER (PARTITION BY ev.entry_id ORDER BY ev.seq ASC) AS rn
+       FROM entry_versions ev JOIN entries en ON en.id = ev.entry_id
+       WHERE ev.entry_id IN (SELECT value FROM json_each(?1)) AND en.workspace_id IN (SELECT value FROM json_each(?2))
+     ) WHERE rn <= 500 ORDER BY entry_id ASC, seq ASC`,
+  ).bind(JSON.stringify(ids), JSON.stringify(scope)).all<ChainRow>();
+
+  const byEntry = new Map<string, ChainRow[]>();
+  for (const r of results) {
+    const rows = byEntry.get(r.entry_id);
+    if (rows) rows.push(r); else byEntry.set(r.entry_id, [r]);
+  }
+  for (const id of ids) out.set(id, classifyFromRows(byEntry.get(id), eventIdsByEntry.get(id) ?? new Set()));
+  return out;
 }
 
 async function resolveVersionGroup(
-  env: Env, identity: Identity, decoded: DecodedGroup, ids: string[], change: ChangeContext, config: Readonly<Config>,
+  env: Env, identity: Identity, decoded: DecodedGroup, ids: string[], eventIdsByEntry: ReadonlyMap<string, ReadonlySet<string>>,
+  change: ChangeContext, config: Readonly<Config>,
   ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
 ): Promise<UndoGroupResult> {
   const results: { id: string; result: string }[] = [];
-  let doneCount = 0;
+  const verdicts = await classifyMembers(env, ids, eventIdsByEntry, scope);
+  // Codex review, T-0102 E2: only an ACTUAL revert (verdict "pending") spends this call's page
+  // budget now. The old bound (results.length, which also grew for "not_found"/"changed_since")
+  // stopped the scan the moment UNDO_GROUP_PAGE blocked members turned up -- and since `i` is
+  // local to this call, never persisted, the next call started over at ids[0] and hit the exact
+  // same blocked members again: more than UNDO_GROUP_PAGE permanently-blocked members ahead of
+  // any revertable one stalled the group forever. `i` still bounds the scan (ids.length, itself
+  // capped at UNDO_GROUP_MAX = 50 members), and classifyMembers above already read every verdict
+  // in one statement, so a call that turns out fully blocked costs no more reads than one that
+  // doesn't.
+  let acted = 0;
   let i = 0;
-  for (; i < ids.length && results.length < UNDO_GROUP_PAGE; i++) {
-    const verdict = await classifyMember(env, ids[i], decoded, config, scope);
-    if (verdict.kind === "done") { doneCount++; continue; }
+  for (; i < ids.length && acted < UNDO_GROUP_PAGE; i++) {
+    const verdict = verdicts.get(ids[i])!;
+    if (verdict.kind === "done") continue;
     if (verdict.kind === "not_found" || verdict.kind === "changed_since") { results.push({ id: ids[i], result: verdict.kind }); continue; }
-    const outcome = await revertEntry(env, identity, ids[i], change, config, verdict.toVersion, verdict.workspaceId, undefined, ctx);
-    results.push({ id: ids[i], result: resultForStatus(outcome.status) });
+    const outcome = await revertEntry(env, identity, ids[i], change, config, verdict.toVersion, verdict.workspaceId, undefined, ctx, verdict.tipSeq);
+    // Round 4 re-review MAJOR: revertEntry's own "stale" (its fresh tip no longer matches
+    // verdict.tipSeq, or the ordinary CAS below it lost) reads as changed_since here -- from the
+    // group's own perspective the two mean the same thing, something moved since this was read.
+    results.push({ id: ids[i], result: outcome.status === "stale" ? "changed_since" : resultForStatus(outcome.status) });
+    acted++;
   }
   // Everything from i onward is still unexamined and stays actionable for the next call.
-  const remaining = ids.length - doneCount - results.length;
+  const remaining = ids.length - i;
   return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: decoded.family };
 }
 
@@ -832,13 +956,13 @@ export async function undoGroup(
 ): Promise<UndoGroupResult | null> {
   const candidates = await groupCandidates(env, identity, groupKeyStr, config);
   if (!candidates) return null;
-  const { decoded, ids, capped } = candidates;
+  const { decoded, ids, eventIdsByEntry, capped } = candidates;
   if (!ids.length) return { results: [], done: true, remaining: 0, group: groupKeyStr, capped, total: 0, family: decoded.family };
 
   const scope = readScopeWorkspaces(identity);
   if (decoded.family === "held") return resolveHeldGroup(env, identity, ids, change, config, ctx, groupKeyStr, capped, scope);
   if (decoded.family === "trash") return resolveTrashGroup(env, identity, ids, change, config, ctx, groupKeyStr, capped, scope);
-  return resolveVersionGroup(env, identity, decoded, ids, change, config, ctx, groupKeyStr, capped, scope);
+  return resolveVersionGroup(env, identity, decoded, ids, eventIdsByEntry, change, config, ctx, groupKeyStr, capped, scope);
 }
 
 /** "Undid 5 of 14 changes in that group; call undo with the same group again to continue." (5.9). */

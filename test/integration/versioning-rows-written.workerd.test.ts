@@ -170,7 +170,7 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("rows written on workerd", () =
     } finally { await d1.close(); }
   }, 120_000);
 
-  it("a forget writes +3 over a hard delete, matching the spec once triggers are counted on both sides", async () => {
+  it("a forget writes +4 over a hard delete, matching the spec once triggers are counted on both sides", async () => {
     const { d1, env, roots } = await setup();
     try {
       await env.DB.prepare(
@@ -189,15 +189,16 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("rows written on workerd", () =
       expect(await env.DB.prepare(`SELECT id FROM entries_trash WHERE id = 'a'`).first()).not.toBeNull();
       // A hard delete of the row bills 3, not 1: the row itself, plus one write each from the
       // entries_fts_delete and entry_counts_delete triggers it fires. A forget of an otherwise
-      // identical row bills 6: the trash INSERT (matching the entries row's own byte weight) plus
-      // the same entries delete and its two triggers. Delta: 3 — matching the spec's "+3 over a
-      // hard delete" exactly, once "hard delete" is measured as the real DELETE (with its own
-      // triggers), not assumed to be a bare 1-row write.
-      expect(m.rows() - hardRows).toBe(3);
+      // identical row bills 7: the trash INSERT bills 4 (the row, its own TEXT PRIMARY KEY
+      // autoindex, idx_entries_trash_deleted and idx_entries_trash_workspace_deleted -- confirmed
+      // by isolating each statement's own rows_written on real workerd, not entry_events -- this
+      // row has no dependents/edges, so all 7 retraction/cascade hook statements in the same batch
+      // write 0) plus the same entries delete and its two triggers (3). Delta: 4, not the spec's 3.
+      expect(m.rows() - hardRows).toBe(4);
     } finally { await d1.close(); }
   }, 120_000);
 
-  it("a purge of one row with 20 versions writes at most 47 (PURGE_ROW_COST 7 + 2 per version)", async () => {
+  it("a purge of one row with 20 versions writes at most 49 (PURGE_ROW_COST 9 + 2 per version)", async () => {
     const { d1, env, roots } = await setup();
     try {
       await env.DB.prepare(
@@ -210,7 +211,7 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("rows written on workerd", () =
       }
       const r = await purgeTrash(env, { ...DEFAULTS, TRASH_RETENTION_DAYS: 1 }, { ceiling: 10, rowTarget: 5000, now: Date.now() + 2 * 86_400_000 });
       expect(r.purged).toBe(1);
-      expect(r.rowsWritten).toBeLessThanOrEqual(47);
+      expect(r.rowsWritten).toBeLessThanOrEqual(49);
     } finally { await d1.close(); }
   }, 120_000);
 
@@ -234,7 +235,7 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("rows written on workerd", () =
     } finally { await d1.close(); }
   }, 120_000);
 
-  it("a move writes 9 rows for one entry (event insert, entries and edges UPDATEs, and their triggers) — not the spec's flat +4", async () => {
+  it("a move writes 10 rows for one entry (event insert, entries and edges UPDATEs, and their triggers) — not the spec's flat +4", async () => {
     const { d1, env, roots, owner } = await setup();
     try {
       await env.DB.prepare(
@@ -247,10 +248,12 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("rows written on workerd", () =
       const row = await env.DB.prepare(`SELECT workspace_id FROM entries WHERE id = 'e1'`).first<{ workspace_id: string }>();
       expect(row!.workspace_id).toBe(roots.companyWorkspaceId);
       // Measured against real D1: the move's own batch (entry_events INSERT + entries UPDATE +
-      // edges UPDATE, share.ts:53-65), plus entry_events' own two indexes, plus the
-      // entry_counts_update and idx_entries_workspace_created writes the workspace change fires —
-      // 9 for one entry with no edges. The spec's "+4 per entry" undercounts the triggers.
-      expect(m.rows()).toBe(9);
+      // edges UPDATE, share.ts:53-65), plus entry_events' own three indexes (idx_entry_events_entry,
+      // idx_entry_events_created and, since the merge of release/v4 1cbc817b, the new non-partial
+      // idx_entry_events_actor, +1 unconditionally), plus the entry_counts_update and
+      // idx_entries_workspace_created writes the workspace change fires — 10 for one entry with no
+      // edges. The spec's "+4 per entry" undercounts the triggers.
+      expect(m.rows()).toBe(10);
     } finally { await d1.close(); }
   }, 120_000);
 

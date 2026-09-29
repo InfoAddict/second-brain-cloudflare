@@ -107,10 +107,10 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // MOVED (merge of release/v4 d3b5b25c into v4/t7-c): Track 7's own reads (dueSplit/loopsSplit's
   // items+totals, now each marked directly; the standing-hydration read, now marked `any`) and
   // Track 9's dashboard aggregates shifted; recomputed against the real scanner output.
-  // MOVED +6 (T-0102, final cloud review): finding 8's own comment block, above the resurface
-  // same-day/fresh-pick split, pushed everything after it down; recomputed against the real
-  // scanner output.
-  "src/brief/compute.ts": [121, 129, 138, 153, 479, 482],
+  // MOVED (merge of release/v4 1cbc817b into v4/gate-fx2): this lane's own round 3 NOT_HELD_SQL
+  // swap and FX1's own finding-8 comment block are independently-tracked deltas from the same
+  // base; recomputed against the real scanner output on the merged tree, not hand-combined.
+  "src/brief/compute.ts": [125, 133, 142, 157, 483, 486],
   // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): v4/t34-w's own class E
   // held-row exclusions and release/v4's own Track 2 lane B deltas shifted these; recomputed
   // against the real scanner output on the merged tree.
@@ -126,9 +126,11 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // held-row exclusion.
   // MOVED (T-0089.2.3): GET /stale's own `reason` computation (spec 14 5.9) added lines above it
   // and everything after; recomputed against the real scanner output.
-  // MOVED +15 (FX3 finding 2/7): the member-removal vector-delete cap and the 202 response's
-  // removedEntries/removedVectors fields added lines above every site below.
-  "src/routes/admin.ts": [626, 639, 651, 676, 749, 774, 823, 872, 877, 1016, 1023, 1140, 1146, 1475, 1566, 1596, 1712],
+  // MOVED (merge of release/v4 1cbc817b into v4/gate-fx2): this lane's own round 3 "event life"
+  // filter and FX3's own member-removal vector-delete cap are independently-tracked deltas from
+  // the same base; recomputed against the real scanner output on the merged tree, not hand-combined.
+  // MOVED -1 (7b69dde6 comment trim): a comment above admin.ts's own life filter shrank by 1 line.
+  "src/routes/admin.ts": [636, 649, 661, 686, 759, 784, 833, 882, 887, 1026, 1033, 1150, 1156, 1485, 1576, 1606, 1722],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };

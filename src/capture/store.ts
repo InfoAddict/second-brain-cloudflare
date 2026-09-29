@@ -16,6 +16,7 @@ import { withVolatility, type Volatility } from "../memory/volatility";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import type { ChangeContext, AuditChannel } from "../lib/audit";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement, type WhenChange } from "../memory/versions";
+import { INDEXABLE_SQL } from "./lifecycle";
 import { scoreWrite, type QuarantineChannel } from "../quarantine/score";
 import { heldTagsFor, holdDecision, holdStatements, type HeldInfo } from "../quarantine/hold";
 import { isHeld, withEditedCanonical } from "../quarantine/tags";
@@ -80,10 +81,16 @@ export async function storeEntry(
   /** The vector_ids the caller read for this row (JSON, e.g. '[]' for a new or pending row). */
   commit: { expectedVectorIds: string } = { expectedVectorIds: "[]" },
 ): Promise<StoredEntry> {
-  // batch-embed: exempt — a create-time embed. A held write never reaches storeEntry at all (it
-  // takes the holdStatements batch instead, class A), so the only content that lands here is
-  // already under the scorer's 32 KB budget: too few chunks for batching to matter (R20).
-  const stored = await upsertEntryVectors(env, id, content, tags, source, now, config, writeCtx);
+  // Codex review, T-0102 F3 (MAJOR): the "batch-embed: exempt" reasoning this comment used to
+  // give -- a held write never reaches this function via class A's gate, so content here is
+  // always under the scorer's 32 KB budget -- is only true for captureEntry's own create-time
+  // call. Two other callers route through storeEntry with content that was never scored at all
+  // and can be up to the full 128 KB cap: vectorize/pending.ts's indexPendingRow (a deferred row, chosen by length
+  // alone) and migration/embedding.ts's backfill pass. Both would cost one AI call per chunk
+  // without this. Always batchEmbeds now, not opt-in: embedMany costs the same as embed for the
+  // common one-or-two-chunk capture (R20 never regresses that caller), and only ever helps a
+  // larger one.
+  const stored = await upsertEntryVectors(env, id, content, tags, source, now, config, writeCtx, { batchEmbeds: true });
 
   // This UPDATE is the tail of a version write (fresh vectors for the row). It
   // deliberately does NOT touch workspace_id: an update edits a row in place and
@@ -92,9 +99,14 @@ export async function storeEntry(
   // Compare-and-set on the content AND the workspace these vectors were stamped for (R4-2, round 5),
   // AND the vector_ids the caller read (round 6): the row alone decides which upload won, and an
   // upload that lost is this call's own ids, deleted here and nowhere else.
+  // Codex review, T-0102 D4: also gated on INDEXABLE_SQL, checked at commit time rather than
+  // pinned to a snapshot value. upsertEntryVectors above checked isHeld on the tags THIS call was
+  // given, but embedding takes time (an AI call), and nothing between that check and this UPDATE
+  // stopped a concurrent write from holding or deprecating the row in the meantime — landing a
+  // real, indexed vector on a row the hold or deprecation contract says must have none.
   // versioning: exempt: vector bookkeeping
   const result = await env.DB.prepare(
-    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ? AND vector_ids = ?`
+    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ? AND vector_ids = ? AND ${INDEXABLE_SQL}`
   ).bind(JSON.stringify(stored.vectorIds), id, content, writeCtx.workspaceId, commit.expectedVectorIds).run();
 
   if (changesOf(result) === 0) {
@@ -270,6 +282,11 @@ export type UpdateEntryResult =
     wasCanonical?: boolean;
     /** 5.7: this edit added or redefined a capsule:/capsule-slot: tag. */
     capsuleChanged?: boolean;
+    /** Round 4 re-review MAJOR (undo-group "dead for canonical edits and capsule changes"): this
+     * write's own version carries this same id at meta.event_id, minted here and not by
+     * auditEventStatement's own default, so the caller's "updated" event can pass it straight
+     * through -- the exact link classifyFromRows requires to ever group and revert this edit. */
+    eventId: string;
   };
 
 /**
@@ -449,6 +466,10 @@ export async function updateEntryContent(
     // to storeEntry's own unconditional write, which a losing attempt would otherwise leave behind
     // for the next attempt's statement to build on top of.
     const now = Date.now();
+    // Round 4 re-review MAJOR: minted here, not by auditEventStatement's own default, so this
+    // version's meta.event_id and the "updated" event it lands with moments later (the caller,
+    // after this returns) share the SAME id.
+    const eventId = crypto.randomUUID();
     // vector_ids too (round 6): the row decides which upload won, and old ids retired below are
     // exactly the ones this commit replaced.
     const casColumns = { content: readContent, tags: readTags, workspace_id: pinnedWorkspaceId, vector_ids: row.vector_ids ?? null };
@@ -462,7 +483,8 @@ export async function updateEntryContent(
     try {
       committed = await env.DB.batch([
         snapshotStatement(env, {
-          entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags, now,
+          entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags,
+          meta: { event_id: eventId }, now,
           // ADV-10: readContent is this write's own base, right here in JS — its UTF-16 length is the
           // exact boundary a later reconstruction needs, at zero cost. Stored only when this row
           // actually lands as a delta (buildSnapshot nulls it out on a full copy, same as prior_length).
@@ -512,7 +534,7 @@ export async function updateEntryContent(
         }
       }
       await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, existingTags, committedTags);
-      return { status: "updated", vectorIds: null, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical, capsuleChanged };
+      return { status: "updated", vectorIds: null, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical, capsuleChanged, eventId };
     }
 
     if (newVectorIds) {
@@ -539,7 +561,7 @@ export async function updateEntryContent(
     }
 
     await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, existingTags, committedTags, reembedded?.values ? [{ id, vector: reembedded.values }] : undefined);
-    return { status: "updated", vectorIds: newVectorIds, wasCanonical, capsuleChanged };
+    return { status: "updated", vectorIds: newVectorIds, wasCanonical, capsuleChanged, eventId };
   }
 
   // Out of attempts: the last upload never became the row's, so it goes.
@@ -585,6 +607,9 @@ export interface AppendResult {
   held?: HeldInfo;
   /** 5.7: this row's status was canonical before this append landed (mcp only). */
   wasCanonical?: boolean;
+  /** Round 4 re-review MAJOR (undo-group "dead for canonical edits and capsule changes"): this
+   * write's own version carries this same id at meta.event_id -- see UpdateEntryResult's own note. */
+  eventId: string;
 }
 
 export async function appendToEntry(
@@ -612,7 +637,11 @@ export async function appendToEntry(
   const nextWhen: WhenChange | undefined = when ? { when_at: when.at, when_kind: when.kind, when_source: "explicit" } : undefined;
   const whenSql = when ? `, when_at = ?, when_kind = ?, when_source = 'explicit'` : "";
   const whenBind = when ? [when.at, when.kind] : [];
-  const meta = when ? { when: true } : undefined;
+  // Round 4 re-review MAJOR (undo-group "dead for canonical edits and capsule changes"): each
+  // attempt mints its own event id, merged in below at the one point each branch actually commits
+  // -- not by auditEventStatement's own default -- so this version's meta.event_id and the
+  // "appended" event the caller lands moments later share the SAME id.
+  const metaFor = (eventId: string) => (when ? { when: true, event_id: eventId } : { event_id: eventId });
 
   // Spelled month, like every other date this app hands to a reader or a model: "8/2/2026" is two different days.
   const timestamp = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
@@ -632,6 +661,7 @@ export async function appendToEntry(
   };
 
   for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
+    const eventId = crypto.randomUUID();
     const row = await env.DB.prepare(
       // scope-exempt: by-id: routes gate with getReadableEntry + assertCanEditContent
       `SELECT content, tags, source, vector_ids, workspace_id FROM entries WHERE id = ?`
@@ -717,7 +747,7 @@ export async function appendToEntry(
       try {
         committed = await env.DB.batch([
           snapshotStatement(env, {
-            entryId: id, reason: "append", change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, nextWhen, meta, now,
+            entryId: id, reason: "append", change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, nextWhen, meta: metaFor(eventId), now,
             // ADV-10: see updateEntryContent's identical reasoning above.
             priorLengthUtf16: readContent.length,
             guard: p2 => buildCasGuard(p2, longCasColumns),
@@ -765,7 +795,7 @@ export async function appendToEntry(
           }
         }
         await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, rowTags, refreshedTags);
-        return { indexed: false, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical };
+        return { indexed: false, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical, eventId };
       }
 
       // Skipped when Vectorize is unavailable: the old vectors are the entry's only remaining semantic index.
@@ -782,7 +812,7 @@ export async function appendToEntry(
         console.error("Append auto-link failed (non-fatal):", e);
       }
       await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, rowTags, refreshedTags);
-      return { indexed: newVectorIds !== null, wasCanonical };
+      return { indexed: newVectorIds !== null, wasCanonical, eventId };
     }
 
     // 5.4 W-c: a held append is never indexed — no chunk embed, no Vectorize insert. Codex
@@ -826,7 +856,7 @@ export async function appendToEntry(
     try {
       committed = await env.DB.batch([
         snapshotStatement(env, {
-          entryId: id, reason: "append", change, content: { kind: "suffix" }, nextTags: refreshedTags, nextWhen, meta, now,
+          entryId: id, reason: "append", change, content: { kind: "suffix" }, nextTags: refreshedTags, nextWhen, meta: metaFor(eventId), now,
           // R2-1: NOT stamped here, unlike the long branch and updateEntryContent above — this
           // branch's guard (shortCasColumns) does not include content, so a concurrent short append
           // can land between this read and this commit, making readContent.length describe a state
@@ -869,7 +899,7 @@ export async function appendToEntry(
         }
       }
       await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, rowTags, refreshedTags);
-      return { indexed: false, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical };
+      return { indexed: false, held: decision.hold ? { reasons: decision.reasons, score: decision.score } : undefined, wasCanonical, eventId };
     }
 
     try {
@@ -878,7 +908,7 @@ export async function appendToEntry(
       console.error("Append auto-link failed (non-fatal):", e);
     }
     await touchStandingIfNeeded(env, ctx, config, embedCtx.workspaceId, rowTags, refreshedTags, values ? [{ id, vector: values }] : undefined);
-    return { indexed, wasCanonical };
+    return { indexed, wasCanonical, eventId };
   }
   throw new WriteConflictError();
 }

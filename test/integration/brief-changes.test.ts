@@ -305,6 +305,70 @@ describe("getChanges() (S1)", () => {
     expect(sqlite.issued).toEqual(["BATCH"]);
   });
 
+  it("hides a reused id's earlier life: only events after the latest purge/tier-3-delete show, by insertion order, not created_at (round 3 re-review MAJOR)", async () => {
+    // The old row's own events, well within the 48h window -- excluded by rowid (insertion order),
+    // not by created_at, since both land before the purge event on the time axis too.
+    await insertEvent({ id: "ev-old-1", entryId: "e1", event: "reverted", createdAt: now - 20 * HOUR, payload: { channel: "mcp" } });
+    await insertEvent({ id: "ev-old-2", entryId: "e1", event: "status_changed", createdAt: now - 15 * HOUR, payload: { channel: "mcp", status: "canonical" } });
+    // The life-end marker: a purge (the id is now free) or a tier-3 delete both count.
+    await insertEvent({ id: "ev-purged", entryId: "e1", event: "purged", createdAt: now - 10 * HOUR, payload: {} });
+
+    // The id is reused by a brand-new row; its own events land after the purge event by rowid.
+    sqlite.seed({ id: "e1", content: "A different memory now", createdAt: now - HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+    await insertEvent({ id: "ev-new", entryId: "e1", event: "reverted", createdAt: now - 30 * MIN, payload: { channel: "mcp" } });
+
+    const result = await getChanges(env, identityOf("u1", "ws-p"));
+    // ev-old-1 shares this same family/entry/actor and would otherwise be a second, distinct item
+    // (20 hours apart, well outside the 10-minute group window) -- count 1, not 2, proves it is
+    // excluded, not merged. `at` pins down which of the two "reverted" events survived.
+    expect(result.count).toBe(1);
+    expect((result.items[0] as { id: string }).id).toBe("e1");
+    expect((result.items[0] as { event: string }).event).toBe("reverted");
+    expect(result.items[0].at).toBe(now - 30 * MIN);
+  });
+
+  it("truncated reflects the inner 200-row cap, not the count left after the life filter drops old-life noise (round 8 re-review MINOR)", async () => {
+    // 50 old-life events on a reused id, all more recent (by created_at) than every one of the 200
+    // real events below -- they occupy the top 50 slots of the inner ORDER BY created_at DESC
+    // LIMIT 200, displacing 50 real events from the capped read entirely. The purge marker and the
+    // new row land after them by insertion order.
+    for (let i = 0; i < 50; i++) {
+      await insertEvent({ id: `ev-old-${i}`, entryId: "e1", event: "reverted", createdAt: now - i * 1000, payload: { channel: "mcp" } });
+    }
+    await insertEvent({ id: "ev-purged", entryId: "e1", event: "purged", createdAt: now - 40 * HOUR, payload: {} });
+    sqlite.seed({ id: "e1", content: "A different memory now", createdAt: now - 30 * HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+    for (let i = 0; i < 200; i++) {
+      await insertEvent({ id: `ev-new-${i}`, entryId: "e1", event: "reverted", createdAt: now - 24 * HOUR - i * 1000, payload: { channel: "mcp" } });
+    }
+
+    const result = await getChanges(env, identityOf("u1", "ws-p"));
+    // Only 150 of the 200 real events fit the inner cap once the 50 old-life rows take the newest
+    // 50 slots; the life filter then drops those 50, leaving count 150 -- but the read DID hit its
+    // 200-row inner cap, so more real events exist beyond what came back. truncated must say so.
+    expect(result.count).toBe(150);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("truncated is still true when the life filter drops every one of the 200 capped rows (round 9 re-review MINOR)", async () => {
+    // 250 old-life events on a reused id, no new events at all: the inner 200-row cap fills
+    // entirely with old-life rows (DESC order, all more recent than nothing), so the life filter
+    // drops every one of them -- rows comes back empty, with no surviving row to read inner_count
+    // from. Falling back to the raw count probe (>= 200) must still say truncated, not silently
+    // report "complete".
+    for (let i = 0; i < 250; i++) {
+      await insertEvent({ id: `ev-old-${i}`, entryId: "e1", event: "reverted", createdAt: now - i * 1000, payload: { channel: "mcp" } });
+    }
+    await insertEvent({ id: "ev-purged", entryId: "e1", event: "purged", createdAt: now - 40 * HOUR, payload: {} });
+    sqlite.seed({ id: "e1", content: "A different memory now", createdAt: now - 30 * HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+
+    const result = await getChanges(env, identityOf("u1", "ws-p"));
+    expect(result.count).toBe(0);
+    expect(result.truncated).toBe(true);
+  });
+
   // Config threading, after the director's follow-up (T-0089.4.3): the group
   // thresholds and the client-name check now read real config keys rather
   // than local constants, so their values must come from `cfg`, not be

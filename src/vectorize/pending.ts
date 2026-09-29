@@ -160,9 +160,12 @@ export async function runNightlyVectorizePending(
   if (!upserted.length) return finish(0, failed);
   // CAS on the content AND the workspace the vectors were stamped for (round 5), and on the row still
   // being pending (round 6): whoever committed first won, and a loser discards only its own upload.
+  // Codex review, T-0102 D4: also gated on INDEXABLE_SQL, checked at commit time -- the same
+  // concurrent hold/deprecate-during-embed race store.ts's storeEntry closes, here for the
+  // nightly backfill's own vector_ids write.
   const written = await env.DB.batch(upserted.map(({ row, vectorIds }) => env.DB.prepare(
     // versioning: exempt: vector bookkeeping
-    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ? AND vector_ids = '[]'`,
+    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ? AND vector_ids = '[]' AND ${INDEXABLE_SQL}`,
   ).bind(JSON.stringify(vectorIds), row.id, row.content, row.workspace_id)));
   let processed = 0;
   for (let i = 0; i < upserted.length; i++) {

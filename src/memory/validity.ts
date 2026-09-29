@@ -17,7 +17,9 @@ import { RETRACTED_SOURCE_TAG } from "../tags/system";
 export { RETRACTED_SOURCE_TAG };
 import { buildDerivedSnapshot, changesOf, Params, pruneStatement, snapshotStatement } from "./versions";
 import { buildStandingCache, standingTouched } from "../standing/cache";
-import { notHeldSql } from "../quarantine/tags";
+// This used to hand-roll its own quarantine:-prefix LIKE check instead of the shared exact-match
+// notHeldSqlFor (the aliased form: this query joins two tag-bearing tables).
+import { notHeldSqlFor } from "../quarantine/tags";
 
 /**
  * A stated start of "unknown": a fact told only with its end ("I lived in Boston until 2020"),
@@ -69,7 +71,7 @@ export function supersededBySql(outer: string): string {
        FROM edges g CROSS JOIN entries s ON s.id = g.source_id
       WHERE g.target_id = ${outer}.id AND g.type = 'supersedes'
         AND s.tags NOT LIKE '%"status:deprecated"%'
-        AND ${notHeldSql("s")}
+        AND ${notHeldSqlFor("s")}
         AND s.workspace_id = ${outer}.workspace_id
         AND COALESCE(s.valid_from, s.created_at) = ${outer}.valid_until
       ORDER BY s.created_at DESC LIMIT 1) END`;

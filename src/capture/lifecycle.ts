@@ -57,7 +57,7 @@ export async function forgetEntry(
   // D-RET: the rows this one closed reopen, in the same batch, before its edges and row are deleted.
   // The dependent cascade runs for a person's forget only; bulk integration removals apply the restore rule alone (P10).
   const hook = retractionHook(env, [{ id, workspaceId: row.workspace_id ?? "" }], () => "1", change, opts.config, now, { cascade: opts.reason === "forget" });
-  const results = await env.DB.batch(trashManyStatements(env, plan, { reason: opts.reason, change, now, hook: hook.statements }));
+  const results = await env.DB.batch(trashManyStatements(env, plan, { reason: opts.reason, change, now, hook: hook.statements, workspacePairs: [{ id, workspaceId: row.workspace_id ?? "" }] }));
   // A racing deleter removed it between the read and the batch: it owns the cleanup and the audit.
   if (changesOf(results[results.length - 1]) === 0) return { status: "not_found" };
   const done = hook.read(results, trashHookOffset(plan));
@@ -194,7 +194,14 @@ export async function deprecateWithValidity(
 }
 
 export type ApplyStatusResult =
-  | { status: "ok"; indexed: boolean; validity: ValidityOutcome }
+  | {
+      status: "ok"; indexed: boolean; validity: ValidityOutcome;
+      /** Round 3 re-review MAJOR (undo-group walk-back): this write's own version carries this
+       * same id at meta.event_id, minted here and not by auditEventStatement's own default, so the
+       * caller's audit event for it (event: "status_changed") can pass it straight through as that
+       * event's own id — the exact link classifyFromRows now requires. */
+      eventId: string;
+    }
   | { status: "not_found" }
   /** A transient embed failure while leaving "deprecated": nothing below was written, the entry
    * is unchanged. Vectorize being unreachable is NOT this — that degrades to keyword-only instead
@@ -202,9 +209,10 @@ export type ApplyStatusResult =
   | { status: "reembed_failed" };
 
 export async function applyStatus(id: string, status: MemoryStatus, env: Env, change: ChangeContext, config: Readonly<Config>, workspaceId: string, ctx?: ExecutionContext): Promise<ApplyStatusResult> {
+  const eventId = crypto.randomUUID();
   if (status === "deprecated") {
-    const r = await deprecateWithValidity(id, env, change, config, workspaceId, { meta: { status } }, ctx);
-    return r.ok ? { status: "ok", indexed: false, validity: r.validity } : { status: "not_found" };
+    const r = await deprecateWithValidity(id, env, change, config, workspaceId, { meta: { status, event_id: eventId } }, ctx);
+    return r.ok ? { status: "ok", indexed: false, validity: r.validity, eventId } : { status: "not_found" };
   }
   // R2-3: pinned to the caller's authorized workspace, same reasoning as deprecateEntry above
   // (including its null/undefined normalization for a legacy row's column value).
@@ -249,7 +257,7 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
     : null;
   const results = await env.DB.batch([
     snapshotStatement(env, {
-      entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { status }, now,
+      entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { status, event_id: eventId }, now,
       guard: p2 => buildCasGuard(p2, casColumns),
     }),
     // versioning: snapshot
@@ -265,5 +273,5 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
   const done = hook ? [hook.read(results, 3)] : [];
   await auditValidity(env, change, ...done);
   if (ctx && touchesStanding(currentTags, nextTags)) standingTouched(env, ctx, config, [pinnedWorkspaceId]);
-  return { status: "ok", indexed, validity: outcomeOf(...done) };
+  return { status: "ok", indexed, validity: outcomeOf(...done), eventId };
 }

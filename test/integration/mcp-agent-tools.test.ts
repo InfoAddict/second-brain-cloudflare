@@ -46,10 +46,8 @@ beforeEach(async () => {
 afterEach(async () => { await Promise.all(pending); sqlite?.close(); });
 
 describe("held text on agent-facing reads", () => {
-  // T-0102 MINOR fix: isHeld matches only the app's five recognized hold reasons, not the whole
-  // quarantine: prefix -- a pre-4.0 user tag (quarantine:review, or any value the hold mechanism
-  // never wrote) must not hold the row, or it could never be released (no hold version for undo
-  // to find). An unrecognized reason therefore reads as ordinary, unheld text.
+  // isHeld matches only the app's five recognized hold reasons, not the whole quarantine: prefix
+  // -- a pre-4.0 user tag (quarantine:review) must not hold the row.
   it("does not hide text when the quarantine prefix has an unrecognized reason (a pre-4.0 user tag)", async () => {
     sqlite.seed({ id: "not-held-unknown", content: "an ordinary note about the quarterly review", createdAt: Date.now(), tags: ["quarantine:review"] });
     const listed = await call("list_recent", { n: 10 });
@@ -260,7 +258,10 @@ describe("MCP digest", () => {
 
 describe("MCP history", () => {
   it("shows recent events with actors and channels plus supersedes edges in three statements", async () => {
-    sqlite.seed({ id: "current", content: "Current decision", createdAt: 1, tags: ["work"] });
+    // "current" is seeded at 0, not 1 (round 3 re-review MAJOR: readEntryTimeline now hides an
+    // event older than its row's own created_at, a purged id's prior life) -- these 12 seeded
+    // events run from 0, and must all still read as this row's own history.
+    sqlite.seed({ id: "current", content: "Current decision", createdAt: 0, tags: ["work"] });
     sqlite.seed({ id: "older", content: "Older decision", createdAt: 1, tags: ["work"] });
     sqlite.seed({ id: "newer", content: "Newer decision", createdAt: 1, tags: ["work"] });
     for (let i = 0; i < 12; i++) {

@@ -50,9 +50,8 @@ function seedDue(s: SqliteD1, id: string, workspaceId = "", whenAt = Date.now() 
 
 /**
  * Marks a due row held (quarantine:<reason>), as Q3's contradiction/quarantine path does. The
- * default is a real recognized reason (T-0102 MINOR fix: isHeld no longer matches an arbitrary
- * placeholder like the old "needs-review" default, which was never a value the app actually
- * writes -- see src/quarantine/tags.ts's HoldReason).
+ * default is a real recognized reason -- isHeld matches only the app's five own reason values,
+ * see src/quarantine/tags.ts's HoldReason.
  */
 function holdEntry(s: SqliteD1, id: string, reason = "instruction") {
   s.db.prepare(`UPDATE entries SET tags = json_insert(tags, '$[#]', ?) WHERE id = ?`)

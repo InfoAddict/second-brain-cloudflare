@@ -92,10 +92,8 @@ describe("held text: the agent-facing reader inventory", () => {
     seedHeld("held-list");
     seedHeld("held-due", { whenAt: Date.now() + 1000 });
     seedHeld("held-seed");
-    // T-0102 MINOR fix: isHeld now matches only the app's five recognized hold reasons, not the
-    // whole quarantine: prefix -- a pre-4.0 user tag (`quarantine:review`, or any other value the
-    // hold mechanism never wrote) must NOT hold the row, or it could never be released (there is
-    // no hold version for undo to find). So an unrecognized reason reads as ordinary, unheld text.
+    // isHeld matches only the app's five recognized hold reasons, not the whole quarantine:
+    // prefix -- a pre-4.0 user tag (`quarantine:review`) must NOT hold the row.
     sqlite.seed({ id: "not-held-unknown", content: "an ordinary note tagged quarantine:review before 4.0 existed", createdAt: Date.now(), tags: ["quarantine:review"] });
     sqlite.seed({ id: "readable-neighbor", content: "an ordinary note", createdAt: Date.now() });
     sqlite.db.prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'readable-neighbor'`)
@@ -116,7 +114,7 @@ describe("held text: the agent-facing reader inventory", () => {
     const listed = await call("list_recent", { n: 10 });
     expect(listed, "list_recent").toContain("held-list");
     expect(listed, "list_recent").not.toContain(HELD_MARKER);
-    // An unrecognized quarantine: value is not held (T-0102): its content shows normally.
+    // An unrecognized quarantine: value is not held: its content shows normally.
     expect(listed, "list_recent (unrecognized reason)").toContain("not-held-unknown");
     expect(listed, "list_recent (unrecognized reason)").toContain("quarantine:review before 4.0 existed");
 

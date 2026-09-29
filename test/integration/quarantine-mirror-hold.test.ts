@@ -87,6 +87,31 @@ describe("a held mirror row stays held after a benign re-sync (D4.1)", () => {
   });
 });
 
+describe("Codex review, T-0102 C: a held mirror create never sends content to a model", () => {
+  it("classifyEntry is skipped entirely -- env.AI.run is never called", async () => {
+    const { env, writeCtx } = await setup();
+    const ms = makeMirrorStore(env, writeCtx, undefined, "email-gmail");
+
+    const id = await ms.createEntry(INSTRUCTION_TEXT, [], "email-gmail");
+
+    expect(isHeld(JSON.parse((await live(env, id)).tags))).toBe(true);
+    // Score first, classify only when unheld (the fix): scoreWrite is pure/local, so the only
+    // way env.AI.run is ever called here is classify (a model call) or storeEntry's embed (also
+    // a model call, and also skipped for a held create) -- zero calls proves both never ran.
+    expect(env.AI.run).not.toHaveBeenCalled();
+  });
+
+  it("an unheld create still classifies normally (importance, kind, canonical status)", async () => {
+    const { env, writeCtx } = await setup();
+    const ms = makeMirrorStore(env, writeCtx, undefined, "email-gmail");
+
+    const id = await ms.createEntry("A normal first message about the meeting.", [], "email-gmail");
+
+    expect(isHeld(JSON.parse((await live(env, id)).tags))).toBe(false);
+    expect(env.AI.run).toHaveBeenCalled();
+  });
+});
+
 describe("mirror holds are strictest: quoted instructions in mail are held", () => {
   it("the same text that an MCP damping rule would spare is held for mail", async () => {
     const { env, writeCtx } = await setup();

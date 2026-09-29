@@ -222,7 +222,7 @@ export async function buildEntryHistory(
 ): Promise<EntryHistoryResult> {
   const chain = await loadHistory(env, identity, { id: row.id, content: row.content }, config.VERSION_KEEP);
   const timelineResult = await readEntryTimeline(
-    env, row.id, identity, row.actor_id, undefined, false, row.workspace_id, chain.rows.map(r => r.actor_id),
+    env, row.id, identity, row.actor_id, undefined, false, row.workspace_id, chain.rows.map(r => r.actor_id), "",
   );
   return buildEntryHistoryFromReads(env, identity, row, config, chain, timelineResult);
 }

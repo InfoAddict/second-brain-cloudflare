@@ -20,7 +20,7 @@ import { getKind } from "../memory/kind";
 import type { TypedRelationship } from "./reason";
 import { isEligiblePair, parseTags } from "./candidates";
 import { D1_MAX_BOUND_PARAMS, SYSTEM_SOURCE } from "../constants";
-import { notHeldSql } from "../quarantine/tags";
+import { notHeldSqlFor } from "../quarantine/tags";
 
 /**
  * Weight for an edge the reasoning model proposed.
@@ -267,8 +267,8 @@ export async function runWeeklyInsights(
            AND b.tags NOT LIKE '%"status:deprecated"%'
            AND (a.valid_until IS NULL OR a.valid_until > ${now})
            AND (b.valid_until IS NULL OR b.valid_until > ${now})
-           AND ${notHeldSql("a")}
-           AND ${notHeldSql("b")}
+           AND ${notHeldSqlFor("a")}
+           AND ${notHeldSqlFor("b")}
            ${sliceClause}
          ORDER BY c.score DESC
          LIMIT ?`,

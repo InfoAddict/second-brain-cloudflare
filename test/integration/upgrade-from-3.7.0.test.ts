@@ -26,8 +26,9 @@ import { createMember } from "../../src/lib/team-admin";
 import { resolveIdentityFromToken, type Identity } from "../../src/lib/identity";
 import { VERSIONS_SINCE_KV_KEY } from "../../src/constants";
 import { DEFAULTS } from "../../src/config";
-import { isHeld, NOT_HELD_SQL } from "../../src/quarantine/tags";
+import { isHeld, NOT_HELD_SQL, heldReason } from "../../src/quarantine/tags";
 import type { Env } from "../../src/env";
+import { recallEntries } from "../../src/recall/search";
 
 // A string path, not new URL(...): a duplicate global URL type (DOM lib vs node:url) makes
 // readFileSync's URL overload unresolvable under this project's tsconfig. Same convention as
@@ -101,6 +102,25 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     const setCount = (await (d1.db as any).prepare(`SELECT COUNT(*) AS n FROM entries WHERE updated_at IS NOT NULL`).first()).n as number;
     expect(nullCount).toBe(27); // 25 untouched ordinary entries + cap + dep
     expect(setCount).toBe(25);
+  });
+
+  it("an upgrade with a non-JSON entry_events payload succeeds (round 8 re-review MINOR, upgrade safety)", async () => {
+    // A 3.7.0 brain predates entry_events.payload's own JSON convention on some rows; a CREATE
+    // INDEX whose WHERE calls json_extract would throw "malformed JSON" evaluating this row and
+    // fail the whole migration. idx_entry_events_life_end's own predicate checks only `event`.
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'a memory', '[]', 'api', 1000, '[]')`);
+    d1.db.exec(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES ('ev1', 'e1', '', 'deleted', 'not json at all', 2000)`);
+
+    env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
+    await expect(initializeDatabase(env)).resolves.not.toThrow();
+
+    const idx = await (d1.db as any).prepare(`SELECT name FROM sqlite_master WHERE name = 'idx_entry_events_life_end'`).first();
+    expect(idx).not.toBeNull();
+
+    // A later ordinary insert of a 'deleted' event, still non-JSON, must not throw either.
+    await expect(
+      (d1.db as any).prepare(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES ('ev2', 'e1', '', 'deleted', 'still not json', 3000)`).run(),
+    ).resolves.not.toThrow();
   });
 
   it("creates idx_entries_ledger and idx_entries_standing on a 3.7.0 upgrade, both empty", async () => {
@@ -180,6 +200,39 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     expect(versions[0].valid_from).toBe(1000);
   });
 
+  it("a 3.7 tag that merely looks reserved (quarantine:2020, outcome:won) recalls normally, isn't held, keeps its tags, and replacement can remove it (Codex review, T-0102)", async () => {
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'the deal closed in Lisbon', '["quarantine:2020","outcome:won"]', 'api', 1000, '[]')`);
+    env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
+    await initializeDatabase(env);
+    const roots = await ensureTenantBootstrap(env);
+    await (d1.db as any).prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'e1'`).bind(roots.ownerPersonalWorkspaceId, roots.ownerUserId).run();
+
+    // Recalls normally: NOT_HELD_SQL must not exclude a tag that merely shares the quarantine:
+    // prefix with a real hold reason.
+    const { matches } = await recallEntries({ query: "Lisbon", topK: 10, synthesize: false }, env, ctx, undefined, {});
+    expect(matches.map(m => m.id)).toContain("e1");
+
+    // Isn't held: isHeld/heldReason must not treat "2020" as a recognized hold reason.
+    const row = await (d1.db as any).prepare(`SELECT tags FROM entries WHERE id = 'e1'`).first();
+    expect(isHeld(JSON.parse(row.tags))).toBe(false);
+    expect(heldReason(JSON.parse(row.tags))).toBeNull();
+
+    // Keeps its tags: an ordinary edit (content-only, tags untouched) must not silently drop them.
+    const change = { actorId: roots.ownerUserId, channel: "rest" as const };
+    const writeCtx = { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId };
+    const edited = await updateEntryContent(env, "e1", "the deal closed in Porto", DEFAULTS, undefined, undefined, writeCtx, change, roots.ownerPersonalWorkspaceId);
+    expect(edited.status).toBe("updated");
+    const afterEdit = await (d1.db as any).prepare(`SELECT tags FROM entries WHERE id = 'e1'`).first();
+    expect(JSON.parse(afterEdit.tags).sort()).toEqual(["outcome:won", "quarantine:2020"]);
+
+    // Replacement can remove them: they behave as ORDINARY user tags, not un-droppable reserved
+    // ones -- a replacement that omits them drops them, the same as any other user tag would.
+    const replaced = await updateEntryContent(env, "e1", "the deal closed in Porto", DEFAULTS, undefined, ["deals"], writeCtx, change, roots.ownerPersonalWorkspaceId);
+    expect(replaced.status).toBe("updated");
+    const afterReplace = await (d1.db as any).prepare(`SELECT tags FROM entries WHERE id = 'e1'`).first();
+    expect(JSON.parse(afterReplace.tags)).toEqual(["deals"]);
+  });
+
   it("a pre-4.0 row's first append versions correctly and reconstructs the prior text", async () => {
     d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'Notes:', '["work"]', 'api', 1000, '[]')`);
     env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
@@ -219,7 +272,7 @@ describe("upgrade from a 3.7.0-shaped database", () => {
 
     const change = { actorId: roots.ownerUserId, channel: "rest" as const };
     const result = await applyStatus("e1", "deprecated", env, change, DEFAULTS, roots.ownerPersonalWorkspaceId);
-    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object) });
+    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object), eventId: expect.any(String) });
 
     const versions = (await (d1.db as any).prepare(`SELECT * FROM entry_versions WHERE entry_id = 'e1' ORDER BY seq`).all()).results as any[];
     expect(versions).toHaveLength(1);
@@ -367,7 +420,10 @@ describe("upgrade from a 3.7.0-shaped database", () => {
   });
 
   it("a pre-4.0 shared event hides older events from a non-author", async () => {
-    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('p1', 'a shared memory', '["x"]', 'api', 1000, '[]')`);
+    // created_at is 0, before every seeded event below (round 3 re-review MAJOR: readEntryTimeline
+    // now hides an event older than its row's own created_at) -- this row is the pre-4.0 original,
+    // not a reused id, so its own real history must stay visible.
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('p1', 'a shared memory', '["x"]', 'api', 0, '[]')`);
     env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
     await initializeDatabase(env);
     const roots = await ensureTenantBootstrap(env);

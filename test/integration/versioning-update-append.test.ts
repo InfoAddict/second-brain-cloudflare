@@ -157,7 +157,8 @@ describe("versioning append", () => {
     const vs = await versions("e1");
     expect(vs).toHaveLength(1);
     expect(JSON.parse(vs[0].state)).toMatchObject({ when_at: 5000, when_kind: "event", when_source: "regex" });
-    expect(JSON.parse(vs[0].meta)).toEqual({ when: true });
+    // event_id (round 4 re-review MAJOR) is minted fresh per append.
+    expect(JSON.parse(vs[0].meta)).toMatchObject({ when: true, event_id: expect.any(String) });
     expect(vs[0]).toMatchObject({ channel: "mcp", reason: "append" });
     // No separate when UPDATE any more.
     expect(d1.issued.filter(s => /^UPDATE entries SET when_at = \?, when_kind/.test(s))).toEqual([]);

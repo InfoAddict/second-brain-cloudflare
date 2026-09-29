@@ -74,6 +74,15 @@ export const RESERVED_TAG_PREFIXES = [
 ];
 
 /**
+ * The pre-4.0 subset of RESERVED_TAG_PREFIXES: prefix-only on purpose, unlike the namespaces
+ * this contract added below. This is the "separate, pre-existing gap" isNewReservedTag's own
+ * comment describes -- a caller-supplied kind:/status:/capsule: tag is neither stripped nor
+ * rejected on capture or replacement, so there is no write-time guard here to keep in step with
+ * isRecognizedReservedTagFormat the way isNewReservedTag now is. Unchanged by T-0102.
+ */
+const OLD_RESERVED_PREFIXES = ["kind:", "status:", "volatility:", "stale:", CAPSULE_TAG_PREFIX, CAPSULE_SLOT_TAG_PREFIX];
+
+/**
  * Bare markers the Worker writes: compression, pattern mining, dedupe, and the
  * contradiction pass. Keep in step with SYSTEM_TAG_NAMES in public/utils.js.
  *
@@ -115,13 +124,24 @@ export function normalizeTagList(tags: readonly unknown[]): string[] {
   return tags.filter((t): t is string => typeof t === "string").map(t => t.trim()).filter(Boolean);
 }
 
-/** True when the tag is the brain's own bookkeeping rather than the user's word. */
+/**
+ * True when the tag is the brain's own bookkeeping rather than the user's word.
+ *
+ * Codex review, T-0102: the "new" namespaces (quarantine:, edited-canonical:, the Track 7
+ * prefixes) are checked in the exact format the system writes (isNewReservedTag, itself
+ * isRecognizedReservedTagFormat), not by prefix alone -- a 3.7 tag that merely shares one of
+ * these prefixes (`outcome:won`, `quarantine:2020`, both predating this contract) is an ORDINARY
+ * user tag: applyTagReplacement must be free to drop it like any other when a replacement omits
+ * it, not treat it as the Worker's own and keep it regardless. The pre-4.0 prefixes
+ * (OLD_RESERVED_PREFIXES) keep their existing prefix-only match; see that constant's own comment.
+ */
 export function isWorkerOwnedTag(tag: string): boolean {
   if (typeof tag !== "string") return false;
   const t = tag.trim().toLowerCase();
   if (!t) return false;
   if (PIPELINE_TAG_NAMES.has(t)) return true;
-  return RESERVED_TAG_PREFIXES.some((p) => t.startsWith(p));
+  if (OLD_RESERVED_PREFIXES.some((p) => t.startsWith(p))) return true;
+  return isNewReservedTag(t);
 }
 
 /**
@@ -137,16 +157,26 @@ export function isWorkerOwnedTag(tag: string): boolean {
  * what this contract added, so a forged `quarantine:` or `standing:active`
  * can never enter through a caller's own tags.
  */
-const NEW_RESERVED_PREFIXES = [QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX, ...T7_TAG_PREFIXES];
 const NEW_RESERVED_NAMES = new Set<string>([OWED_TO_ME_TAG]);
 
-/** True for a tag in a namespace this contract reserved (see NEW_RESERVED_PREFIXES above). */
+/**
+ * True for a tag in a namespace this contract reserved, in the exact format the system itself
+ * writes (isRecognizedReservedTagFormat below) — not merely sharing a prefix with one.
+ *
+ * Codex review, T-0102: a prefix-only check here stripped a 3.7 brain's own pre-existing tag
+ * that happens to share a prefix this contract later reserved (an `outcome:won` or
+ * `quarantine:review` from before 4.0 existed) the moment it passed back through capture or
+ * replacement — contradicting CHANGELOG's own promise that such a tag "keeps showing normally;
+ * nothing stored is rewritten." isRecognizedReservedTagFormat already drew this exact line for
+ * display (public/utils.js's isSystemTag); the write-time guard now draws it the same way, so
+ * stripping and display never disagree about which tag is really the system's.
+ */
 export function isNewReservedTag(tag: string): boolean {
   if (typeof tag !== "string") return false;
   const t = tag.trim().toLowerCase();
   if (!t) return false;
   if (NEW_RESERVED_NAMES.has(t)) return true;
-  return NEW_RESERVED_PREFIXES.some(p => t.startsWith(p));
+  return isRecognizedReservedTagFormat(t);
 }
 
 /**
@@ -179,15 +209,14 @@ export function reservedTagsNote(ignored: readonly string[]): string {
  * True when a tag in a namespace this contract reserved ALSO matches the
  * system's own value format for that namespace -- not just the prefix.
  *
- * Codex cross-vendor review, MINOR (T-0102): a pre-existing user tag that
- * merely looks like one of these (a genuine `outcome:won` or
- * `confidence:high` someone tagged before 4.0) must not vanish from the
- * dashboard. isNewReservedTag alone is deliberately broad (prefix-only), so
- * the write-time guard errs toward stripping; this function is stricter
- * on purpose, for display only -- public/utils.js's isSystemTag mirrors it
- * (utils.js cannot import TypeScript) to decide what to hide as a system
- * chip versus show as an ordinary one. Stored data is never rewritten by
- * either side; this only changes what the dashboard hides.
+ * Codex cross-vendor review, MINOR then MAJOR (T-0102): a pre-existing user tag that merely
+ * looks like one of these (a genuine `outcome:won` or `confidence:high` someone tagged before
+ * 4.0) must not vanish from the dashboard, and must not be stripped back out the moment it
+ * passes through capture or replacement either -- isNewReservedTag (above) now calls this
+ * directly, so the write-time guard and the display guard draw the exact same line.
+ * public/utils.js's isSystemTag mirrors this function's own rules (utils.js cannot import
+ * TypeScript) for the same reason: display and storage must never disagree about which tag is
+ * the system's. Stored data is never rewritten by either side.
  */
 export function isRecognizedReservedTagFormat(tag: string): boolean {
   if (typeof tag !== "string") return false;

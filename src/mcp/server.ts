@@ -825,10 +825,11 @@ export function buildMcpServer(
           content: [{ type: "text", text: `Append failed: ${(e as Error).message}` }],
         };
       }
-      const { indexed, held, wasCanonical } = appendResult;
+      const { indexed, held, wasCanonical, eventId } = appendResult;
 
       if (identity) {
         auditEvent(env, ctx, {
+          id: eventId,
           entryId: id, actorId: identity.userId, event: "appended",
           payload: { channel: "mcp", ...(client ? { client } : {}), ...(wasCanonical ? { was_canonical: true } : {}) },
         });
@@ -958,6 +959,7 @@ export function buildMcpServer(
 
       if (identity && result.status === "updated") {
         auditEvent(env, ctx, {
+          id: result.eventId,
           entryId: id, actorId: identity.userId, event: "updated",
           payload: {
             channel: "mcp", ...(client ? { client } : {}),
@@ -1031,7 +1033,7 @@ export function buildMcpServer(
         return { content: [{ type: "text", text: "Could not change the status: re-indexing failed. Nothing changed. Try again." }] };
       }
       if (identity) {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp", ...(client ? { client } : {}) } });
+        auditEvent(env, ctx, { id: result.eventId, entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp", ...(client ? { client } : {}) } });
       }
       // BE-12 (T-0101.8.2): names the meaning, not the mechanism — "wrong" is what a member acts
       // on; "removed from recall, kept for audit" is implementation detail moved into the tool's
@@ -1458,10 +1460,13 @@ export function buildMcpServer(
       if (result.status === "not_found") {
         return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
       }
-      if (identity) {
+      // Round 4 re-review MINOR: the tier-3 case (not trashed) already has its own reliable
+      // life-end marker, written in forgetEntry's own batch (trashManyStatements) -- this
+      // fire-and-forget richer event would only duplicate it, so it is skipped for that case alone.
+      if (identity && result.trashed) {
         auditEvent(env, ctx, {
           entryId: id, actorId: identity.userId, event: "deleted",
-          payload: { deletedVectors: result.vectorCount, channel: "mcp", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}), ...(client ? { client } : {}) },
+          payload: { deletedVectors: result.vectorCount, channel: "mcp", trash: result.trashed, reason: "forget", ...(result.edgesDropped ? { edgesDropped: true } : {}), ...(client ? { client } : {}) },
         });
       }
       return { content: [{ type: "text", text: (result.trashed

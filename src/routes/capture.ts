@@ -305,9 +305,10 @@ export async function handleCaptureRoutes(
       if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
-    const { indexed, held, wasCanonical } = appendResult;
+    const { indexed, held, wasCanonical, eventId } = appendResult;
 
     auditEvent(env, ctx, {
+      id: eventId,
       entryId: id, actorId: identity.userId, event: "appended",
       payload: { channel: "rest", ...(wasCanonical ? { was_canonical: true } : {}) },
     });
@@ -440,6 +441,7 @@ export async function handleCaptureRoutes(
 
     // Only a write that happened is audited.
     auditEvent(env, ctx, {
+      id: result.eventId,
       entryId: id, actorId: identity.userId, event: "updated",
       payload: {
         channel: "rest",

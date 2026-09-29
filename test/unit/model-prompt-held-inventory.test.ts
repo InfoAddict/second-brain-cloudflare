@@ -79,7 +79,7 @@ const ACCOUNTED_FOR: { file: string; line: number; why: string }[] = [
   },
   {
     file: "src/insight/reason.ts", line: 372,
-    why: "reasonOverPair(a, b, ...) takes two rows its callers already read. src/insight/weekly.ts's draw query and routes/admin.ts's /insights/dry-run preview both now filter a/b through notHeldSql (T-0102 MINOR fix: one NOT LIKE clause per recognized hold reason, alias-qualified) alongside the status:deprecated/valid_until re-checks they already did for the same reason: a candidate accrued clean can be held by the time it is drawn, days later.",
+    why: "reasonOverPair(a, b, ...) takes two rows its callers already read. src/insight/weekly.ts's draw query and routes/admin.ts's /insights/dry-run preview both now filter a/b through notHeldSqlFor (T-0102 MINOR fix: one NOT LIKE clause per recognized hold reason, alias-qualified) alongside the status:deprecated/valid_until re-checks they already did for the same reason: a candidate accrued clean can be held by the time it is drawn, days later.",
   },
   {
     file: "src/recall/insight.ts", line: 34,

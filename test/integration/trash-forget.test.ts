@@ -256,6 +256,42 @@ describe("a losing tier-3 forget racing a tier-1 forget of the same id", () => {
     expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'a'`)).not.toBeNull();
     // The trashed memory's history must be intact (the plan promises versions survive a trash).
     expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'a'`)).length).toBe(2);
+    // The LOSING tier-3 attempt's own life-end marker must not have landed -- it never actually
+    // removed the row, so this event would permanently hide 'a''s own earlier history.
+    expect(await t.one(`SELECT id FROM entry_events WHERE entry_id = 'a' AND event = 'deleted'`)).toBeNull();
+  });
+
+  it("a share moves the row's workspace between the read and the batch — not_found, and its event history stays visible", async () => {
+    t = await makeTrashEnv();
+    t.seed("b", { content: "x".repeat(20_000) });
+    await t.sqlite.db.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES ('ev-b', 'b', 'u', 'created', '{}', 1000)`,
+    ).run();
+    const cfg = await resolveConfig(t.env);
+
+    // Between forgetEntry's own read (authorizing 'b' under the owner's personal workspace) and
+    // its batch, a share moves the row to the company workspace -- the same shape as the tier-3
+    // race above, but the guard itself is the one under test here, not a competing forget.
+    const realBatch = t.env.DB.batch.bind(t.env.DB);
+    let injected = false;
+    (t.env.DB as any).batch = async (stmts: any[]) => {
+      const sqls = stmts.map((s: any) => String(s?.sourceSql?.() ?? ""));
+      if (!injected && sqls.some((s: string) => s.startsWith("DELETE FROM entry_versions WHERE entry_id IN"))) {
+        injected = true;
+        await t.sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'b'`).bind(t.roots.companyWorkspaceId).run();
+      }
+      return realBatch(stmts);
+    };
+
+    const r1 = await forgetEntry("b", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: cfg, purge: false, budget: 10_000 }, t.roots.ownerPersonalWorkspaceId);
+    expect(r1.status).toBe("not_found");
+    // The row itself is untouched: still live, just in the workspace the share moved it to.
+    const row = await t.one<any>(`SELECT workspace_id FROM entries WHERE id = 'b'`);
+    expect(row?.workspace_id).toBe(t.roots.companyWorkspaceId);
+    expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'b'`)).toBeNull();
+    // No life-end marker landed: the row's own earlier event is still its own, undisturbed history.
+    expect(await t.one(`SELECT id FROM entry_events WHERE entry_id = 'b' AND event = 'deleted'`)).toBeNull();
+    expect(await t.one(`SELECT id FROM entry_events WHERE entry_id = 'b' AND event = 'created'`)).not.toBeNull();
   });
 });
 

@@ -247,7 +247,8 @@ describe("REST and MCP undo leave identical rows and versions except channel", (
     // channel, which is the one thing REST and MCP are allowed, and expected, to differ on.
     const strip = (v: any) => {
       const { id, entry_id, created_at, valid_from, channel, meta, ...rest } = v;
-      const { nonce, ...metaRest } = meta ? JSON.parse(meta) : {};
+      // event_id (round 3 re-review MAJOR) is minted fresh per call, same reasoning as nonce.
+      const { nonce, event_id, ...metaRest } = meta ? JSON.parse(meta) : {};
       return { ...rest, meta: metaRest };
     };
     for (let i = 0; i < v1.length; i++) expect(strip(v1[i])).toEqual(strip(v2[i]));

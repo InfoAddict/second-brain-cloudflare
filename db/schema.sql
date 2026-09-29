@@ -198,6 +198,9 @@ CREATE INDEX IF NOT EXISTS idx_entry_events_created ON entry_events(created_at D
 -- event = 'held' so a teammate's own burst cannot crowd either out of the raw scan's cap.
 CREATE INDEX IF NOT EXISTS idx_entry_events_actor ON entry_events(actor_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_entry_events_held ON entry_events(created_at DESC) WHERE event = 'held';
+-- The event readers' life-end subquery (quadratic in edits per memory without this index). No
+-- json_extract in the WHERE -- must never throw on a non-JSON payload; readers check trash=0 on top.
+CREATE INDEX IF NOT EXISTS idx_entry_events_life_end ON entry_events(entry_id) WHERE event IN ('purged', 'deleted');
 
 -- Immutable administration audit trail. Same contract as entry_events:
 -- application code only ever INSERTs here. Consumed by Phase 4.2.

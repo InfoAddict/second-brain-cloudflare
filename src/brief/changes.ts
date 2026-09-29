@@ -138,6 +138,9 @@ function parseTagsJson(tagsJson: string | null): string[] {
 
 interface Classified {
   id: string;
+  /** entry_events.id -- this row's own event, not the entry it describes. groupCandidates threads
+   * this through so undo.ts can link a version to exactly the event that produced it. */
+  eventId: string;
   event: string;
   family: ChangeFamily;
   actorId: string;
@@ -172,7 +175,7 @@ function classify(row: RawRow, identity: Identity, cfg: Readonly<Config>): Class
     || row.entry_workspace_id === identity.personalWorkspaceId
     || row.author_id === identity.userId;
   const base = {
-    id: row.entry_id, event: row.event, actorId: row.actor_id, client,
+    id: row.entry_id, eventId: row.id, event: row.event, actorId: row.actor_id, client,
     createdAt: row.created_at, preview: row.preview, heldNow: isHeld(parseTagsJson(row.tags_json)), canAct,
   };
 
@@ -307,11 +310,19 @@ const RAW_EVENT_SCAN_LIMIT = 1000;
 async function changeEventRows(
   env: Env, identity: Identity, since: number, until: number, order: "ASC" | "DESC",
   layer?: "personal" | "company", teamId?: string,
-): Promise<{ rows: RawRow[]; rawCapped: boolean }> {
+): Promise<{ rows: RawRow[]; rawCapped: boolean; innerCapped: boolean }> {
   const workspaces = readScopeWorkspaces(identity, { layer, teamId });
   const workspacesJson = JSON.stringify(workspaces);
   const baseFilter = `created_at > ?1 AND created_at <= ?2
        AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')`;
+  // A reused id's earlier life always ends with a `purged` event or a `deleted` event with
+  // payload.trash false; everything at or before the latest such event belongs to the row that's
+  // now gone. rowid, not created_at -- insertion order, immune to a backdated or future timestamp.
+  //
+  // Runs once in the outer query, after the cap and scope join narrow the set, not once per raw
+  // row (R23); the index-matching first conjunct keeps CREATE INDEX/INSERT safe from non-JSON payloads.
+  const lifeFilter = `e.event_rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = e.entry_id
+             AND g.event IN ('purged', 'deleted') AND (g.event = 'purged' OR json_extract(g.payload, '$.trash') = 0)), 0)`;
   // R22 (budget auditor MAJOR, on top of T-0102 finding 7): the workspace scope is checked per
   // event row via a JOIN, not by matching entry_id against a subquery over the reader's WHOLE id
   // list -- the earlier `entry_id IN (SELECT id FROM entries WHERE workspace_id IN (...) UNION
@@ -338,7 +349,7 @@ async function changeEventRows(
   // always documented; only that narrower residual remains.
   const rawBranch = (indexedBy: string, extraFilter: string) => `
            SELECT * FROM (
-             SELECT id, entry_id, event, payload, created_at, actor_id
+             SELECT id, entry_id, event, payload, created_at, actor_id, rowid AS event_rowid
                FROM entry_events INDEXED BY ${indexedBy}
               WHERE ${baseFilter}${extraFilter}
               ORDER BY created_at ${order}
@@ -346,9 +357,10 @@ async function changeEventRows(
            )`;
   // scope-checked: entry_workspace_id, COALESCEd by the join below, is filtered against the
   // reader's scope in the outer query's WHERE (json_each(?3)) -- deliberately not here, so each
-  // inner branch's LIMIT bounds RAW rows examined, not rows matching that filter.
+  // inner branch's LIMIT bounds RAW rows examined, not rows matching that filter. event_rowid rides
+  // along the same way for lifeFilter's own outer WHERE.
   const scopedEvents = `
-         SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+         SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id, e.event_rowid,
                 COALESCE(en.actor_id, t.actor_id) AS author_id,
                 COALESCE(en.workspace_id, t.workspace_id) AS entry_workspace_id,
                 COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
@@ -388,22 +400,32 @@ async function changeEventRows(
          WHERE ${baseFilter} LIMIT ${RAW_EVENT_SCAN_LIMIT + 1}
        )`,
     ).bind(since, until),
-    // scope-checked: inScope's COALESCE(...) IN (json_each(?3)) below, filtering the already-capped
-    // and already-joined rows from scopedEvents above.
+    // scope-checked: inScope's COALESCE(...) IN (json_each(?3)) below. lifeFilter is a separate
+    // outer SELECT, not another ANDed term, so it runs once per surviving row, not per unioned row.
     env.DB.prepare(
-      `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
-              e.author_id, e.entry_workspace_id, e.source, e.preview, e.tags_json
-       FROM (${scopedEvents}) e
-       WHERE e.entry_workspace_id IN (SELECT value FROM json_each(?3))
-         AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
-         AND (e.actor_id = ?4 OR e.author_id = ?4 OR e.event = 'held')
-         AND (e.live_id IS NOT NULL OR ${trashVisible})
-       ORDER BY e.created_at ${order}
-       LIMIT 200`,
+      `SELECT * FROM (
+         SELECT *, COUNT(*) OVER () AS inner_count FROM (
+           SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+                  e.author_id, e.entry_workspace_id, e.source, e.preview, e.tags_json, e.event_rowid
+           FROM (${scopedEvents}) e
+           WHERE e.entry_workspace_id IN (SELECT value FROM json_each(?3))
+             AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
+             AND (e.actor_id = ?4 OR e.author_id = ?4 OR e.event = 'held')
+             AND (e.live_id IS NOT NULL OR ${trashVisible})
+           ORDER BY e.created_at ${order}
+           LIMIT 200
+         ) e
+       ) e
+       WHERE ${lifeFilter}
+       ORDER BY e.created_at ${order}`,
     ).bind(since, until, workspacesJson, identity.userId, ...trashBindings),
   ]);
   const rawCount = ((countResult.results as { raw_count: number }[] | undefined)?.[0]?.raw_count) ?? 0;
-  return { rows: (mainResult.results ?? []) as unknown as RawRow[], rawCapped: rawCount > RAW_EVENT_SCAN_LIMIT };
+  const rows = (mainResult.results ?? []) as unknown as (RawRow & { inner_count: number })[];
+  // No surviving row to read inner_count from if the life filter drops all of them: fall back to
+  // the raw probe rather than under-report truncation.
+  const innerCapped = rows.length ? rows[0].inner_count === READ_LIMIT : rawCount >= READ_LIMIT;
+  return { rows, innerCapped, rawCapped: rawCount > RAW_EVENT_SCAN_LIMIT };
 }
 
 /**
@@ -421,7 +443,7 @@ export async function getChanges(
   const cfg = config ?? await resolveConfig(env);
   const now = Date.now();
   const since = now - windowHours * 60 * 60 * 1000;
-  const { rows: results, rawCapped } = await changeEventRows(env, identity, since, now, "DESC", layer, teamId);
+  const { rows: results, rawCapped, innerCapped } = await changeEventRows(env, identity, since, now, "DESC", layer, teamId);
 
   const classified = results.map(row => classify(row, identity, cfg)).filter((c): c is Classified => c !== null);
   const held = classified.filter(c => c.family === "held").length;
@@ -430,9 +452,9 @@ export async function getChanges(
     windowHours,
     count: classified.length,
     held,
-    // Honest either way (R21 review): the filtered read hit its own 200-row output cap, or the
-    // raw pre-filter scan hit RAW_EVENT_SCAN_LIMIT before it could see the whole window.
-    truncated: results.length === READ_LIMIT || rawCapped,
+    // Honest either way: the inner 200-row cap was hit (before the life filter drops any rows), or
+    // the raw pre-filter scan hit RAW_EVENT_SCAN_LIMIT before it could see the whole window.
+    truncated: innerCapped || rawCapped,
     items: group(classified, cfg).slice(0, OUTPUT_LIMIT),
   };
 }
@@ -444,7 +466,9 @@ export const UNDO_GROUP_PAGE = 5;
 
 export interface DecodedGroup { family: ChangeFamily; actorId: string; client: string | null; start: number; end: number }
 
-const GROUP_FAMILIES: readonly ChangeFamily[] = ["held", "released", "canonical_edit", "capsule_changed", "status", "trash", "revert"];
+// Exported so test/unit/undo-group-event-id-writers.test.ts can derive its family list from
+// this one instead of keeping a second copy that could drift.
+export const GROUP_FAMILIES: readonly ChangeFamily[] = ["held", "released", "canonical_edit", "capsule_changed", "status", "trash", "revert"];
 
 function fromBase64Url(key: string): string {
   return atob(key.replace(/-/g, "+").replace(/_/g, "/"));
@@ -465,7 +489,15 @@ export function decodeGroupKey(key: string): DecodedGroup | null {
   }
 }
 
-export interface GroupCandidates { decoded: DecodedGroup; ids: string[]; capped: boolean }
+export interface GroupCandidates {
+  decoded: DecodedGroup;
+  ids: string[];
+  /** entry_id -> the exact set of entry_events.id this group's own read found for it (round 3
+   * re-review MAJOR): what undoGroup's version walk-back matches against instead of a time window
+   * or an actor/client re-check -- see classifyFromRows in src/memory/undo.ts. */
+  eventIdsByEntry: Map<string, Set<string>>;
+  capped: boolean;
+}
 
 /**
  * Re-derives a group's membership from the reader's own scoped read of the 5.8 event window
@@ -481,15 +513,15 @@ export async function groupCandidates(
   if (!decoded) return null;
   const { rows } = await changeEventRows(env, identity, decoded.start - 1, decoded.end, "ASC");
   const classified = rows.map(row => classify(row, identity, cfg)).filter((c): c is Classified => c !== null);
-  const seen = new Set<string>();
   const ids: string[] = [];
+  const eventIdsByEntry = new Map<string, Set<string>>();
   for (const c of classified) {
     if (c.family !== decoded.family || c.actorId !== decoded.actorId || c.client !== decoded.client) continue;
-    if (seen.has(c.id)) continue;
-    seen.add(c.id);
-    ids.push(c.id);
+    let set = eventIdsByEntry.get(c.id);
+    if (!set) { set = new Set(); eventIdsByEntry.set(c.id, set); ids.push(c.id); }
+    set.add(c.eventId);
   }
-  return { decoded, ids: ids.slice(0, UNDO_GROUP_MAX), capped: ids.length > UNDO_GROUP_MAX };
+  return { decoded, ids: ids.slice(0, UNDO_GROUP_MAX), eventIdsByEntry, capped: ids.length > UNDO_GROUP_MAX };
 }
 
 // ── Rendering (S2) ────────────────────────────────────────────────────────────

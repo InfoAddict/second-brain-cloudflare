@@ -135,7 +135,7 @@ describe("status, resolve actions: baseline + 1 KV", () => {
     const cfg = await resolveConfig(t.env); // the route/MCP layer's own +1 KV, done once here, outside the ledger below
     t.sqlite.issued.length = 0;
     const result = await applyStatus("e1", "canonical", t.env, change(), cfg, t.roots.ownerPersonalWorkspaceId);
-    expect(result).toEqual({ status: "ok", indexed: false, validity: { restored: [], reclosed: [], flagged: 0, unflagged: 0 } });
+    expect(result).toEqual({ status: "ok", indexed: false, validity: { restored: [], reclosed: [], flagged: 0, unflagged: 0 }, eventId: expect.any(String) });
     expect(t.sqlite.issued).toHaveLength(2);
     expect(t.sqlite.issued[1]).toBe("BATCH");
   });
@@ -350,6 +350,20 @@ describe("member removal: cleanupMemberData", () => {
     // batch: 2 (id reads) + 1 (chunk delete) + 1 (vectors) + 1 (counts) + 1 (final batch) = 6.
     expect(t.sqlite.issued).toHaveLength(6);
     expect(t.sqlite.issued.filter((s) => s === "BATCH")).toHaveLength(1);
+  });
+
+  it("the budget estimate counts the life-end marker rows too, ~5 per entries row and ~5 per trashed row", async () => {
+    t = await makeTrashEnv();
+    const { member } = await createMember(t.env, { name: "Ada" });
+    t.sqlite.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('m0', 'c', '[]', 'api', 1, '[]', ?, ?)`,
+    ).bind(member.personalWorkspaceId, member.userId).run();
+    // 1 entries row: the old estimate (10) missed the marker's own rows; the new one (10 + 5 = 15)
+    // accounts for them. A budget of 13 sits strictly between the two.
+    const progress = await cleanupMemberData(t.env, member.userId, member.personalWorkspaceId, { rowsLeft: 13 });
+    expect(progress.blockedByBudget).toBe(true);
+    expect(progress.done).toBe(false);
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'm0'`)).not.toBeNull();
   });
 });
 

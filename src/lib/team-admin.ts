@@ -572,17 +572,41 @@ export async function cleanupMemberData(
   const removedEntries = count?.entries ?? 0;
   // A final batch that would not fit the night's budget waits for a night when nothing else wrote,
   // unless it is the only thing left to do (the 3.7 route paid this cost at click time).
-  const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0);
+  // +6 per entries row and +6 per trashed row for their own life-end marker INSERT: one
+  // entry_events row costs 6 rows written on this schema (the row, its own PK autoindex,
+  // idx_entry_events_entry, idx_entry_events_created, idx_entry_events_actor, and
+  // idx_entry_events_life_end -- R23 -- since a life-end marker always matches that last index's
+  // own predicate).
+  const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0)
+    + 6 * removedEntries + 6 * (count?.trashed ?? 0);
   if (opts.rowsLeft !== undefined && estimate > left() && !opts.allowOversize) {
     return { done: false, removedEntries: 0, vectorIds: [], ownedVectors: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten, blockedByBudget: true };
   }
 
+  const offboardNow = Date.now();
   await env.DB.batch([
     // A version written between the chunks and here (a racing writer) must not outlive its entry.
     env.DB.prepare(
       // scope-exempt: offboarding: leftover versions of the removed member's rows and trash rows
       `DELETE FROM entry_versions WHERE entry_id IN (SELECT id FROM entries WHERE workspace_id = ?1 UNION SELECT id FROM entries_trash WHERE workspace_id = ?1)`,
     ).bind(personalWid),
+    // A life-end marker, in the SAME batch as the DELETE below -- a fire-and-forget write here
+    // could be lost, leaking a removed member's history into whoever reuses the id later.
+    env.DB.prepare(
+      // scope-exempt: offboarding: one life-end marker per entry this batch's own DELETE removes
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+         SELECT lower(hex(randomblob(16))), id, '', 'deleted',
+                json_object('reason', 'offboarding', 'trash', json('false'), 'channel', 'system:offboarding'), ?2
+           FROM entries WHERE workspace_id = ?1`,
+    ).bind(personalWid, offboardNow),
+    // Already trashed: the same life-end marker every retention purge writes.
+    env.DB.prepare(
+      // scope-exempt: offboarding: one life-end marker per trash row this batch's own DELETE removes
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+         SELECT lower(hex(randomblob(16))), id, '', 'purged',
+                json_object('reason', 'offboarding', 'channel', 'system:offboarding'), ?2
+           FROM entries_trash WHERE workspace_id = ?1`,
+    ).bind(personalWid, offboardNow),
     // Edges before entries: the edge delete resolves endpoints through the
     // entries table, so it has to run while the rows still exist.
     env.DB.prepare(

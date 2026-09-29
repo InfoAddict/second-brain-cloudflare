@@ -33,7 +33,7 @@ describe("applyStatus()", () => {
 
   it("canonical: returns ok/indexed, sets status:canonical tag, vectors untouched", async () => {
     const result = await applyStatus("entry-1", "canonical", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toEqual({ status: "ok", indexed: true, validity: expect.any(Object) });
+    expect(result).toEqual({ status: "ok", indexed: true, validity: expect.any(Object), eventId: expect.any(String) });
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
     const tags: string[] = JSON.parse(row.tags);
@@ -48,7 +48,7 @@ describe("applyStatus()", () => {
 
     // Now set to draft
     const result = await applyStatus("entry-1", "draft", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toEqual({ status: "ok", indexed: true, validity: expect.any(Object) });
+    expect(result).toEqual({ status: "ok", indexed: true, validity: expect.any(Object), eventId: expect.any(String) });
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
     const tags: string[] = JSON.parse(row.tags);
@@ -61,7 +61,7 @@ describe("applyStatus()", () => {
 
   it("deprecated: deletes vectors, clears vector_ids, sets status:deprecated", async () => {
     const result = await applyStatus("entry-1", "deprecated", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object) });
+    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object), eventId: expect.any(String) });
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
     const tags: string[] = JSON.parse(row.tags);

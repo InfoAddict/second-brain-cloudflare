@@ -80,11 +80,11 @@ function selectListBefore(sql: string, matchIndex: number): string {
   return selectIdx === -1 ? sql.slice(0, matchIndex) : sql.slice(selectIdx, matchIndex);
 }
 /**
- * The hold filter itself: the plain `${NOT_HELD_SQL}` constant, the aliased `${notHeldSql("a")}`
+ * The hold filter itself: the plain `${NOT_HELD_SQL}` constant, the aliased `${notHeldSqlFor("a")}`
  * call (T-0102 MINOR fix -- a two-table JOIN needs every `tags` reference qualified, so it can no
  * longer use the bare constant with a manual alias-dot prefix), or the literal LIKE either expands to.
  */
-const HOLD_FILTER = /\$\{NOT_HELD_SQL\}|\$\{notHeldSql\(|NOT LIKE '%"quarantine:/;
+const HOLD_FILTER = /\$\{NOT_HELD_SQL\}|\$\{notHeldSqlFor\(|NOT LIKE '%"quarantine:/;
 /**
  * Cloud re-review MINOR tightening (T-0102, on top of 0b970baa): the plain HOLD_FILTER test above
  * is satisfied by a quarantine check ANYWHERE in the statement, including one that only filters
@@ -98,7 +98,7 @@ const HOLD_FILTER = /\$\{NOT_HELD_SQL\}|\$\{notHeldSql\(|NOT LIKE '%"quarantine:
  * No `[^)]*` gap between the alias and `NOT LIKE` (cloud re-review MINOR, round 2): the old,
  * permissive span let `v.tags = e.tags AND (e.tags NOT LIKE '%"quarantine:...')` read as "v is
  * filtered" -- the wildcard crossed straight over an unrelated alias's own filter, through an OPEN
- * paren, to reach a NOT LIKE that has nothing to do with v.tags at all. notHeldSql/NOT_HELD_SQL's
+ * paren, to reach a NOT LIKE that has nothing to do with v.tags at all. notHeldSqlFor/NOT_HELD_SQL's
  * own generated shape is always `alias.tags NOT LIKE '...' AND alias.tags NOT LIKE '...' ...` --
  * direct adjacency, so requiring the first occurrence to sit immediately after the alias (only
  * whitespace between) loses nothing real and closes the gap.
@@ -109,7 +109,7 @@ function heldFilterAppliesTo(sql: string, alias: string | undefined): boolean {
   // read -- trash-list.ts's own pattern) so there is no inline SQL shape to recognize for it here;
   // a trash hit always needs a pinned exemption. entry_versions DOES have a real `tags` column, so
   // an alias-qualified check on it is a genuine, recognizable inline filter.
-  const qualified = new RegExp(`\\b${alias}\\.tags\\s+NOT LIKE '%"quarantine:|notHeldSql\\(\\s*['"\`]${alias}['"\`]`);
+  const qualified = new RegExp(`\\b${alias}\\.tags\\s+NOT LIKE '%"quarantine:|notHeldSqlFor\\(\\s*['"\`]${alias}['"\`]`);
   return qualified.test(sql);
 }
 

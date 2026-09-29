@@ -90,7 +90,11 @@ describe("undoGroup() (S3)", () => {
     let t = windowStart;
     for (const id of ids) {
       await seedEntry(id, ["work", "status:canonical"]);
-      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: t });
+      // Round 3 re-review MAJOR: classifyFromRows now matches a version to the group by an exact
+      // event id, stamped into the version's own meta.event_id -- the same id this member's own
+      // entry_events row carries, exactly the link src/capture/lifecycle.ts's applyStatus and
+      // src/memory/undo.ts's releaseHeldAfterEdit/revertEntry stamp for real at write time.
+      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: `ev-${id}` }, createdAt: t });
       await insertEvent({ id: `ev-${id}`, entryId: id, event: "status_changed", actorId: "u1", createdAt: t, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
       t += MIN;
     }
@@ -132,6 +136,80 @@ describe("undoGroup() (S3)", () => {
       expect(tags).not.toContain("status:canonical");
       expect(tags).toContain("work");
     }
+  });
+
+  it("a member written twice inside the group reverts to before its FIRST change, not its second (Codex cross-vendor review, round 2 re-review MAJOR)", async () => {
+    // e0 was edited twice inside the burst window, both by u1/mcp/Cursor: seq 1's own pre-image
+    // is ["work"] (before either edit), seq 2's is ["work","status:canonical"] (after the first
+    // edit, before the second). Reverting the group must land on seq 1's pre-image -- "before the
+    // group's first change" -- not seq 2's, which would only undo the second of the two edits.
+    // e1/e2 are the burst's other two members (QUARANTINE_STATUS_BURST needs 3 to form a group).
+    const ids = ["e0", "e1", "e2"];
+    const windowStart = now - HOUR;
+    await seedStatusBurst(ids, windowStart);
+    await sqlite.db.prepare(`UPDATE entries SET tags = ? WHERE id = 'e0'`).bind(JSON.stringify(["v2", "work", "status:canonical"])).run();
+    // e0's own SECOND group event (round 3 re-review MAJOR): classifyFromRows now requires a
+    // version's own meta.event_id, not a time window or an actor/client match, so a second
+    // in-group edit needs its own second qualifying event too, not just a second version.
+    await insertVersion({ entryId: "e0", seq: 2, tags: ["work", "status:canonical"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: "ev-e0-2" }, createdAt: windowStart + 30_000 });
+    await insertEvent({ id: "ev-e0-2", entryId: "e0", event: "status_changed", actorId: "u1", createdAt: windowStart + 30_000, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+
+    const group = await discoverGroup();
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId.e0).toBe("reverted");
+    expect(byId.e1).toBe("reverted");
+    expect(byId.e2).toBe("reverted");
+    expect(result!.done).toBe(true);
+    const tags = await tagsOf("e0");
+    expect(tags).not.toContain("status:canonical");
+    expect(tags).not.toContain("v2");
+    expect(tags).toContain("work");
+  });
+
+  it("an earlier separate edit by the group's own actor and client is never folded in (round 3 re-review MAJOR, repro 1)", async () => {
+    // e0's own real group event is seq 2. Seq 1 is a genuinely earlier, unrelated edit -- same
+    // actor (u1), same client label (Cursor), immediately adjacent in the chain -- exactly what
+    // the old actor/client walk-back could not tell apart from the group's own second change.
+    // classifyFromRows now only ever matches by meta.event_id, so seq 1 (no event_id at all) can
+    // never be folded in, whatever it shares with the group's own writer.
+    const windowStart = now - HOUR;
+    await seedEntry("e0", ["work", "status:canonical"]);
+    await insertVersion({ entryId: "e0", seq: 1, tags: ["original"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: windowStart - 30 * MIN });
+    await insertVersion({ entryId: "e0", seq: 2, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: "ev-e0" }, createdAt: windowStart });
+    await insertEvent({ id: "ev-e0", entryId: "e0", event: "status_changed", actorId: "u1", createdAt: windowStart, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+    await seedStatusBurst(["e1", "e2"], windowStart + MIN);
+
+    const group = await discoverGroup();
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId.e0).toBe("reverted");
+    // Reverted only to seq 2's own pre-image ("work"), never past it to seq 1's ("original").
+    expect(await tagsOf("e0")).toEqual(["work"]);
+  });
+
+  it("a third party's edit sandwiched between the group's own two events gives changed_since, never done (round 3 re-review MAJOR, repro 2)", async () => {
+    const windowStart = now - HOUR;
+    await seedEntry("e0", ["work", "status:canonical"]);
+    await insertVersion({ entryId: "e0", seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: "ev-e0-1" }, createdAt: windowStart });
+    await insertEvent({ id: "ev-e0-1", entryId: "e0", event: "status_changed", actorId: "u1", createdAt: windowStart, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+    // A third party's edit lands between the group's own two events -- same actor and client
+    // label even, the exact case the old design could not rule out without a real link.
+    await insertVersion({ entryId: "e0", seq: 2, tags: ["work", "status:canonical"], actorId: "u2", channel: "mcp", reason: "update", meta: { client: "Cursor" }, createdAt: windowStart + 20_000 });
+    await insertVersion({ entryId: "e0", seq: 3, tags: ["edited", "status:canonical"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: "ev-e0-3" }, createdAt: windowStart + 40_000 });
+    await insertEvent({ id: "ev-e0-3", entryId: "e0", event: "status_changed", actorId: "u1", createdAt: windowStart + 40_000, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+    await sqlite.db.prepare(`UPDATE entries SET tags = ? WHERE id = 'e0'`).bind(JSON.stringify(["final", "work", "status:canonical"])).run();
+    await seedStatusBurst(["e1", "e2"], windowStart + MIN);
+
+    const group = await discoverGroup();
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId.e0).toBe("changed_since");
+    expect(await tagsOf("e0")).toEqual(["final", "work", "status:canonical"]);
+    expect(await maxSeqOf("e0")).toBe(3);
   });
 
   it("a member changed since by someone else is skipped as changed_since and untouched", async () => {
@@ -321,6 +399,93 @@ describe("undoGroup() (S3)", () => {
     expect(result!.capped).toBe(true);
   });
 
+  it("3 real MCP update calls on canonical rows form a group, and undoGroup reverts all 3 (round 4 re-review MAJOR: canonical edits were dead for undo-group)", async () => {
+    const ids = ["c0", "c1", "c2"];
+    for (const id of ids) await seedEntry(id, ["work", "status:canonical"]);
+
+    const server = buildMcpServer(env, { waitUntil: () => {} } as unknown as ExecutionContext, identity);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "group-review", version: "1" });
+    await Promise.all([client.connect(ct), server.connect(st)]);
+    try {
+      for (const id of ids) {
+        await client.callTool({ name: "update", arguments: { id, content: `${id} edited` } });
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+
+    const changes = await getChanges(env, identity, undefined, CFG);
+    const group = changes.items.find((i): i is ChangeGroup => i.kind === "group" && i.family === "canonical_edit");
+    expect(group, `no canonical_edit group formed — items: ${JSON.stringify(changes.items)}`).toBeDefined();
+
+    const result = await undoGroup(env, identity, group!.group, { actorId: "u1", channel: "mcp" }, CFG);
+    expect(result!.results.slice().sort((a, b) => a.id.localeCompare(b.id))).toEqual(
+      ids.map(id => ({ id, result: "reverted" })).sort((a, b) => a.id.localeCompare(b.id)),
+    );
+    expect(result!.done).toBe(true);
+    for (const id of ids) {
+      const row = await sqlite.db.prepare(`SELECT content FROM entries WHERE id = ?`).bind(id).first() as { content: string };
+      expect(row!.content).toBe(`Memory ${id}`);
+    }
+  });
+
+  it("a teammate's edit lands on c2 while c0's own revert is re-embedding: c2 comes back changed_since, with the teammate's edit intact, not wiped (round 4 re-review MAJOR)", async () => {
+    const ids = ["c0", "c1", "c2"];
+    for (const id of ids) await seedEntry(id, ["work", "status:canonical"]);
+
+    const server = buildMcpServer(env, { waitUntil: () => {} } as unknown as ExecutionContext, identity);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "group-review", version: "1" });
+    await Promise.all([client.connect(ct), server.connect(st)]);
+    try {
+      // Distinct, strictly ascending timestamps, all at or before `now` (getChanges' own window
+      // is created_at <= its read of Date.now()) -- the group's own membership order is
+      // oldest-first, so this pins c0 as the loop's first revert and c2 as its last, matching the
+      // reviewer's own repro precisely rather than leaving it to however SQLite happens to break
+      // a tie among 3 identical timestamps.
+      for (const [i, id] of ids.entries()) {
+        vi.spyOn(Date, "now").mockReturnValue(now - (ids.length - 1 - i) * 1000);
+        await client.callTool({ name: "update", arguments: { id, content: `${id} edited` } });
+      }
+      vi.spyOn(Date, "now").mockReturnValue(now);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+
+    const changes = await getChanges(env, identity, undefined, CFG);
+    const group = changes.items.find((i): i is ChangeGroup => i.kind === "group" && i.family === "canonical_edit");
+    expect(group, `no canonical_edit group formed — items: ${JSON.stringify(changes.items)}`).toBeDefined();
+
+    // The race: undoGroup classifies every member up front, then reverts them one at a time in
+    // the SAME call, each with its own re-embed. A teammate's edit to c2 landing during c0's own
+    // re-embed (the reviewer's own repro) falls in the gap between c2's classification and c2's
+    // own turn in that same loop.
+    let fired = false;
+    const realRun = env.AI.run.bind(env.AI);
+    (env.AI as unknown as { run: (...args: unknown[]) => unknown }).run = vi.fn(async (...args: unknown[]) => {
+      if (!fired) {
+        fired = true;
+        const newest = await sqlite.db.prepare(`SELECT MAX(seq) as m FROM entry_versions WHERE entry_id = 'c2'`).first() as { m: number };
+        await insertVersion({ entryId: "c2", seq: newest!.m + 1, tags: ["work", "status:canonical"], actorId: "u2", channel: "mcp", reason: "update", createdAt: Date.now() });
+        await sqlite.db.prepare(`UPDATE entries SET content = ? WHERE id = 'c2'`).bind("c2 teammate edit").run();
+      }
+      return (realRun as (...a: unknown[]) => unknown)(...args);
+    });
+
+    const result = await undoGroup(env, identity, group!.group, { actorId: "u1", channel: "mcp" }, CFG);
+    expect(fired).toBe(true);
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId.c0).toBe("reverted");
+    expect(byId.c1).toBe("reverted");
+    expect(byId.c2).toBe("changed_since");
+
+    const row = await sqlite.db.prepare(`SELECT content FROM entries WHERE id = 'c2'`).first() as { content: string };
+    expect(row!.content).toBe("c2 teammate edit");
+  });
+
   it("MCP undo(group) replies with progress and never accepts an id list", async () => {
     const ids = Array.from({ length: 12 }, (_, i) => `e${i}`);
     await seedStatusBurst(ids, now - HOUR);
@@ -352,5 +517,83 @@ describe("undoGroup() (S3)", () => {
     }
 
     for (const id of ids) expect(await maxSeqOf(id)).toBe(1);
+  });
+
+  it("the oldest member's version created_at, however far from the group's own event times, is still included (Codex review, T-0102 E1; round 3 re-review MAJOR supersedes the fix)", async () => {
+    // E1's own bug: a version's created_at can drift from its audit event's own, slightly later
+    // Date.now() call by an unbounded amount under real Workers scheduling, and the old design
+    // compared the two directly (decoded.start, a lower bound derived from event times). No fixed
+    // slack was ever enough (the director's own follow-up on E1's first fix). classifyFromRows no
+    // longer reads created_at AT ALL -- it matches a version to the group by its own meta.event_id,
+    // the same id its causing event carries -- so this now proves something stronger than either
+    // of E1's two prior tests: not just "close enough", but "time doesn't factor in at all".
+    const ids = ["e0", "e1", "e2"];
+    const windowStart = now - HOUR;
+    let t = windowStart;
+    for (const id of ids) {
+      await seedEntry(id, ["work", "status:canonical"]);
+      const versionAt = id === ids[0] ? t - HOUR : t;
+      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: `ev-${id}` }, createdAt: versionAt });
+      await insertEvent({ id: `ev-${id}`, entryId: id, event: "status_changed", actorId: "u1", createdAt: t, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+      t += MIN;
+    }
+    const group = await discoverGroup();
+
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId[ids[0]]).toBe("reverted");
+    expect(result!.remaining).toBe(0);
+    expect(result!.done).toBe(true);
+  });
+
+  it("every page of a 50-member group stays at 40 or fewer statements, not growing page over page (Codex review, T-0102 R23)", async () => {
+    // R23 (auditor, MINOR): E2's fix reclassifies every id from ids[0] on every call (paging is
+    // stateless), so with one classifyMember SELECT per id, each already-"done" member from a
+    // prior page still cost its own SELECT to reclassify -- growing by UNDO_GROUP_PAGE statements
+    // every page, reaching 71 by the group's tenth page against this lane's 40-statement target.
+    const ids = Array.from({ length: 50 }, (_, i) => `e${i}`);
+    await seedStatusBurst(ids, now - HOUR);
+    const group = await discoverGroup();
+    expect(group.count).toBe(50);
+
+    const reverted: string[] = [];
+    for (let page = 1; page <= 10; page++) {
+      sqlite.issued.length = 0;
+      const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+      expect(sqlite.issued.length, `page ${page}`).toBeLessThanOrEqual(40);
+      expect(result!.results).toHaveLength(UNDO_GROUP_PAGE);
+      reverted.push(...result!.results.map(r => r.id));
+    }
+    expect(new Set(reverted).size).toBe(50);
+  });
+
+  it("more than UNDO_GROUP_PAGE blocked members ahead of actionable ones does not stall the group forever (Codex review, T-0102 E2)", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `e${i}`);
+    const windowStart = now - HOUR;
+    const windowEnd = await seedStatusBurst(ids, windowStart);
+    // The first 6 members (more than UNDO_GROUP_PAGE = 5) are each edited by someone else after
+    // the group's own window closes, so classifyMember reports them changed_since forever -- they
+    // never become "done" and are never actually reverted.
+    const blocked = ids.slice(0, 6);
+    for (const id of blocked) {
+      await insertVersion({ entryId: id, seq: 2, tags: ["work", "status:canonical"], actorId: "u2", channel: "mcp", reason: "update", createdAt: windowEnd + MIN });
+      await sqlite.db.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(["edited", "status:canonical", "work"]), id).run();
+    }
+    const group = await discoverGroup();
+    expect(group.count).toBe(12);
+
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    for (const id of blocked) expect(byId[id]).toBe("changed_since");
+    // The old code stopped scanning the moment 5 (UNDO_GROUP_PAGE) blocked members had been
+    // reported, having advanced no further than index 5 -- and since that scan position is never
+    // persisted between calls, every later call re-examined the exact same 5 and could never reach
+    // an actionable member at all. This call must reach past all 6 blocked members and actually
+    // revert some of the remaining 6 actionable ones.
+    const reverted = result!.results.filter(r => r.result === "reverted");
+    expect(reverted.length).toBeGreaterThan(0);
+    expect(result!.remaining).toBeLessThan(6);
   });
 });
