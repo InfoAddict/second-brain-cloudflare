@@ -162,6 +162,12 @@ describe("AI instruction files — time, validity, and D5.3/held-memory rules", 
         expect(text).toMatch(/name its id/i);
       });
 
+      // T-0089.5.3 (05-proof.md Part C): the recall receipt, distinct from a memory id -
+      // it cites the search itself, not one result.
+      it("tells the agent it can cite the recall receipt", () => {
+        expect(text).toMatch(/receipt/i);
+      });
+
       it("never asks the user to release a held memory they have not read", () => {
         expect(text).toMatch(/(read what it says|read it themselves)/i);
       });

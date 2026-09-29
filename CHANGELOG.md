@@ -56,6 +56,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 - Search records which memories it showed with one database call instead of one per result, so a 20-result search makes up to 19 fewer database calls.
 - Recall can now say why a memory came back. Ask for it with `explain: true` on the MCP `recall` tool, or `explain=1` on `GET /recall`. The MCP tool adds one line under each result, for example `why: meaning #2 · keywords "gatewright" (rare) · canonical · recent (Sep 20) · reranked up`. The REST API adds a `why` object per result: its rank in the meaning search, the keyword terms it matched (with how rare each is), the ranking multipliers applied (recency, frequency, importance, tag boost), the reranker's percentile, the link it was reached through, and which result slot it took. It is off by default, results and their order are identical either way, and it uses no extra database queries or AI calls.
+- Every recall now comes back with a short `receipt`, in the MCP reply and as a `receipt` field on `GET /recall`. It costs nothing extra to get, and an agent can name it when it answers from a specific search, so you or a later conversation can trace the answer back to it.
 
 **Agents**
 

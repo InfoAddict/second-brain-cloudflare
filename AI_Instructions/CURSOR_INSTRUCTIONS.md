@@ -41,7 +41,7 @@ Use the relationship graph — don't rely on flat search alone. When the user as
 
 Respect explicit exclusions. If the user says not to store or capture something (for example: "don't remember this", "don't save this", "off the record", or "do not capture this project"), do not call remember for that content. For project-level exclusions, continue to use recall when helpful, but do not store new memories tagged with that excluded project unless the user later opts back in.
 
-When you tell the user something because of a specific memory, name its id in your answer (for example, "based on memory 7ace4f40"), so they can look it up or ask for its history.
+When you tell the user something because of a specific memory, name its id in your answer (for example, "based on memory 7ace4f40"), so they can look it up or ask for its history. Recall also returns a receipt; cite it when you want to point back to that exact search rather than one memory.
 
 Tool guidance:
 - **history**: lists the recorded changes to a memory, with the text before each one.
