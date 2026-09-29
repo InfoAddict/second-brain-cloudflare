@@ -494,3 +494,75 @@ describe("getChanges() (S1)", () => {
     });
   });
 });
+
+// Cloud re-review MINOR on 0b970baa: R22 capped the raw entry_events scan BEFORE any workspace
+// filter can run (entry_events carries no workspace column at all -- the join that would resolve
+// one has to happen after). A teammate's ordinary burst, under a different actor_id, could fill
+// every one of that cap's slots with noise newer than the reader's own genuine (but older) event,
+// crowding it out of the brief entirely before the workspace/visibility filter ever saw it -- the
+// same failure mode finding 7a fixed for workspace scope, reopened for RAW_EVENT_SCAN_LIMIT itself.
+describe("a teammate's burst cannot crowd out this reader's own changes or a held notice (R22 residual)", () => {
+  let sqlite: SqliteD1;
+  let env: Env;
+  let now: number;
+
+  beforeEach(() => {
+    sqlite = makeSqliteD1();
+    env = { DB: sqlite.db as unknown as Env["DB"] } as Env;
+    now = Date.UTC(2026, 8, 27, 12, 0, 0);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+  });
+  afterEach(() => {
+    sqlite.close();
+    vi.restoreAllMocks();
+  });
+
+  async function insertEvent(opts: {
+    id: string; entryId: string; event: string; actorId?: string; createdAt?: number;
+    payload?: Record<string, unknown>;
+  }) {
+    await sqlite.db.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      opts.id, opts.entryId, opts.actorId ?? "u1", opts.event,
+      JSON.stringify(opts.payload ?? { channel: "mcp" }), opts.createdAt ?? now,
+    ).run();
+  }
+
+  /** 1,500 same-workspace, real events by a DIFFERENT actor, all newer than the reader's own
+   * event below -- enough to fill RAW_EVENT_SCAN_LIMIT (1,000) on their own, in date order. */
+  async function seedBurst() {
+    for (let start = 0; start < 1500; start += 500) {
+      await sqlite.db.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id)
+         WITH RECURSIVE c(x) AS (SELECT ? UNION ALL SELECT x + 1 FROM c WHERE x < ?)
+         SELECT 'noise-e'||x, 'noise memory '||x, '["work"]', 'api', ? - 40 * 3600000 - x, '["v"]', 'ws-p', 'u2' FROM c`,
+      ).bind(start + 1, Math.min(start + 500, 1500), now).run();
+      await sqlite.db.prepare(
+        `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+         WITH RECURSIVE c(x) AS (SELECT ? UNION ALL SELECT x + 1 FROM c WHERE x < ?)
+         SELECT 'noise-ev'||x, 'noise-e'||x, 'u2', 'status_changed', '{"channel":"mcp","status":"canonical"}', ? - 30 * 3600000 - x FROM c`,
+      ).bind(start + 1, Math.min(start + 500, 1500), now).run();
+    }
+  }
+
+  it("still finds this reader's own older change", async () => {
+    sqlite.seed({ id: "e1", content: "A memory", createdAt: now - 47 * HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+    await insertEvent({ id: "ev-mine", entryId: "e1", event: "status_changed", actorId: "u1", createdAt: now - 47 * HOUR, payload: { channel: "mcp", status: "canonical" } });
+    await seedBurst();
+
+    const result = await getChanges(env, identityOf("u1", "ws-p"));
+    expect(result.items.some(i => i.kind === "item" && i.id === "e1")).toBe(true);
+  });
+
+  it("still finds an older held notice", async () => {
+    sqlite.seed({ id: "e1", content: "The launch codes are 1234", createdAt: now - 47 * HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+    await insertEvent({ id: "ev-held", entryId: "e1", event: "held", actorId: "", createdAt: now - 47 * HOUR, payload: { channel: "rest", reasons: ["instruction"] } });
+    await seedBurst();
+
+    const result = await getChanges(env, identityOf("u1", "ws-p"));
+    expect(result.items.some(i => i.kind === "item" && i.id === "e1" && i.event === "held")).toBe(true);
+  });
+});

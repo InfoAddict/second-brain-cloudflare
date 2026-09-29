@@ -198,6 +198,21 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // is in entry_events' original CREATE, so it is present on every brain that
   // has the table at all and there is no ALTER to sequence behind.
   idx_entry_events_created: `CREATE INDEX IF NOT EXISTS idx_entry_events_created ON entry_events(created_at DESC)`,
+  // Cloud re-review MINOR (T-0102, on top of 0b970baa's R22 fix): brief/changes.ts's raw scan of
+  // this table is capped BEFORE any workspace/visibility filter can run (no workspace column to
+  // filter on without a join). A teammate's own ordinary burst, under a different actor_id, could
+  // fill that cap with noise and crowd the reader's own changes and held notices out of the window
+  // entirely. Reserving separate, index-backed scans for `actor_id = reader` and `event = 'held'`
+  // fixes that -- but only if each one is a genuine index range scan, not a full-table scan
+  // filtered in date order (which, with the reader's own matches sparse against the noise, would
+  // cost the same as no cap at all). Same table, same "busiest table in the schema" reasoning as
+  // idx_entry_events_created above; actor_id is in the original CREATE like created_at is.
+  idx_entry_events_actor: `CREATE INDEX IF NOT EXISTS idx_entry_events_actor ON entry_events(actor_id, created_at DESC)`,
+  // A partial index, sized to how many rows are ever actually held (rare, by construction -- a
+  // hold is an exceptional write, not a routine one), not to entry_events' total row count: cheap
+  // to maintain, and gives `WHERE event = 'held' ORDER BY created_at DESC LIMIT n` a direct,
+  // index-only seek regardless of how much non-held noise shares the same window.
+  idx_entry_events_held: `CREATE INDEX IF NOT EXISTS idx_entry_events_held ON entry_events(created_at DESC) WHERE event = 'held'`,
   // Immutable administration audit trail. Same contract as entry_events:
   // application code only ever INSERTs here. Consumed by Phase 4.2.
   admin_events: `CREATE TABLE IF NOT EXISTS admin_events (id TEXT PRIMARY KEY, actor_id TEXT NOT NULL DEFAULT '', target_user_id TEXT NOT NULL DEFAULT '', workspace_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL)`,

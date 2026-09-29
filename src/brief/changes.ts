@@ -287,13 +287,14 @@ function group(rows: Classified[], cfg: Readonly<Config>): ChangeRow[] {
  * against 5,000 unrelated events). Caps the pre-join, pre-filter read so the worst case is
  * bounded by this constant regardless of deployment size.
  *
- * T-0102 MINOR fix (finding 7): the cap alone was not enough — it was ALSO unscoped, so another
- * tenant's own burst in the window could fill all RAW_EVENT_SCAN_LIMIT slots before the reader's
- * workspace filter (previously applied only after the join) ever ran, pushing the reader's own
- * events out of the capped window and out of the brief entirely, silently. The workspace filter
- * now runs inside the capped subquery itself (an entry_id IN (...) semi-join against entries and
- * entries_trash, both indexed by workspace_id), so the cap only ever counts events the reader
- * could see in the first place — another tenant's noise cannot crowd it out anymore. */
+ * R22 (budget auditor MAJOR): a WORKSPACE filter cannot run before this cap without a join (that
+ * was R22's own bug — see changeEventRows' comment), but entry_events DOES carry its own actor_id
+ * natively, no join required, and every non-"held" row this reader can ever see is one where
+ * actor_id already equals them (author_id-visible rows need the join too, and stay subject to
+ * this cap the same as before — see changeEventRows). So the raw scan is pre-filtered by
+ * `actor_id = reader OR event = 'held'` before the cap applies: a teammate's ordinary burst,
+ * under a different actor_id, can no longer fill the cap's slots and crowd out this reader's own
+ * changes or a workspace-wide held notice (cloud re-review MINOR, on top of 0b970baa). */
 const RAW_EVENT_SCAN_LIMIT = 1000;
 
 /**
@@ -309,7 +310,7 @@ async function changeEventRows(
 ): Promise<{ rows: RawRow[]; rawCapped: boolean }> {
   const workspaces = readScopeWorkspaces(identity, { layer, teamId });
   const workspacesJson = JSON.stringify(workspaces);
-  const eventFilter = `created_at > ?1 AND created_at <= ?2
+  const baseFilter = `created_at > ?1 AND created_at <= ?2
        AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')`;
   // R22 (budget auditor MAJOR, on top of T-0102 finding 7): the workspace scope is checked per
   // event row via a JOIN, not by matching entry_id against a subquery over the reader's WHOLE id
@@ -317,19 +318,35 @@ async function changeEventRows(
   // ALL ...)` re-read every one of the reader's own entries/trash rows to build that list (twice
   // per brief: once for the count probe, once for the main query), so cost grew with the size of
   // the brain, not with RAW_EVENT_SCAN_LIMIT -- 20,158 rows at 10k memories with only 50 events in
-  // the window. RAW_EVENT_SCAN_LIMIT now caps the RAW, unscoped scan of entry_events itself (it
-  // carries no workspace column to scope against directly), and the entries/entries_trash join
-  // that resolves each of those (at most 1,000) rows' workspace runs strictly after, one PRIMARY
-  // KEY lookup per row -- cost is bounded by the cap and by key lookups, never by brain size.
-  // Reader's-own-events-crowded-out-by-noise (finding 7a's original repro) is the accepted cost of
-  // that bound: a window with over RAW_EVENT_SCAN_LIMIT other-tenant events can crop the reader's
-  // own older events from the "recent changes" list the same way an over-full window always could
-  // -- rawCapped/truncated says so honestly, and undoGroup's own membership (groupCandidates)
-  // re-derives from a narrow, group-specific window, not this 48-hour one, so undo itself is
-  // unaffected either way.
+  // the window. RAW_EVENT_SCAN_LIMIT now caps the RAW scan of entry_events itself (it carries no
+  // workspace column to scope against directly), and the entries/entries_trash join that resolves
+  // each of those rows' workspace runs strictly after, one PRIMARY KEY lookup per row -- cost is
+  // bounded by the cap and by key lookups, never by brain size.
+  //
+  // Cloud re-review MINOR (on top of 0b970baa): a single unscoped cap can still be entirely filled
+  // by a teammate's own ordinary burst (a different actor_id, no hold involved), crowding this
+  // reader's own older changes and held notices out of the window before the join/visibility
+  // filter ever sees them. Two more branches, each backed by its own index (idx_entry_events_actor,
+  // idx_entry_events_held, db/init.ts) so each is a genuine index range scan -- NOT a full-table
+  // scan filtered in date order, which would cost the same as no reservation at all once the
+  // reader's own matches are sparse against the noise -- run alongside the original (unrestricted)
+  // one and are UNIONed in. Those two categories can now never be crowded out by noise, at two
+  // more flat, bounded scans: still O(RAW_EVENT_SCAN_LIMIT) each, not O(brain size) or O(noise).
+  // The OTHER outer-visible category (author_id = reader: someone else's tool touched MY memory)
+  // has no cheap pre-join handle -- author_id only exists on entries/entries_trash -- so it still
+  // rides the unrestricted branch and remains subject to the ORIGINAL crowd-out risk this file has
+  // always documented; only that narrower residual remains.
+  const rawBranch = (indexedBy: string, extraFilter: string) => `
+           SELECT * FROM (
+             SELECT id, entry_id, event, payload, created_at, actor_id
+               FROM entry_events INDEXED BY ${indexedBy}
+              WHERE ${baseFilter}${extraFilter}
+              ORDER BY created_at ${order}
+              LIMIT ${RAW_EVENT_SCAN_LIMIT}
+           )`;
   // scope-checked: entry_workspace_id, COALESCEd by the join below, is filtered against the
-  // reader's scope in the outer query's WHERE (json_each(?3)) -- deliberately not here, so the
-  // inner LIMIT bounds RAW rows examined, not rows matching that filter (see the comment above).
+  // reader's scope in the outer query's WHERE (json_each(?3)) -- deliberately not here, so each
+  // inner branch's LIMIT bounds RAW rows examined, not rows matching that filter.
   const scopedEvents = `
          SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
                 COALESCE(en.actor_id, t.actor_id) AS author_id,
@@ -339,11 +356,11 @@ async function changeEventRows(
                 COALESCE(en.tags, json_extract(t.row_json, '$.tags')) AS tags_json,
                 en.id AS live_id
          FROM (
-           SELECT id, entry_id, event, payload, created_at, actor_id
-           FROM entry_events INDEXED BY idx_entry_events_created
-           WHERE ${eventFilter}
-           ORDER BY created_at ${order}
-           LIMIT ${RAW_EVENT_SCAN_LIMIT}
+           ${rawBranch("idx_entry_events_actor", " AND actor_id = ?4")}
+           UNION
+           ${rawBranch("idx_entry_events_held", " AND event = 'held'")}
+           UNION
+           ${rawBranch("idx_entry_events_created", "")}
          ) e
          LEFT JOIN entries en ON en.id = e.entry_id
          LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id`;
@@ -361,12 +378,14 @@ async function changeEventRows(
     // A cheap, bounded probe: capped at RAW_EVENT_SCAN_LIMIT + 1 so it can say "at least that
     // many raw events exist in the window" without ever reading more than that to say so. No join,
     // no workspace scope: it returns a bare count, no row content, so nothing here needs scoping
-    // (scope.ts's rule is about rows reaching the response).
+    // (scope.ts's rule is about rows reaching the response). Deliberately the unrestricted branch's
+    // own filter (not the actor/held-reserved one): this only informs `rawCapped`/`truncated`, and
+    // the unrestricted branch is the one that can still be capped by volume.
     // scope-exempt: count-only, no entry_id/content/tags leaves this statement.
     env.DB.prepare(
       `SELECT COUNT(*) as raw_count FROM (
          SELECT 1 FROM entry_events INDEXED BY idx_entry_events_created
-         WHERE ${eventFilter} LIMIT ${RAW_EVENT_SCAN_LIMIT + 1}
+         WHERE ${baseFilter} LIMIT ${RAW_EVENT_SCAN_LIMIT + 1}
        )`,
     ).bind(since, until),
     // scope-checked: inScope's COALESCE(...) IN (json_each(?3)) below, filtering the already-capped

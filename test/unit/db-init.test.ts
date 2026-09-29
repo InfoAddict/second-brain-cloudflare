@@ -75,6 +75,7 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   // (POST_COLUMN_OBJECTS): it indexes a column that arrives via ALTER.
   "workspaces", "prompt_capsule_revisions", "idx_workspaces_kind", "users", "idx_users_token_hash", "idx_users_email",
   "memberships", "idx_memberships_workspace", "entry_events", "idx_entry_events_entry", "idx_entry_events_created",
+  "idx_entry_events_actor", "idx_entry_events_held",
   "admin_events", "idx_admin_events_created", "maintenance_cursor", "idx_entries_workspace_created", "idx_entries_capsule",
   // Projects registry; idx_entries_project is post-column like the capsule index.
   "projects", "idx_projects_workspace", "idx_entries_project",
@@ -300,7 +301,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 74 -> 75 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER.
       // MOVED 75 -> 77 (T-0089.2.1, merge with v4/t5-log) by the valid_from and valid_until ALTERs; measured.
       // MOVED 77 -> 79 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
-      expect(migrated).toBe(79); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs + T7 ledger/standing indexes)
+      // MOVED 79 -> 81 (cloud re-review MINOR, R22 crowd-out fix) by idx_entry_events_actor and idx_entry_events_held.
+      expect(migrated).toBe(81); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs + T7 ledger/standing indexes + entry_events actor/held indexes)
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -669,7 +671,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 68 -> 69 (T-0089.1.1, adv-final MAJOR 1) by the entries_trash nonce ALTER, wasted the same way.
     // MOVED 69 -> 71 (T-0089.2.1, merge with v4/t5-log) by the valid_from and valid_until ALTERs; measured.
     // MOVED 71 -> 73 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
-    expect(cold).toBe(73); // one probe, then the 72 statements a new brain needs
+    // MOVED 73 -> 75 (cloud re-review MINOR, R22 crowd-out fix) by idx_entry_events_actor and idx_entry_events_held.
+    expect(cold).toBe(75); // one probe, then the 74 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
