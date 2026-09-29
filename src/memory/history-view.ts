@@ -6,10 +6,35 @@ import type { Config } from "../config";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { getStatus } from "./status";
 import {
-  canRevert, loadHistory, getVersionsSince, type VersionChain, type VersionReason,
+  canRevert, loadHistory, getVersionsSince, type VersionChain, type VersionReason, type VersionRow,
 } from "./versions";
 import { readEntryTimeline } from "./history";
 import { isHeld } from "../quarantine/tags";
+
+/**
+ * A `reason: "status"` version whose meta records a hold (5.4): the same structural check
+ * undo.ts's own `isHoldVersion` makes (duplicated here rather than imported -- lane ownership
+ * keeps this file's readers independent of undo.ts's write path). D4.1 means there is at most one
+ * per unbroken held streak, since an already-held row is never rescored.
+ *
+ * Cross-vendor review MAJOR (T-0102): a hold version's own `tags` column is the row's PRE-hold
+ * state (unheld, by definition -- the hold is what changes the tags), but a hold never touches
+ * content, so its `content`/`text(seq)` reconstructs to whatever text triggered the hold. Checking
+ * `isHeld(tags(N))` alone therefore misses exactly the one version where the text IS the sensitive
+ * one: a hold version's text must be treated as held regardless of what its own tags say, and stays
+ * that way even after the row is later released, since the text at that version was never itself
+ * reviewed or approved.
+ */
+function isHoldVersion(v: Pick<VersionRow, "reason" | "meta">): boolean {
+  if (v.reason !== "status") return false;
+  try { return !!(JSON.parse(v.meta || "{}") as Record<string, unknown>).hold; } catch { return false; }
+}
+
+/** True when version `v`'s own reconstructed text must be hidden: its own tags are held, or it is
+ * itself the hold transition (see isHoldVersion above). */
+function textHeldAt(v: Pick<VersionRow, "reason" | "meta" | "tags">): boolean {
+  return isHeld(parseTags(v.tags)) || isHoldVersion(v);
+}
 
 /** BE-7/BE-11 (T-0101.1.1, T-0101.3.1): contract 4.1's unified history for one entry — the
  * dashboard's `GET /entry` and chat's `history` both read through this, so the two surfaces cannot
@@ -155,7 +180,7 @@ export async function buildEntryHistoryFromReads(
       ? (isNewest ? (row.valid_until ?? null) : (parseJsonObject(chain.rows[i - 1].state).valid_until as number | null ?? null))
       : null;
     const beforeTags = parseTags(r.tags);
-    const beforeHeld = isHeld(beforeTags);
+    const beforeHeld = textHeldAt(r);
     return {
       kind: "change",
       seq: r.seq,
@@ -275,7 +300,7 @@ export async function readEntryVersionFromRow(
   const labelMap = await lookupActorLabels(env, [target.actor_id]);
   const meta = parseJsonObject(target.meta);
   const tags = parseTags(target.tags);
-  const held = isHeld(tags);
+  const held = textHeldAt(target);
   return {
     ok: true,
     id: row.id,
