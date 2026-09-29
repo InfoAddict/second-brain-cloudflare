@@ -59,11 +59,11 @@ describe("every life-end marker insert shares its delete's guard", () => {
   it("finds only the known sites", () => {
     const sites = scan().map((h) => `${h.file}:${h.line}`).sort();
     expect(sites).toEqual([
-      "src/lib/team-admin.ts:594",
-      "src/lib/team-admin.ts:602",
+      "src/lib/team-admin.ts:597",
+      "src/lib/team-admin.ts:605",
       "src/memory/trash.ts:277",
-      "src/memory/trash.ts:530",
-      "src/memory/trash.ts:849",
+      "src/memory/trash.ts:531",
+      "src/memory/trash.ts:851",
     ].sort());
   });
 

@@ -213,6 +213,17 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // to maintain, and gives `WHERE event = 'held' ORDER BY created_at DESC LIMIT n` a direct,
   // index-only seek regardless of how much non-held noise shares the same window.
   idx_entry_events_held: `CREATE INDEX IF NOT EXISTS idx_entry_events_held ON entry_events(created_at DESC) WHERE event = 'held'`,
+  // Every event reader's correlated "latest life-end event for this entry_id" subquery (R23,
+  // budget auditor BLOCK): without an index matching its WHERE exactly, it re-scans every one of
+  // the same id's own events on each evaluation -- quadratic in edits per memory. This partial
+  // index holds only the rare life-end marker rows (purged, or a tier-3 deleted), same shape as
+  // idx_entry_events_held above; entry_id, event and payload are all in the original CREATE, so
+  // there is no ALTER to sequence behind.
+  // entry_id alone, not (entry_id, rowid): SQLite rejects rowid/_rowid_ as an explicit indexed
+  // column on a table with its own TEXT PRIMARY KEY (rowid is already the implicit trailing
+  // component of every index's leaf entries, so MAX(rowid) WHERE entry_id = ? already gets a
+  // direct index seek without naming it -- confirmed with EXPLAIN QUERY PLAN).
+  idx_entry_events_life_end: `CREATE INDEX IF NOT EXISTS idx_entry_events_life_end ON entry_events(entry_id) WHERE event = 'purged' OR (event = 'deleted' AND json_extract(payload, '$.trash') = 0)`,
   // Immutable administration audit trail. Same contract as entry_events:
   // application code only ever INSERTs here. Consumed by Phase 4.2.
   admin_events: `CREATE TABLE IF NOT EXISTS admin_events (id TEXT PRIMARY KEY, actor_id TEXT NOT NULL DEFAULT '', target_user_id TEXT NOT NULL DEFAULT '', workspace_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL)`,

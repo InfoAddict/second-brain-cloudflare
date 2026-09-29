@@ -134,9 +134,14 @@ const PLAIN_DEPRECATE_ROWS_LITERAL = 3;
 // its separate createEdge, so a contradiction writes the same rows as before Track 2 (the deprecate's
 // version 2 + entries 1 are now the supersede's) and no longer deletes vectors.
 const SUPERSEDE_ROWS = 9;
-// explicit validity: version 2 + entries 1 + the validity_changed audit event 4 (spec est. 3 + 4).
-const EXPLICIT_ROWS = 7;
-const RETRACTION_ROWS = PLAIN_DEPRECATE_ROWS_LITERAL + 28;
-// The deprecate itself is 3 (version 2 + entries 1); restoring k = 1 and flagging d = 3 adds exactly
-// the spec's 3k + 3d + 4 per event row = 3 + 9 + 16 = 28.
+// explicit validity: version 2 + entries 1 + the validity_changed audit event 5 (spec est. 3 + 4,
+// +1 since the merge of release/v4 1cbc817b: idx_entry_events_actor, a new non-partial index, bills
+// +1 write on every entry_events insert, unconditionally -- confirmed by direct measurement, not
+// assumed from the spec).
+const EXPLICIT_ROWS = 8;
+const RETRACTION_ROWS = PLAIN_DEPRECATE_ROWS_LITERAL + 32;
+// The deprecate itself is 3 (version 2 + entries 1); restoring k = 1 and flagging d = 3 writes
+// exactly 4 entry_events rows (1 validity_changed for y, 3 flagged for d1-d3 -- confirmed by
+// querying entry_events directly), each now 5 rows (was 4) for the same idx_entry_events_actor
+// reason as EXPLICIT_ROWS above: 3k + 3d + 5 per event row = 3 + 9 + 20 = 32.
 const PLAIN_DEPRECATE_ROWS = 3;

@@ -20,7 +20,17 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("Delete forever RETURNING on wo
     try {
       resetDatabaseInit();
       const deleteByIds = vi.fn().mockResolvedValue({});
-      const env = makeTestEnv(undefined, { DB: d1.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: makeVectorizeMock({ deleteByIds }) }) as Env;
+      // makeVectorizeMock's default getByIds resolves ownership via db.__vectorOwners() (the
+      // SQLite test double's own bookkeeping, test/helpers/sqlite-d1.ts) -- real workerd D1 has no
+      // such method, so every id would come back "not found" and deleteEntryVectors would never
+      // call deleteByIds at all. Real vectors carry metadata.parentId set at upsert time
+      // (capture/store.ts:179); deleteEntryVectors's owners.has(v.id) fallback (no parentId) is
+      // only for the true legacy case where the vector id IS the entry id, so a chunk id like
+      // "tr0-update-9" needs its real parentId echoed back, not an empty metadata object, or
+      // deleteEntryVectors silently drops it as unowned.
+      const getByIds = vi.fn(async (ids: string[]) =>
+        ids.map(id => ({ id, values: [], metadata: { parentId: id.replace(/-update-\d+$/, "") } })));
+      const env = makeTestEnv(undefined, { DB: d1.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: makeVectorizeMock({ deleteByIds, getByIds }) }) as Env;
       await initializeDatabase(env);
       const roots = await ensureTenantBootstrap(env);
       const seed = (id: string, vectorIds: string) => env.DB.prepare(

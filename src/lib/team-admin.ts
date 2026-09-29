@@ -572,10 +572,13 @@ export async function cleanupMemberData(
   const removedEntries = count?.entries ?? 0;
   // A final batch that would not fit the night's budget waits for a night when nothing else wrote,
   // unless it is the only thing left to do (the 3.7 route paid this cost at click time).
-  // +5 per entries row and +5 per trashed row for their own life-end marker INSERT (FX1's actor
-  // index makes one entry_events row cost 5 rows written on release's schema).
+  // +6 per entries row and +6 per trashed row for their own life-end marker INSERT: one
+  // entry_events row costs 6 rows written on this schema (the row, its own PK autoindex,
+  // idx_entry_events_entry, idx_entry_events_created, idx_entry_events_actor, and
+  // idx_entry_events_life_end -- R23 -- since a life-end marker always matches that last index's
+  // own predicate).
   const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0)
-    + 5 * removedEntries + 5 * (count?.trashed ?? 0);
+    + 6 * removedEntries + 6 * (count?.trashed ?? 0);
   if (opts.rowsLeft !== undefined && estimate > left() && !opts.allowOversize) {
     return { done: false, removedEntries: 0, vectorIds: [], ownedVectors: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten, blockedByBudget: true };
   }

@@ -421,8 +421,9 @@ export async function trashMirroredEntries(
 const DAY_MS = 86_400_000;
 /** The lowest TRASH_RETENTION_DAYS the config accepts (src/config.ts RULES). */
 const MIN_RETENTION_DAYS = 1;
-/** Rows written to purge one trash row: the purged event (5) and the trash row (3), plus 2 per version. */
-const PURGE_ROW_COST = 8;
+/** Rows written to purge one trash row: the purged event (6, since idx_entry_events_life_end --
+ *  R23 -- also indexes it: it matches its own predicate) and the trash row (3), plus 2 per version. */
+const PURGE_ROW_COST = 9;
 
 /** A ceiling on the trash rows a purge reads, sized for rows holding VERSION_KEEP versions (the batch is still costed from the real counts). */
 export function purgeLimit(versionKeep: number, ceiling: number, rowTarget: number): number {
@@ -544,7 +545,8 @@ export async function purgeTrash(
     ).bind(...trashP.values()),
   ]);
   const purged = changedRows(results3[2]);
-  const estimate = 5 * changedRows(results3[0]) + 2 * changedRows(results3[1]) + 3 * purged;
+  // 6 per purged event (R23: idx_entry_events_life_end also indexes it), 2 per version, 3 per trash row.
+  const estimate = 6 * changedRows(results3[0]) + 2 * changedRows(results3[1]) + 3 * purged;
   // Codex review, T-0102 F1: the DELETE above only ever removed entries_trash's own row -- the
   // vectors a forgotten note still carried (Vectorize keeps its own copy independent of D1) were
   // never told the row was gone, so a purge orphaned them permanently. Only the rows that

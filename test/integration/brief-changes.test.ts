@@ -305,6 +305,29 @@ describe("getChanges() (S1)", () => {
     expect(sqlite.issued).toEqual(["BATCH"]);
   });
 
+  it("hides a reused id's earlier life: only events after the latest purge/tier-3-delete show, by insertion order, not created_at (round 3 re-review MAJOR)", async () => {
+    // The old row's own events, well within the 48h window -- excluded by rowid (insertion order),
+    // not by created_at, since both land before the purge event on the time axis too.
+    await insertEvent({ id: "ev-old-1", entryId: "e1", event: "reverted", createdAt: now - 20 * HOUR, payload: { channel: "mcp" } });
+    await insertEvent({ id: "ev-old-2", entryId: "e1", event: "status_changed", createdAt: now - 15 * HOUR, payload: { channel: "mcp", status: "canonical" } });
+    // The life-end marker: a purge (the id is now free) or a tier-3 delete both count.
+    await insertEvent({ id: "ev-purged", entryId: "e1", event: "purged", createdAt: now - 10 * HOUR, payload: {} });
+
+    // The id is reused by a brand-new row; its own events land after the purge event by rowid.
+    sqlite.seed({ id: "e1", content: "A different memory now", createdAt: now - HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+    await insertEvent({ id: "ev-new", entryId: "e1", event: "reverted", createdAt: now - 30 * MIN, payload: { channel: "mcp" } });
+
+    const result = await getChanges(env, identityOf("u1", "ws-p"));
+    // ev-old-1 shares this same family/entry/actor and would otherwise be a second, distinct item
+    // (20 hours apart, well outside the 10-minute group window) -- count 1, not 2, proves it is
+    // excluded, not merged. `at` pins down which of the two "reverted" events survived.
+    expect(result.count).toBe(1);
+    expect((result.items[0] as { id: string }).id).toBe("e1");
+    expect((result.items[0] as { event: string }).event).toBe("reverted");
+    expect(result.items[0].at).toBe(now - 30 * MIN);
+  });
+
   // Config threading, after the director's follow-up (T-0089.4.3): the group
   // thresholds and the client-name check now read real config keys rather
   // than local constants, so their values must come from `cfg`, not be

@@ -313,12 +313,19 @@ async function changeEventRows(
 ): Promise<{ rows: RawRow[]; rawCapped: boolean }> {
   const workspaces = readScopeWorkspaces(identity, { layer, teamId });
   const workspacesJson = JSON.stringify(workspaces);
+  const baseFilter = `created_at > ?1 AND created_at <= ?2
+       AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')`;
   // A reused id's earlier life always ends with a `purged` event or a `deleted` event with
   // payload.trash false; everything at or before the latest such event belongs to the row that's
   // now gone. rowid, not created_at -- insertion order, immune to a backdated or future timestamp.
-  const baseFilter = `created_at > ?1 AND created_at <= ?2
-       AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')
-       AND rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = entry_events.entry_id
+  //
+  // R23 (budget auditor MAJOR): this used to be a correlated subquery inside baseFilter, so it ran
+  // once per RAW row examined by all 4 capped scans (the count probe and the 3 UNION branches) --
+  // ~4,000 extra rows read per brief. It now runs once per row in the outer query, after the cap
+  // and the scope join have already cut that set down to at most a few hundred, and it is dropped
+  // from the count probe entirely (an approximate "at least this many" count, same as before this
+  // filter existed, never promised exact).
+  const lifeFilter = `e.event_rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = e.entry_id
              AND (g.event = 'purged' OR (g.event = 'deleted' AND json_extract(g.payload, '$.trash') = 0))), 0)`;
   // R22 (budget auditor MAJOR, on top of T-0102 finding 7): the workspace scope is checked per
   // event row via a JOIN, not by matching entry_id against a subquery over the reader's WHOLE id
@@ -346,7 +353,7 @@ async function changeEventRows(
   // always documented; only that narrower residual remains.
   const rawBranch = (indexedBy: string, extraFilter: string) => `
            SELECT * FROM (
-             SELECT id, entry_id, event, payload, created_at, actor_id
+             SELECT id, entry_id, event, payload, created_at, actor_id, rowid AS event_rowid
                FROM entry_events INDEXED BY ${indexedBy}
               WHERE ${baseFilter}${extraFilter}
               ORDER BY created_at ${order}
@@ -354,9 +361,10 @@ async function changeEventRows(
            )`;
   // scope-checked: entry_workspace_id, COALESCEd by the join below, is filtered against the
   // reader's scope in the outer query's WHERE (json_each(?3)) -- deliberately not here, so each
-  // inner branch's LIMIT bounds RAW rows examined, not rows matching that filter.
+  // inner branch's LIMIT bounds RAW rows examined, not rows matching that filter. event_rowid rides
+  // along the same way, for lifeFilter to apply once in that same outer WHERE (R23).
   const scopedEvents = `
-         SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+         SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id, e.event_rowid,
                 COALESCE(en.actor_id, t.actor_id) AS author_id,
                 COALESCE(en.workspace_id, t.workspace_id) AS entry_workspace_id,
                 COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
@@ -397,17 +405,25 @@ async function changeEventRows(
        )`,
     ).bind(since, until),
     // scope-checked: inScope's COALESCE(...) IN (json_each(?3)) below, filtering the already-capped
-    // and already-joined rows from scopedEvents above.
+    // and already-joined rows from scopedEvents above. lifeFilter (R23) wraps this as a separate
+    // outer SELECT rather than another ANDed term in the same WHERE: SQLite does not reliably defer
+    // an unindexed correlated subquery to run only after the cheap workspace/channel/actor terms
+    // have already cut the row count down -- in the same WHERE it can run once per row of the
+    // (still up to ~3,000-row) union, not once per row actually surviving to the LIMIT 200 output.
     env.DB.prepare(
-      `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
-              e.author_id, e.entry_workspace_id, e.source, e.preview, e.tags_json
-       FROM (${scopedEvents}) e
-       WHERE e.entry_workspace_id IN (SELECT value FROM json_each(?3))
-         AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
-         AND (e.actor_id = ?4 OR e.author_id = ?4 OR e.event = 'held')
-         AND (e.live_id IS NOT NULL OR ${trashVisible})
-       ORDER BY e.created_at ${order}
-       LIMIT 200`,
+      `SELECT * FROM (
+         SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+                e.author_id, e.entry_workspace_id, e.source, e.preview, e.tags_json, e.event_rowid
+         FROM (${scopedEvents}) e
+         WHERE e.entry_workspace_id IN (SELECT value FROM json_each(?3))
+           AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
+           AND (e.actor_id = ?4 OR e.author_id = ?4 OR e.event = 'held')
+           AND (e.live_id IS NOT NULL OR ${trashVisible})
+         ORDER BY e.created_at ${order}
+         LIMIT 200
+       ) e
+       WHERE ${lifeFilter}
+       ORDER BY e.created_at ${order}`,
     ).bind(since, until, workspacesJson, identity.userId, ...trashBindings),
   ]);
   const rawCount = ((countResult.results as { raw_count: number }[] | undefined)?.[0]?.raw_count) ?? 0;

@@ -74,10 +74,10 @@ describe("purge", () => {
   });
 
   it("purgeLimit adapts to VERSION_KEEP and is capped by the ceiling", () => {
-    expect(purgeLimit(20, 10, 1000)).toBe(10); // 1000 / 48 = 20, ceiling 10
-    expect(purgeLimit(500, 10, 1000)).toBe(1); // 1000 / 1008 = 0, at least one
-    expect(purgeLimit(20, 400, 5000)).toBe(104); // 5000 / 48
-    expect(purgeLimit(5, 400, 5000)).toBe(277); // 5000 / 18
+    expect(purgeLimit(20, 10, 1000)).toBe(10); // 1000 / 49 = 20, ceiling 10
+    expect(purgeLimit(500, 10, 1000)).toBe(1); // 1000 / 1009 = 0, at least one
+    expect(purgeLimit(20, 400, 5000)).toBe(102); // 5000 / 49
+    expect(purgeLimit(5, 400, 5000)).toBe(263); // 5000 / 19
   });
 
   it("is chosen from the real version counts: a row trashed with 500 versions is costed at 500", async () => {
@@ -178,14 +178,15 @@ describe("nightly cleanup", () => {
   it("runs at most 5 batches of at most 400 rows, inside the purge's rows-written share", async () => {
     t = await makeTrashEnv();
     await seedTrashRows(t, 2050);
-    // 8 rows per version-less trash row: 400 rows cost 3,200, so the 10,000-row share ends the night
-    // in the fourth batch (400 + 400 + 400 + 50 rows). The spec's "2,000 on night one" ignores its own budget.
+    // 9 rows per version-less trash row (R23: idx_entry_events_life_end also indexes the purged
+    // event): 400 rows cost 3,600, so the 10,000-row share ends the night in the third batch
+    // (400 + 400 + 311 rows). The spec's "2,000 on night one" ignores its own budget.
     const first = await runNightlyCleanup(t.env);
-    expect(first.purged).toBe(1250);
+    expect(first.purged).toBe(1111);
     expect(first.rowsWritten).toBeLessThanOrEqual(TRASH_PURGE_NIGHTLY_ROWS);
-    expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(2050 - 1250);
+    expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(2050 - 1111);
     const second = await runNightlyCleanup(t.env);
-    expect(second.purged).toBe(800);
+    expect(second.purged).toBe(939);
     expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(0);
   });
 
@@ -285,7 +286,7 @@ describe("a night with a bulk purge and a pending removal", () => {
 });
 
 describe("adversary (MINOR): the nightly purge must not run at half the spec's pace", () => {
-  it("a bulk trash of mirrored rows (3 versions each) purges at the spec's ~770 a night, not one batch cut short by the budget", async () => {
+  it("a bulk trash of mirrored rows (3 versions each) purges at ~666 a night, not one batch cut short by the budget", async () => {
     t = await makeTrashEnv();
     await seedTrashRows(t, 1000, { prefix: "m", deletedAt: 1, reason: "disconnect" });
     await t.sqlite.db.exec(`
@@ -294,9 +295,10 @@ describe("adversary (MINOR): the nightly purge must not run at half the spec's p
         FROM entries_trash t, (SELECT 1 AS seq UNION ALL SELECT 2 UNION ALL SELECT 3) s`);
 
     const night = await runNightlyCleanup(t.env);
-    // Spec "Pacing": mirror rows (13 rows each) purge at about 770 a night (10,000 / 13). A batch
-    // cut short by the row budget (not by running out of expired rows) must not stop the loop.
-    expect(night.purged).toBeGreaterThanOrEqual(700);
+    // Mirror rows (15 rows each: PURGE_ROW_COST 9 + 2*3 versions) purge at about 666 a night
+    // (10,000 / 15). A batch cut short by the row budget (not by running out of expired rows)
+    // must not stop the loop.
+    expect(night.purged).toBeGreaterThanOrEqual(600);
   });
 });
 

@@ -112,6 +112,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   // MOVED (merge of release/v4 1cbc817b into v4/gate-fx2): FX1's own actions.ts/undo.ts/validity.ts/
   // admin.ts deltas and this lane's own round 4/5/6 deltas are independently-tracked from the same
   // base — recomputed against the real scanner output on the merged tree, not hand-combined.
+  // MOVED (round 7, R23 budget auditor BLOCK): comments above team-admin.ts's offboarding estimate
+  // and trash.ts's PURGE_ROW_COST/purge estimate grew, shifting the sites below them.
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt', standing: 'exempt: importance_score only, no tags column' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt', standing: 'exempt: withKind/withStatus only add or replace the kind/canonical marker; standing:active (if present) survives unchanged either way' },
   { file: 'src/capture/entry.ts', line: 370, kind: 'snapshot', standing: 'exempt: a system job merges only into what a system job wrote (isSystemRow), which a person\'s standing capture never is' },
@@ -133,7 +135,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/entries/import.ts', line: 50, kind: 'exempt', standing: 'touch' },
   { file: 'src/integrations/mirror.ts', line: 125, kind: 'exempt', standing: 'exempt: mirrors cannot carry standing:active — 1.3 strips it via stripT7CallerTags before mirror tags are built' },
   { file: 'src/integrations/mirror.ts', line: 207, kind: 'snapshot', standing: 'exempt: mirrors cannot carry standing:active — 1.3 strips it via stripT7CallerTags before mirror tags are built' },
-  { file: 'src/lib/team-admin.ts', line: 615, kind: 'hard-delete', standing: 'touch' },
+  { file: 'src/lib/team-admin.ts', line: 618, kind: 'hard-delete', standing: 'touch' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt', standing: 'exempt: one-time pre-v3 tenancy bootstrap moving every legacy "" row to the new owner workspace; a legacy standing row would need a cache rebuild after migration, which the 24h revalidation (P7.4) supplies on its own' },
   { file: 'src/memory/actions.ts', line: 74, kind: 'snapshot', standing: 'exempt: withoutStaleAsOf/RETRACTED_SOURCE_TAG only, never touches standing:active' },
   { file: 'src/memory/actions.ts', line: 132, kind: 'snapshot', standing: 'exempt: withTaskDone/withoutTask only, never touches standing:active' },
@@ -144,7 +146,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/memory/actions.ts', line: 298, kind: 'snapshot', standing: 'exempt: auto-insight rows are system-generated candidates, never standing:active' },
   { file: 'src/memory/actions.ts', line: 310, kind: 'snapshot', standing: 'exempt: auto-insight rows are system-generated candidates, never standing:active' },
   { file: 'src/memory/trash.ts', line: 305, kind: 'trash', standing: 'touch' },
-  { file: 'src/memory/trash.ts', line: 731, kind: 'exempt', standing: 'touch' },
+  { file: 'src/memory/trash.ts', line: 733, kind: 'exempt', standing: 'touch' },
   { file: 'src/memory/undo.ts', line: 199, kind: 'snapshot', standing: 'exempt: KNOWN GAP, not fixed here — releaseHeldAfterEdit releases a Track 4 hold via a tags-only change (5.6, the row was edited after the hold), which can restore standing:active without going through revertEntry\'s own touch. Not in the director\'s named list for this pass; self-heals within 24h (P7.4), flagged for the director rather than fixed in scope here' },
   { file: 'src/memory/undo.ts', line: 537, kind: 'snapshot', standing: 'touch' },
   { file: 'src/memory/undo.ts', line: 573, kind: 'exempt', standing: 'exempt: KNOWN GAP, not fixed here — a merge-undo re-creates the incoming row a merge had absorbed; if that absorbed content was itself standing:active this would need a touch too. Rare (a merge target and its incoming are topically close, not a disjoint standing instruction) and self-heals within 24h (P7.4), flagged for the director, not implemented in this pass' },
