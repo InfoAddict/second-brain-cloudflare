@@ -26,6 +26,24 @@ describe("purge", () => {
     expect((await t.all(`SELECT id FROM entries_trash ORDER BY id`)).map((x) => x.id)).toEqual(["e30", "fresh0"]);
   });
 
+  it("deletes a purged row's own vectors, not an unrelated row's (Codex review, T-0102 F1)", async () => {
+    t = await makeTrashEnv();
+    await seedTrashRows(t, 1, { prefix: "gone", deletedAt: 1, vectorIds: JSON.stringify(["v-gone-1", "v-gone-2"]) });
+    await seedTrashRows(t, 1, { prefix: "kept", deletedAt: 200 * DAY, vectorIds: JSON.stringify(["v-kept-1"]) }); // not expired
+
+    await purgeTrash(t.env, await cfg(), { ceiling: 10, rowTarget: 5000, now: 100 * DAY });
+
+    expect(t.env.VECTORIZE.deleteByIds).toHaveBeenCalledWith(["v-gone-1", "v-gone-2"]);
+    expect(t.env.VECTORIZE.deleteByIds).not.toHaveBeenCalledWith(expect.arrayContaining(["v-kept-1"]));
+  });
+
+  it("a purged row with no vectors never calls deleteByIds", async () => {
+    t = await makeTrashEnv();
+    await seedTrashRows(t, 1, { deletedAt: 1, vectorIds: "[]" });
+    await purgeTrash(t.env, await cfg(), { ceiling: 10, rowTarget: 5000, now: 100 * DAY });
+    expect(t.env.VECTORIZE.deleteByIds).not.toHaveBeenCalled();
+  });
+
   it("gives each purged row a purged event in the same batch", async () => {
     t = await makeTrashEnv();
     await seedTrashRows(t, 3, { deletedAt: 5, reason: "disconnect" });

@@ -81,10 +81,16 @@ export async function storeEntry(
   /** The vector_ids the caller read for this row (JSON, e.g. '[]' for a new or pending row). */
   commit: { expectedVectorIds: string } = { expectedVectorIds: "[]" },
 ): Promise<StoredEntry> {
-  // batch-embed: exempt — a create-time embed. A held write never reaches storeEntry at all (it
-  // takes the holdStatements batch instead, class A), so the only content that lands here is
-  // already under the scorer's 32 KB budget: too few chunks for batching to matter (R20).
-  const stored = await upsertEntryVectors(env, id, content, tags, source, now, config, writeCtx);
+  // Codex review, T-0102 F3 (MAJOR): the "batch-embed: exempt" reasoning this comment used to
+  // give -- a held write never reaches storeEntry (class A), so content here is always under the
+  // scorer's 32 KB budget -- is only true for captureEntry's own create-time call. Two other
+  // callers route through storeEntry with content that was never scored at all and can be up to
+  // the full 128 KB cap: vectorize/pending.ts's indexPendingRow (a deferred row, chosen by length
+  // alone) and migration/embedding.ts's backfill pass. Both would cost one AI call per chunk
+  // without this. Always batchEmbeds now, not opt-in: embedMany costs the same as embed for the
+  // common one-or-two-chunk capture (R20 never regresses that caller), and only ever helps a
+  // larger one.
+  const stored = await upsertEntryVectors(env, id, content, tags, source, now, config, writeCtx, { batchEmbeds: true });
 
   // This UPDATE is the tail of a version write (fresh vectors for the row). It
   // deliberately does NOT touch workspace_id: an update edits a row in place and

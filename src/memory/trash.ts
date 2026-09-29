@@ -178,17 +178,33 @@ export function trashManyStatements(
     reason: TrashReason; change: ChangeContext; now: number;
     /** Retraction hook statements (validity.ts, D-RET): run after the trash inserts, while the rows and their edges still exist. */
     hook?: D1PreparedStatement[];
+    /**
+     * Codex review, T-0102 F2 (NIT): the workspaces the caller's own scoped read authorized this
+     * batch's ids under (forgetEntry: one, its authorizedWorkspaceId; trashMirroredEntries: every
+     * workspace `allowed`'s rows actually came from). Neither the trash INSERT nor the entries
+     * DELETE re-checked workspace_id before this, so a row that moved to a workspace outside what
+     * this batch was ever authorized for -- a share/unshare landing in the gap between the read
+     * and this commit -- was still trashed and deleted purely by id. Optional and additive: a
+     * caller that omits it keeps the pre-existing by-id-only behavior.
+     */
+    workspaceIds?: readonly string[];
   },
 ): D1PreparedStatement[] {
   const all = [...plan.tier1, ...plan.tier2, ...plan.tier3];
   if (!all.length) return [];
   const stmts: D1PreparedStatement[] = [];
+  const workspaceGuardSql = (p: Params, alias: string) =>
+    meta.workspaceIds ? ` AND ${alias}.workspace_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(meta.workspaceIds))}))` : "";
   // nonce (last column, TRASH_COLUMNS): a fresh per-row identity (adv-final MAJOR 1), the same
   // randomblob-per-row pattern entry_events uses for its own id below — evaluated once per row
   // of the INSERT...SELECT, never the same value across a multi-row tier1/tier2 batch.
   const insert = (ids: string[], withEdges: boolean) => {
     const p = new Params();
     const idList = p.add(JSON.stringify(ids));
+    const nowIdx = p.add(meta.now);
+    const actorIdx = p.add(meta.change.actorId);
+    const channelIdx = p.add(meta.change.channel);
+    const reasonIdx = p.add(meta.reason);
     // A plain INSERT (T-0089.1.1): ids are unique across entries and entries_trash, so an existing
     // trash row under this id is a PRIMARY KEY error that fails the whole batch closed, never a replace.
     stmts.push(env.DB.prepare(
@@ -198,8 +214,8 @@ export function trashManyStatements(
       // rederived later — Delete forever needs the real ids stored, not just guessed at.
       `INSERT INTO entries_trash (${TRASH_COLUMNS})
        SELECT e.id, e.workspace_id, e.actor_id, e.content, ${rowJsonSql("e")}, ${withEdges ? edgesJsonSql("e") : "'[]'"}, e.vector_ids,
-              ${p.add(meta.now)}, ${p.add(meta.change.actorId)}, ${p.add(meta.change.channel)}, ${p.add(meta.reason)}, lower(hex(randomblob(16)))
-         FROM entries e WHERE e.id IN (SELECT value FROM json_each(${idList}))`,
+              ${nowIdx}, ${actorIdx}, ${channelIdx}, ${reasonIdx}, lower(hex(randomblob(16)))
+         FROM entries e WHERE e.id IN (SELECT value FROM json_each(${idList}))${workspaceGuardSql(p, "e")}`,
     ).bind(...p.values()));
   };
   if (plan.tier1.length) insert(plan.tier1, true);
@@ -226,11 +242,12 @@ export function trashManyStatements(
   }
   {
     const p = new Params();
+    const idIdx = p.add(ids);
     stmts.push(env.DB.prepare(
       // validity: retraction-hooked (forget and the disconnect purge pass meta.hook, D-RET)
       // versioning: trash
       // scope-exempt: by-id delete: callers authorize the entries before building the batch
-      `DELETE FROM entries WHERE id IN (SELECT value FROM json_each(${p.add(ids)}))`,
+      `DELETE FROM entries WHERE id IN (SELECT value FROM json_each(${idIdx}))${workspaceGuardSql(p, "entries")}`,
     ).bind(...p.values()));
   }
   return stmts;
@@ -289,7 +306,8 @@ export async function trashMirroredEntries(
     // D-RET restore rule only (P10): what a purged mirror row had replaced is current again.
     cfg ??= await resolveConfig(env);
     const hook = retractionHook(env, allowed.map((r) => ({ id: r.id, workspaceId: r.workspace_id ?? "" })), () => "1", change, cfg, now);
-    const batchResults = await env.DB.batch(trashManyStatements(env, plan, { reason: "disconnect", change, now, hook: hook.statements }));
+    const workspaceIds = [...new Set(allowed.map((r) => r.workspace_id ?? ""))];
+    const batchResults = await env.DB.batch(trashManyStatements(env, plan, { reason: "disconnect", change, now, hook: hook.statements, workspaceIds }));
     await auditValidity(env, change, hook.read(batchResults, trashHookOffset(plan)));
     // `changes` on a DELETE FROM entries is not a reliable count here: real D1 folds in every
     // FTS/entry_counts trigger row it fired alongside the entries row (a single delete reported
@@ -393,10 +411,10 @@ export async function purgeTrash(
   const rp = new Params();
   const { results } = await env.DB.prepare(
     // scope-exempt: retention purge: global by design, bounded by the LIMIT and the row budget
-    `SELECT t.id, t.deleted_at, (SELECT COUNT(*) FROM entry_versions v WHERE v.entry_id = t.id) AS n
+    `SELECT t.id, t.deleted_at, t.vector_ids, (SELECT COUNT(*) FROM entry_versions v WHERE v.entry_id = t.id) AS n
        FROM entries_trash t WHERE t.deleted_at < ${rp.add(earliest)}
       ORDER BY t.deleted_at, t.id LIMIT ${rp.add(opts.ceiling)}`,
-  ).bind(...rp.values()).all<{ id: string; deleted_at: number; n: number }>();
+  ).bind(...rp.values()).all<{ id: string; deleted_at: number; vector_ids: string; n: number }>();
   let candidates = results ?? [];
   if (!candidates.length) return none;
   // Oldest first, so the expired rows are a prefix: cut at the configured retention.
@@ -471,6 +489,26 @@ export async function purgeTrash(
   ]);
   const purged = changedRows(results3[2]);
   const estimate = 4 * changedRows(results3[0]) + 2 * changedRows(results3[1]) + 3 * purged;
+  // Codex review, T-0102 F1: the DELETE above only ever removed entries_trash's own row -- the
+  // vectors a forgotten note still carried (Vectorize keeps its own copy independent of D1) were
+  // never told the row was gone, so a purge orphaned them permanently. Only the rows that
+  // actually purged (chosen can outrun the batch's own re-checked cutoff on a race), keyed off
+  // the same candidate read the batch itself trusts. Best-effort, after the batch commits, the
+  // same "the caller deletes the vectors after commit" contract every other purge path here uses.
+  if (purged > 0) {
+    const chosenSet = new Set(chosen);
+    const owned = candidates
+      .filter(c => chosenSet.has(c.id))
+      .map(c => {
+        let vectorIds: string[] = [];
+        try { vectorIds = JSON.parse(c.vector_ids ?? "[]"); } catch { /* malformed column, nothing to delete */ }
+        return { entryId: c.id, vectorIds };
+      })
+      .filter(o => o.vectorIds.length);
+    if (owned.length) {
+      try { await deleteEntryVectors(env, owned); } catch (e) { console.error("Purge vector cleanup failed (non-fatal):", e); }
+    }
+  }
   return {
     read: candidates.length, purged, trimmed: 0, rowsWritten: rowsWrittenOf(results3, estimate),
     budgetCut: chosen.length < candidates.length,
