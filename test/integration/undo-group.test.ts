@@ -379,6 +379,33 @@ describe("undoGroup() (S3)", () => {
     expect(result!.done).toBe(true);
   });
 
+  it("the oldest member's version created_at several milliseconds before the group's own start is still included (Codex review, T-0102, director follow-up: no fixed slack is enough)", async () => {
+    // The cloud re-review's own finding on E1: real Workers scheduling does not bound the drift
+    // between a version's own created_at and its audit event's slightly-later Date.now() call to
+    // any fixed number of milliseconds, so widening the old lower-bound-against-decoded.start
+    // check by a bigger constant only moves the same bug further out. classifyFromRows no longer
+    // anchors on decoded.start at all: it finds the LATEST group-qualifying version at or before
+    // decoded.end, which has no such precision problem.
+    const ids = ["e0", "e1", "e2"];
+    const windowStart = now - HOUR;
+    let t = windowStart;
+    for (const id of ids) {
+      await seedEntry(id, ["work", "status:canonical"]);
+      const versionAt = id === ids[0] ? t - 5 : t;
+      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: versionAt });
+      await insertEvent({ id: `ev-${id}`, entryId: id, event: "status_changed", actorId: "u1", createdAt: t, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+      t += MIN;
+    }
+    const group = await discoverGroup();
+
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId[ids[0]]).toBe("reverted");
+    expect(result!.remaining).toBe(0);
+    expect(result!.done).toBe(true);
+  });
+
   it("every page of a 50-member group stays at 40 or fewer statements, not growing page over page (Codex review, T-0102 R23)", async () => {
     // R23 (auditor, MINOR): E2's fix reclassifies every id from ids[0] on every call (paging is
     // stateless), so with one classifyMember SELECT per id, each already-"done" member from a

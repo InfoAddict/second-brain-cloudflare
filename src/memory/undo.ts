@@ -786,29 +786,38 @@ type MemberVerdict =
  */
 function classifyFromRows(rows: readonly ChainRow[] | undefined, decoded: DecodedGroup, cfg: Readonly<Config>): MemberVerdict {
   if (!rows?.length) return { kind: "not_found" };
+  // Codex review, T-0102, director follow-up (cloud re-review, the E1 slack fix was not enough):
+  // decoded.start comes from the group's own audit-event timestamps (brief/changes.ts), stamped
+  // at a separate, slightly later Date.now() call than the version row it describes -- under real
+  // Workers scheduling that drift is not bounded by any fixed millisecond, so a lower bound
+  // against decoded.start (with or without slack) can still read the group's oldest member as
+  // outside the window it is actually in. decoded.end has no such problem: every version this
+  // group could ever be about was necessarily written before the group's own LATEST event was
+  // audited, so scanning for the LATEST matching version at or before decoded.end -- rows arrive
+  // seq/time ascending, so this is the last one seen, not the first -- finds the right one without
+  // depending on how close decoded.start sits to the version's own clock.
   let toVersion: number | undefined;
-  let consumed = false;
+  let toVersionWorkspace: string | undefined;
   for (const r of rows) {
+    if (r.created_at > decoded.end) break; // ascending order: nothing later can qualify either
     let meta: Record<string, unknown> = {};
     try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no client / no target_seq */ }
-    if (toVersion === undefined) {
-      // Codex review, T-0102 E1: decoded.start comes from the group's own audit-event timestamps
-      // (brief/changes.ts), stamped at its own, slightly later Date.now() call than the version
-      // row it describes -- a strict >= against the version's own created_at can then read the
-      // group's OLDEST member as older than the window it is actually in, and this never finds a
-      // toVersion for it at all (kind: "not_found", permanently excluded from the group). One
-      // millisecond of slack is enough to absorb that ordering, not a real window.
-      if (r.created_at >= decoded.start - 1 && r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
-        toVersion = r.seq;
-      }
-      continue;
+    if (r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
+      toVersion = r.seq;
+      toVersionWorkspace = r.workspace_id;
     }
-    if (r.reason === "revert" && meta.target_seq === toVersion) consumed = true;
   }
   if (toVersion === undefined) return { kind: "not_found" };
+  let consumed = false;
+  for (const r of rows) {
+    if (r.seq <= toVersion) continue;
+    let meta: Record<string, unknown> = {};
+    try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no target_seq */ }
+    if (r.reason === "revert" && meta.target_seq === toVersion) { consumed = true; break; }
+  }
   if (consumed) return { kind: "done" };
   const newest = rows[rows.length - 1];
-  return newest.seq === toVersion ? { kind: "pending", toVersion, workspaceId: newest.workspace_id } : { kind: "changed_since" };
+  return newest.seq === toVersion ? { kind: "pending", toVersion, workspaceId: toVersionWorkspace! } : { kind: "changed_since" };
 }
 
 /**
