@@ -148,6 +148,19 @@ describe("memory detail — what the brain knows", () => {
     expect(ctx.__els.get("view-brain").innerHTML).toContain("Not searchable by meaning");
   });
 
+  // Director, copywriter decision (deck section 15): a held memory is already out of search by
+  // policy (the held banner says so); "not indexed yet" beside it reads as a second, conflicting
+  // reason. Same heldReason(entry.tags) check the held banner itself uses.
+  it("hides the not-indexed-yet note when the memory is held", () => {
+    const ctx = load();
+    // importance_score gives the row content besides the note, so this proves the note itself is
+    // suppressed, not that the whole block went empty and hid itself for an unrelated reason.
+    ctx.renderViewBrain({ tags: ["quarantine:instruction"], indexed: false, importance_score: 3 });
+    const html = ctx.__els.get("view-brain").innerHTML;
+    expect(html).not.toBe("");
+    expect(html).not.toContain("Not searchable by meaning");
+  });
+
   it("keeps the facts together and the caveats after them", () => {
     const ctx = load();
     ctx.renderViewBrain({

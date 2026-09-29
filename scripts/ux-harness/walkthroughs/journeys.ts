@@ -351,6 +351,14 @@ export const journeys: Journey[] = [
       const visible = await ctx.page.evaluate(el => (el as HTMLElement).style.display !== "none", heldBanner);
       if (!visible) throw new NotBuilt("T3/T4 lane S5: held banner", "#view-held is present but hidden for a held memory");
       await ctx.shot("held", "the held banner on a quarantined memory's sheet");
+      // Director, copywriter decision (deck section 15): this row's own vector_ids ('[]') makes it
+      // indexed:false too, so the held state is also the regression shot for "not indexed yet"
+      // staying hidden behind the held banner, at both widths.
+      const notIndexedNote = await ctx.page.evaluate(() => document.body.textContent?.includes("Not searchable by meaning") ?? false);
+      if (notIndexedNote) throw new Error("the not-indexed-yet note shows on a held memory's sheet; the held check should suppress it (memory-crud.js)");
+      await ctx.page.setViewport(VIEWPORTS.mobile);
+      await ctx.shot("held-mobile", "the held banner and suppressed not-indexed-yet note, mobile width");
+      await ctx.page.setViewport(VIEWPORTS.desktop);
       const releaseBtn = await ctx.page.$("#view-held-release");
       if (!releaseBtn) throw new NotBuilt("T3/T4 lane S5: Release action", "no #view-held-release button");
       // A direct DOM click, not Puppeteer's own (which insists the element be scrolled fully into
