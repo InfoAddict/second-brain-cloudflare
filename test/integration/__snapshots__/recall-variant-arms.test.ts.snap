@@ -81,7 +81,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
        FROM edges g CROSS JOIN entries s ON s.id = g.source_id
       WHERE g.target_id = entries.id AND g.type = 'supersedes'
         AND s.tags NOT LIKE '%"status:deprecated"%'
-        AND s.tags NOT LIKE '%"quarantine:%'
+        AND s.tags NOT LIKE '%"quarantine:instruction"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:hidden"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:burst"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:capsule"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:too\\_long"%' ESCAPE '\\'
         AND s.workspace_id = entries.workspace_id
         AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
       ORDER BY s.created_at DESC LIMIT 1) END AS superseded_by_json
@@ -174,7 +174,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
        FROM edges g CROSS JOIN entries s ON s.id = g.source_id
       WHERE g.target_id = entries.id AND g.type = 'supersedes'
         AND s.tags NOT LIKE '%"status:deprecated"%'
-        AND s.tags NOT LIKE '%"quarantine:%'
+        AND s.tags NOT LIKE '%"quarantine:instruction"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:hidden"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:burst"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:capsule"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:too\\_long"%' ESCAPE '\\'
         AND s.workspace_id = entries.workspace_id
         AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
       ORDER BY s.created_at DESC LIMIT 1) END AS superseded_by_json
@@ -271,7 +271,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
        FROM edges g CROSS JOIN entries s ON s.id = g.source_id
       WHERE g.target_id = entries.id AND g.type = 'supersedes'
         AND s.tags NOT LIKE '%"status:deprecated"%'
-        AND s.tags NOT LIKE '%"quarantine:%'
+        AND s.tags NOT LIKE '%"quarantine:instruction"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:hidden"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:burst"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:capsule"%' ESCAPE '\\' AND s.tags NOT LIKE '%"quarantine:too\\_long"%' ESCAPE '\\'
         AND s.workspace_id = entries.workspace_id
         AND COALESCE(s.valid_from, s.created_at) = entries.valid_until
       ORDER BY s.created_at DESC LIMIT 1) END AS superseded_by_json

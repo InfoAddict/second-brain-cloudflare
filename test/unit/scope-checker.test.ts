@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (237 queries, 116 exceptions, 36 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (239 queries, 118 exceptions, 36 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1526,7 +1526,21 @@ describe("the checker over the real source tree", () => {
     // (deleting a permanent audit trail); it is gone, replaced by loadEventHistoryIds
     // (src/entries/import.ts, scope-exempt by id, same shape) -- net -1 query, -1 exception
     // against the total just above (238/117/36 -> 237/116/36).
-    ).toEqual({ queries: 237, exempt: 116, checked: 36, outerJoin: 1 });
+    // Deliberate: +2 queries, +2 documented exceptions (237/116/36 -> 239/118/36) for the round 3
+    // re-review's id-uniqueness fix (src/entries/import.ts, T-0089.1.1 close-out round 3):
+    //   1. ENTRY_INSERT_SQL_TEMPLATE reads entries and entries_trash now (`WHERE NOT EXISTS (...)
+    //      AND NOT EXISTS (...)`, checking both tables atomically in the same statement the id's
+    //      own row lands in) where it used to be a plain `VALUES` insert reading neither -- a
+    //      genuinely new query, scope-exempt by id the same way loadExistingIds' own pre-read is.
+    //   2. The new heldEventStatement's guarded `WHERE EXISTS (SELECT 1 FROM entries ...)` --
+    //      another new query, replacing auditEventStatement's unconditional form (src/lib/audit.ts,
+    //      no entries read, never counted here) so a held row's own audit event can never land on
+    //      an unrelated row that already owned a colliding id.
+    // loadEventHistoryIds (the query the comment above this one introduced) is gone -- finding 2 of
+    // the same round ("reverse the fresh-id remap") keeps a reused id outright now, with no history
+    // check to decide a remap -- but its own SELECT never read entries or entries_trash, so it was
+    // never counted here either way (net 0 on this total).
+    ).toEqual({ queries: 239, exempt: 118, checked: 36, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

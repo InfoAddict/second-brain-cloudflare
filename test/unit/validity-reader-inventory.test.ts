@@ -107,7 +107,9 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // MOVED (merge of release/v4 d3b5b25c into v4/t7-c): Track 7's own reads (dueSplit/loopsSplit's
   // items+totals, now each marked directly; the standing-hydration read, now marked `any`) and
   // Track 9's dashboard aggregates shifted; recomputed against the real scanner output.
-  "src/brief/compute.ts": [121, 129, 138, 153, 473, 476],
+  // MOVED +4 (round 3 re-review MINOR, FX2/FX1 merge order: FX1 owns this file, 230d0afe): FX2's
+  // one-line NOT_HELD_SQL swap at the old line 544 added an explanatory comment above it.
+  "src/brief/compute.ts": [125, 133, 142, 157, 477, 480],
   // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): v4/t34-w's own class E
   // held-row exclusions and release/v4's own Track 2 lane B deltas shifted these; recomputed
   // against the real scanner output on the merged tree.

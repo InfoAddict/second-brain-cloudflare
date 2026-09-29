@@ -258,7 +258,10 @@ describe("MCP digest", () => {
 
 describe("MCP history", () => {
   it("shows recent events with actors and channels plus supersedes edges in three statements", async () => {
-    sqlite.seed({ id: "current", content: "Current decision", createdAt: 1, tags: ["work"] });
+    // "current" is seeded at 0, not 1 (round 3 re-review MAJOR: readEntryTimeline now hides an
+    // event older than its row's own created_at, a purged id's prior life) -- these 12 seeded
+    // events run from 0, and must all still read as this row's own history.
+    sqlite.seed({ id: "current", content: "Current decision", createdAt: 0, tags: ["work"] });
     sqlite.seed({ id: "older", content: "Older decision", createdAt: 1, tags: ["work"] });
     sqlite.seed({ id: "newer", content: "Newer decision", createdAt: 1, tags: ["work"] });
     for (let i = 0; i < 12; i++) {

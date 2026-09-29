@@ -75,10 +75,11 @@ describe("/import subrequest budget (self-imposed D1 budget: ~50 per invocation)
     expect(summary.imported).toBe(IMPORT_DEFAULT_LIMIT);
     expect(sq.rows()).toHaveLength(IMPORT_DEFAULT_LIMIT);
     // MOVED (T-0089.1.2): 2 -> 3. 1 existence lookup (40 ids, one chunk) + 1 trash lookup + 1 insert batch.
-    // MOVED (director follow-up, T-0102 MINOR): 3 -> 4 for loadEventHistoryIds -- every one of
-    // these 40 ids will actually insert (none are live or trashed), so all 40 need their
-    // entry_events history checked before an id is safe to reuse (see loadEventHistoryIds).
-    expect(sq.issued).toHaveLength(4);
+    // MOVED (round 3 re-review MAJOR: "reverse the fresh-id remap"): 4 -> 3, back down --
+    // loadEventHistoryIds is gone. A reused id is kept outright now (no remap decision to make),
+    // and readEntryTimeline's own created_at filter keeps a purged id's old events out of the new
+    // row's history without this module ever needing to see entry_events itself.
+    expect(sq.issued).toHaveLength(3);
   });
 
   it("a late page of a large export costs the same as the first page", async () => {
@@ -96,9 +97,9 @@ describe("/import subrequest budget (self-imposed D1 budget: ~50 per invocation)
     expect(summary.remaining_entries).toBe(4800);
     expect(sq.rows()).toHaveLength(200);
     // Position in the file must not change the price: still 2 lookups (live, trash) + 1 batch.
-    // MOVED (director follow-up, T-0102 MINOR): 3 -> 4, the same loadEventHistoryIds cost as the
+    // MOVED (round 3 re-review MAJOR): 4 -> 3, the same loadEventHistoryIds removal as the
     // fresh-page test above -- position in the file does not change this price either.
-    expect(sq.issued).toHaveLength(4);
+    expect(sq.issued).toHaveLength(3);
   });
 
   it("an edges-only page stays in single digits", async () => {
@@ -131,9 +132,9 @@ describe("/import subrequest budget (self-imposed D1 budget: ~50 per invocation)
     expect(summary.skipped).toBe(IMPORT_DEFAULT_LIMIT);
     expect(summary.imported).toBe(0);
     // MOVED (T-0089.1.2): 1 -> 2, the trash lookup.
-    // Director follow-up, T-0102 MINOR: still 2, not 3 -- loadEventHistoryIds only checks ids
-    // that will actually attempt an insert (see import.ts); every id on this rerun is already
-    // live, so none of them reach it.
+    // Still 2 after round 3's "reverse the fresh-id remap" (loadEventHistoryIds is gone; see the
+    // fresh-page test above) -- every id on this rerun is already live, so flushInsertBatch never
+    // runs at all and there is no insert batch to add a third call.
     expect(sq.issued).toHaveLength(2);
   });
 });

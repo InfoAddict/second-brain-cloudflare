@@ -4,7 +4,7 @@ import { edgeEndpointsReadableSql, isSymmetric, isValidEdgeType } from "../graph
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
-import { auditEventStatement, type ChangeContext } from "../lib/audit";
+import type { ChangeContext } from "../lib/audit";
 // MAX_ENTRY_ID_BYTES: the one bound on a caller-chosen entry id, applied through boundedEntryId.
 import { boundedEntryId } from "../vectorize/ids";
 import { parseImportedProject, type ImportedProject } from "../projects/registry";
@@ -14,8 +14,9 @@ import { standingTouched } from "../standing/cache";
 import { normalizeTagList, stripNewReservedTags } from "../tags/system";
 import { heldReason, type HoldReason } from "../quarantine/tags";
 import { scoreWrite, type SignalHit } from "../quarantine/score";
-import { holdDecision, heldTagsFor, holdStatements } from "../quarantine/hold";
-import { pruneStatement, snapshotStatement } from "../memory/versions";
+import { holdDecision, heldTagsFor, holdStatements, type PlaceholderSink } from "../quarantine/hold";
+import { Params, pruneStatement, snapshotStatement } from "../memory/versions";
+import { changedRows } from "../memory/trash";
 
 /**
  * Default page size: array positions examined per call, inserts and skips alike.
@@ -32,22 +33,23 @@ export const IMPORT_D1_BATCH_SIZE = 50;
 /** Edge endpoint lookups bind each id twice (source IN + target IN). */
 export const EDGE_ENDPOINT_QUERY_BATCH = Math.floor(D1_MAX_BOUND_PARAMS / 2);
 
-// Codex review, T-0102, director follow-up MAJOR: a plain INSERT, always under the id this
-// module already chose (the export's own id, or boundedEntryId's own length-based mint over
-// MAX_ENTRY_ID_BYTES -- an id is kept even when reused, round 2 re-review) and already
-// pre-checked against entries and entries_trash (loadExistingIds) -- not a CASE WHEN that lets
-// the database silently substitute a different id on a collision. A held row's hold statements
-// (holdStatements, the held event) are built against that SAME chosen id and land in the SAME
-// batch as this INSERT (flushInsertBatch): a substituted id would have left them targeting an id
-// that was never written, the exact "commits unheld" gap this fix closes. A genuine collision (a
-// true concurrent-insert race in the gap between the pre-check and this batch, not a case this
-// module's own pre-checks miss) fails this statement, and with it -- D1 batch() is one
-// transaction -- the whole row's insert and hold together, atomically; flushInsertBatch's retry
-// path resolves it from there.
+// Ids are unique across entries and entries_trash (T-0089.1.1): a row inserts only when NEITHER
+// table already has this id, atomically, in the same statement -- not a race between this
+// module's own pre-read (loadExistingIds) and this INSERT. `changes` is 0 either way a collision
+// happens (already live, or trashed since the pre-read) rather than a thrown PRIMARY KEY error
+// for one case and a silent no-op for the other, so flushInsertBatch checks it uniformly.
+//
+// Codex review, T-0102, director follow-up MAJOR: no longer a CASE WHEN that let the database
+// silently substitute a different id on collision -- this module cannot know that id in advance
+// to build the hold statements (holdStatements, the held event) against it in the SAME batch, the
+// atomicity this fix closes a gap for. Collision now means `changes: 0`, not a substituted id;
+// flushInsertBatch mints a fresh one itself and retries under it, as its OWN new atomic attempt.
 // versioning: exempt: creation — an imported row has no prior state to keep
+// scope-exempt: by-id existence probes across every workspace: an id is unique deployment-wide
 const ENTRY_INSERT_SQL_TEMPLATE =
   `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses, workspace_id, actor_id, valid_from, valid_until)
-   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`;
+   SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+   WHERE NOT EXISTS (SELECT 1 FROM entries WHERE id = ?1) AND NOT EXISTS (SELECT 1 FROM entries_trash WHERE id = ?1)`;
 
 function parseInsertColumns(sql: string): readonly string[] {
   const match = sql.match(/INSERT INTO entries \(([^)]+)\)/i);
@@ -362,6 +364,39 @@ async function isDuplicateRow(env: Env, row: PendingInsert): Promise<boolean> {
   return existing?.content === row.content;
 }
 
+/** Whether an INSERT ... SELECT ... WHERE statement actually wrote its row (`changedRows`, D1's
+ * `meta.changes` or the test doubles' own `meta.rows_written`, is the only signal: a false WHERE
+ * is not an error). */
+function insertLanded(res: { meta?: { changes?: number; rows_written?: number } } | undefined): boolean {
+  return changedRows(res) > 0;
+}
+
+/** The compare-and-set every one of a row's OWN statements (its hold, its held event) shares
+ * with its own INSERT (director follow-up MAJOR): content and created_at together are what this
+ * row's own INSERT wrote, so a collision -- the id already belonged to a different, unrelated row
+ * -- leaves every one of these guarded statements matching nothing, never corrupting that row. */
+function rowGuard(row: PendingInsert): (p: PlaceholderSink) => string {
+  return p => `content = ${p.add(row.content)} AND created_at = ${p.add(row.created_at)}`;
+}
+
+/** `auditEventStatement`'s (src/lib/audit.ts) plain, unconditional form would write a "held"
+ * event even when this row's own INSERT lost its guard to a collision -- an orphaned event on
+ * whatever unrelated row already owned the id. Guarded the same way holdStatements' own UPDATE
+ * is, via rowGuard. */
+function heldEventStatement(env: Env, row: PendingInsert, change: ChangeContext, reasons: HoldReason[], score: number, now: number): D1PreparedStatement {
+  const p = new Params();
+  const idIdx = p.add(row.id);
+  const actorIdx = p.add(change.actorId);
+  const payloadIdx = p.add(JSON.stringify({ reasons, score, channel: "rest" }));
+  const nowIdx = p.add(now);
+  // scope-exempt: by-id: this batch's own chosen id, already authorized to insert under writeCtx
+  return env.DB.prepare(
+    `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+     SELECT ${p.add(crypto.randomUUID())}, ${idIdx}, ${actorIdx}, 'held', ${payloadIdx}, ${nowIdx}
+     WHERE EXISTS (SELECT 1 FROM entries WHERE id = ${idIdx} AND ${rowGuard(row)(p)})`,
+  ).bind(...p.values());
+}
+
 async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<string>> {
   const keys = new Set<string>();
   if (!endpoints.length) return keys;
@@ -433,11 +468,13 @@ function bindInsert(env: Env, row: PendingInsert, writeCtx: WriteContext) {
 /**
  * Codex review, T-0102, director follow-up MAJOR: every statement one row's own write needs --
  * the INSERT, and for a held row `holdStatements` (the same real hold path captureEntry and
- * mirror.ts use) plus the held event -- so a caller building a batch from this can never land the
- * insert without its hold, or the hold without its own audit trail. `auditEventStatement`
- * (src/lib/audit.ts) is the same plain-statement form `holdStatements` already returns, not the
- * fire-and-forget `auditEvent` capture's own route layer uses elsewhere: a dropped held event on
- * an unattended, many-row import is not the same risk as one on a single interactive capture.
+ * mirror.ts use) plus the held event -- in the SAME batch as the insert, so a row can never land
+ * unheld. Every statement past the insert carries `rowGuard(row)`, the same compare-and-set the
+ * insert's own `WHERE NOT EXISTS` guards against: a row whose insert lost to a collision leaves
+ * its hold and event statements matching nothing, never landing on the unrelated row that already
+ * held the id. `heldEventStatement` is this row's own guarded twin of the unconditional
+ * `auditEventStatement` (src/lib/audit.ts) -- a dropped held event on an unattended, many-row
+ * import is not the same risk as one on a single interactive capture, so this never fires blind.
  */
 function rowStatements(
   env: Env, row: PendingInsert, writeCtx: WriteContext, change: ChangeContext, config: Readonly<Config>, now: number,
@@ -446,10 +483,65 @@ function rowStatements(
   if (!row.holdPlan) return [insert];
   const { reasons, score, signals } = row.holdPlan;
   const hold = holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
-    entryId: row.id, reasons, score, signals, change, heldTags: heldTagsFor(row.tags, reasons), now,
+    entryId: row.id, reasons, score, signals, change, heldTags: heldTagsFor(row.tags, reasons), now, guard: rowGuard(row),
   });
-  const event = auditEventStatement(env, { entryId: row.id, actorId: change.actorId, event: "held", payload: { reasons, score, channel: "rest" } });
+  const event = heldEventStatement(env, row, change, reasons, score, now);
   return [insert, ...hold, event];
+}
+
+/** One row's own atomic attempt, alone in its own batch: the row's insert, its orphan-version
+ * cleanup, and (for a held row) its guarded hold and held event, all together or none at all. */
+async function attemptInsertRow(
+  env: Env, row: PendingInsert, writeCtx: WriteContext, change: ChangeContext, config: Readonly<Config>, now: number,
+): Promise<boolean> {
+  const written = await env.DB.batch([orphanVersionsDelete(env, [row.id]), ...rowStatements(env, row, writeCtx, change, config, now)]);
+  return insertLanded(written[1]);
+}
+
+/**
+ * A row whose own INSERT did not land in the shared batch, whether the batch itself threw or the
+ * row's own `WHERE NOT EXISTS` guard simply matched nothing (director follow-up MAJOR: "retry only
+ * the rows that failed, keep their ids"). The retry is idempotent -- same id, same content, same
+ * hold plan -- so it is safe to run even when the original failure had nothing to do with this row
+ * (noisy neighbors in the shared batch). Only once that retry ALSO does not land -- a genuine,
+ * still-live collision -- does this fall back to the pre-existing "mint a fresh id" behaviour
+ * (round 2 re-review, id-uniqueness T-0089.1.1: "the row gets a fresh id"), itself one more fully
+ * atomic attempt under a brand new id.
+ */
+async function retryInsertRow(
+  env: Env, row: PendingInsert, writeCtx: WriteContext, change: ChangeContext, config: Readonly<Config>, now: number,
+  existingIds: Set<string>, results: ImportResultItem[], counters: { imported: number; failed: number },
+): Promise<void> {
+  try {
+    if (await attemptInsertRow(env, row, writeCtx, change, config, now)) {
+      existingIds.add(row.id);
+      counters.imported++;
+      results.push(importedResult(row));
+      return;
+    }
+  } catch {
+    // A thrown error on the same-id retry is treated the same as a silent `changes: 0` below:
+    // either way this attempt did not land the row.
+  }
+  if (await isDuplicateRow(env, row)) {
+    existingIds.add(row.id);
+    results.push({ id: row.id, status: "skipped", reason: "already_imported" });
+    return;
+  }
+  const fresh: PendingInsert = { ...row, id: crypto.randomUUID(), originalId: row.originalId ?? row.id };
+  try {
+    if (await attemptInsertRow(env, fresh, writeCtx, change, config, now)) {
+      existingIds.add(fresh.id);
+      counters.imported++;
+      results.push(importedResult(fresh));
+      return;
+    }
+    counters.failed++;
+    results.push({ id: row.id, status: "failed", reason: "insert_error", detail: "collision persisted under a freshly minted id" });
+  } catch (e) {
+    counters.failed++;
+    results.push({ id: row.id, status: "failed", reason: "insert_error", detail: formatDbError(e) });
+  }
 }
 
 async function flushInsertBatch(
@@ -468,41 +560,31 @@ async function flushInsertBatch(
   const orphanIds = batch.map(row => row.id);
   const perRow = batch.map(row => rowStatements(env, row, writeCtx, change, config, now));
   const stmts = [orphanVersionsDelete(env, orphanIds), ...perRow.flat()];
+  const collided: PendingInsert[] = [];
   try {
-    await env.DB.batch(stmts);
+    const written = await env.DB.batch(stmts);
     // D1 batch() is one transaction (director follow-up MAJOR): every row above landed with its
-    // own hold and held event together, or none of them landed at all -- this loop only reports.
-    for (const row of batch) {
-      existingIds.add(row.id);
-      counters.imported++;
-      results.push(importedResult(row));
-    }
-  } catch {
-    // Retried one row at a time, each under its OWN id (director follow-up MAJOR: "never mint new
-    // ids on retry") -- a batch failure can be one row's genuine conflict among many others that
-    // had none, and minting a fresh id here would abandon a hold plan already scored for this
-    // row's own content.
-    for (const row of batch) {
-      try {
-        await env.DB.batch([orphanVersionsDelete(env, [row.id]), ...rowStatements(env, row, writeCtx, change, config, now)]);
+    // own hold and held event together, or none of its statements landed at all. A row whose own
+    // INSERT lost its `WHERE NOT EXISTS` guard to a genuine collision writes nothing here -- not a
+    // thrown error, just `changes: 0` on its own INSERT -- and is retried alone below, same as a
+    // row from a batch that threw outright.
+    let offset = 1;
+    for (const [i, row] of batch.entries()) {
+      if (insertLanded(written[offset])) {
         existingIds.add(row.id);
         counters.imported++;
         results.push(importedResult(row));
-      } catch (e) {
-        if (await isDuplicateRow(env, row)) {
-          existingIds.add(row.id);
-          results.push({ id: row.id, status: "skipped", reason: "already_imported" });
-          continue;
-        }
-        counters.failed++;
-        results.push({
-          id: row.id,
-          status: "failed",
-          reason: "insert_error",
-          detail: formatDbError(e),
-        });
+      } else {
+        collided.push(row);
       }
+      offset += perRow[i].length;
     }
+  } catch {
+    collided.push(...batch);
+  }
+
+  for (const row of collided) {
+    await retryInsertRow(env, row, writeCtx, change, config, now, existingIds, results, counters);
   }
 }
 
