@@ -27,8 +27,14 @@ import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX } from "../../src/qu
 import {
   COUNTERPARTY_TAG_PREFIX,
   LEDGER_TAG,
+  LEDGER_TAG_PREFIX,
   OWED_TO_ME_TAG,
   STANDING_TAG,
+  STANDING_TAG_PREFIX,
+  CONFIDENCE_TAG_PREFIX,
+  CONFIDENCE_SOURCE_TAG_PREFIX,
+  OUTCOME_TAG_PREFIX,
+  REVIEW_REARMS_TAG_PREFIX,
   T7_TAG_NAMES,
   T7_TAG_PREFIXES,
   stripT7CallerTags,
@@ -58,10 +64,38 @@ function loadUtils(): any {
   return ctx;
 }
 
+// Codex review, T-0102 (MAJOR, upgraded from the MINOR display-only fix below): isWorkerOwnedTag
+// now checks the new namespaces in their exact recognized format too (isRecognizedReservedTagFormat,
+// via isNewReservedTag), not by prefix alone -- a bare "sample" suffix is not a value the system
+// ever writes, so it is correctly an ordinary tag now, not worker-owned. Realistic values,
+// matching the isSystemTag section further down this file.
+const REALISTIC_NEW_PREFIX_VALUES: Record<string, string> = {
+  [QUARANTINE_TAG_PREFIX]: `${QUARANTINE_TAG_PREFIX}instruction`,
+  [EDITED_CANONICAL_TAG_PREFIX]: `${EDITED_CANONICAL_TAG_PREFIX}2026-09-26`,
+  [STANDING_TAG_PREFIX]: STANDING_TAG,
+  [LEDGER_TAG_PREFIX]: LEDGER_TAG,
+  [CONFIDENCE_TAG_PREFIX]: "confidence:0.70",
+  [CONFIDENCE_SOURCE_TAG_PREFIX]: "confidence-source:stated",
+  [OUTCOME_TAG_PREFIX]: "outcome:right",
+  [REVIEW_REARMS_TAG_PREFIX]: "review-rearms:1",
+  [COUNTERPARTY_TAG_PREFIX]: `${COUNTERPARTY_TAG_PREFIX}priya`,
+};
+
 describe("every T7 and trust-tag namespace is worker-owned", () => {
-  it("isWorkerOwnedTag is true for a sample value of each prefix and each bare marker", () => {
-    for (const prefix of ALL_NEW_PREFIXES) expect(isWorkerOwnedTag(`${prefix}sample`), prefix).toBe(true);
+  it("isWorkerOwnedTag is true for a realistic value of each prefix and each bare marker", () => {
+    for (const prefix of ALL_NEW_PREFIXES) {
+      const value = REALISTIC_NEW_PREFIX_VALUES[prefix];
+      expect(value, `no realistic sample registered for ${prefix}`).toBeDefined();
+      expect(isWorkerOwnedTag(value), value).toBe(true);
+    }
     for (const name of ALL_NEW_NAMES) expect(isWorkerOwnedTag(name), name).toBe(true);
+  });
+
+  it("isWorkerOwnedTag is false for a value that merely shares a new-namespace prefix but is not the system's own format", () => {
+    for (const prefix of ALL_NEW_PREFIXES) {
+      if (prefix === COUNTERPARTY_TAG_PREFIX) continue; // counterparty: accepts any grammar-valid slug by design
+      expect(isWorkerOwnedTag(`${prefix}sample`), prefix).toBe(false);
+    }
   });
 
   it("applyTagReplacement drops a caller-supplied standing:active and keeps the existing one", () => {

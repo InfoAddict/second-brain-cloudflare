@@ -27,6 +27,8 @@ import { resolveIdentityFromToken, type Identity } from "../../src/lib/identity"
 import { VERSIONS_SINCE_KV_KEY } from "../../src/constants";
 import { DEFAULTS } from "../../src/config";
 import type { Env } from "../../src/env";
+import { recallEntries } from "../../src/recall/search";
+import { isHeld, heldReason } from "../../src/quarantine/tags";
 
 // A string path, not new URL(...): a duplicate global URL type (DOM lib vs node:url) makes
 // readFileSync's URL overload unresolvable under this project's tsconfig. Same convention as
@@ -158,6 +160,39 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     expect(versions[0].content).toBe("I live in Berlin");
     // updated_at was NULL on this legacy row, so valid_from falls back to created_at (P13 / design "valid_from").
     expect(versions[0].valid_from).toBe(1000);
+  });
+
+  it("a 3.7 tag that merely looks reserved (quarantine:2020, outcome:won) recalls normally, isn't held, keeps its tags, and replacement can remove it (Codex review, T-0102)", async () => {
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'the deal closed in Lisbon', '["quarantine:2020","outcome:won"]', 'api', 1000, '[]')`);
+    env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
+    await initializeDatabase(env);
+    const roots = await ensureTenantBootstrap(env);
+    await (d1.db as any).prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'e1'`).bind(roots.ownerPersonalWorkspaceId, roots.ownerUserId).run();
+
+    // Recalls normally: NOT_HELD_SQL must not exclude a tag that merely shares the quarantine:
+    // prefix with a real hold reason.
+    const { matches } = await recallEntries({ query: "Lisbon", topK: 10, synthesize: false }, env, ctx, undefined, {});
+    expect(matches.map(m => m.id)).toContain("e1");
+
+    // Isn't held: isHeld/heldReason must not treat "2020" as a recognized hold reason.
+    const row = await (d1.db as any).prepare(`SELECT tags FROM entries WHERE id = 'e1'`).first();
+    expect(isHeld(JSON.parse(row.tags))).toBe(false);
+    expect(heldReason(JSON.parse(row.tags))).toBeNull();
+
+    // Keeps its tags: an ordinary edit (content-only, tags untouched) must not silently drop them.
+    const change = { actorId: roots.ownerUserId, channel: "rest" as const };
+    const writeCtx = { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId };
+    const edited = await updateEntryContent(env, "e1", "the deal closed in Porto", DEFAULTS, undefined, undefined, writeCtx, change, roots.ownerPersonalWorkspaceId);
+    expect(edited.status).toBe("updated");
+    const afterEdit = await (d1.db as any).prepare(`SELECT tags FROM entries WHERE id = 'e1'`).first();
+    expect(JSON.parse(afterEdit.tags).sort()).toEqual(["outcome:won", "quarantine:2020"]);
+
+    // Replacement can remove them: they behave as ORDINARY user tags, not un-droppable reserved
+    // ones -- a replacement that omits them drops them, the same as any other user tag would.
+    const replaced = await updateEntryContent(env, "e1", "the deal closed in Porto", DEFAULTS, undefined, ["deals"], writeCtx, change, roots.ownerPersonalWorkspaceId);
+    expect(replaced.status).toBe("updated");
+    const afterReplace = await (d1.db as any).prepare(`SELECT tags FROM entries WHERE id = 'e1'`).first();
+    expect(JSON.parse(afterReplace.tags)).toEqual(["deals"]);
   });
 
   it("a pre-4.0 row's first append versions correctly and reconstructs the prior text", async () => {
