@@ -23,6 +23,8 @@ import { captureEntry } from "../../../src/capture/entry";
 import { withHold, withEditedCanonical } from "../../../src/quarantine/tags";
 import { memoryHeader } from "../../../src/recall/render";
 import { STANDING_TAG } from "../../../src/tags/t7";
+import { planSupersede, supersedeStatements, type Window } from "../../../src/memory/validity";
+import { VIEWPORTS } from "../browser";
 import { NotBuilt, type Journey } from "./types";
 
 /** w8's own teammate token, stashed between setup() and run() (journeys run one at a time). */
@@ -363,8 +365,43 @@ export const journeys: Journey[] = [
   {
     id: "w12",
     title: "Superseded fact",
-    async setup() { throw new NotBuilt("Track 2: validity labels (UX-F.1 / SH-5)", "no validUntil/supersededBy rendering found in public/js/memory-crud.js -- the backend (T-0089.2.1) has landed but the sheet's \"true until\"/\"replaced by\" labels have not"); },
-    async run() {},
+    async setup(env) {
+      const ctx = await ownerCtx(env);
+      const oldFrom = Date.now() - 2 * 86_400_000;
+      const newFrom = Date.now() - 86_400_000;
+      // supersededBySql's own join is exact: COALESCE(closer.valid_from, closer.created_at) must
+      // equal the closed row's valid_until -- seedOne's own createdAt default won't match a Window
+      // built separately, so both rows are seeded directly with the SAME timestamps the Window uses.
+      await env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w12-old', 'We ship on Thursdays.', '[]', 'api', ?, '[]', ?, ?)`,
+      ).bind(oldFrom, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+      await env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w12-new', 'We ship on Fridays now.', '[]', 'api', ?, '[]', ?, ?)`,
+      ).bind(newFrom, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+      const older: Window = { id: "w12-old", from: oldFrom, until: null, workspaceId: ctx.roots.ownerPersonalWorkspaceId, status: null };
+      const newer: Window = { id: "w12-new", from: newFrom, until: null, workspaceId: ctx.roots.ownerPersonalWorkspaceId, status: null };
+      const plan = planSupersede(older, newer);
+      await env.DB.batch(supersedeStatements(env, plan, older, newer, ctx.change, DEFAULTS));
+    },
+    async run(ctx) {
+      await gotoMemory(ctx.page, ctx.baseUrl, "w12-old");
+      // memory-crud.js's validityStatusCaptionHtml composes "True from ... until ..." and
+      // "Replaced by: {preview}" as two separate i18n strings, not one "(true until ...)" phrase.
+      // The caption re-fetches and re-renders asynchronously after the sheet opens; poll rather
+      // than reading it once immediately.
+      await ctx.page.waitForFunction(
+        () => (document.getElementById("view-status-caption")?.textContent ?? "").includes("Replaced by"),
+        { timeout: 5000 },
+      ).catch(() => {});
+      const caption = await ctx.page.$eval("#view-status-caption", el => el.textContent).catch(() => null);
+      if (!caption || !caption.includes("Replaced by") || !caption.includes("until")) {
+        throw new NotBuilt("Track 2: validity labels (UX-F.1 / SH-5)", `no "True from ... until ..." / "Replaced by" text in #view-status-caption (${JSON.stringify(caption)})`);
+      }
+      await ctx.shot("desktop", "the superseded fact's sheet, desktop width");
+      await ctx.page.setViewport(VIEWPORTS.mobile);
+      await ctx.shot("mobile", "the superseded fact's sheet, mobile width");
+      await ctx.page.setViewport(VIEWPORTS.desktop);
+    },
   },
   {
     id: "w13",
@@ -618,7 +655,48 @@ export const journeys: Journey[] = [
   {
     id: "w26",
     title: "Wrong, then Undo from the toast, then the restored memory's sheet shows \"Replaced by\" again",
-    async setup() { throw new NotBuilt("Track 2 D3: validity labels (UX-F.1 / SH-5)", "builder 154c8ae4 on branch v4/t2-ui is building the sheet's \"true until\"/\"replaced by\" rendering now (director, 2026-09-28); this journey (formerly the OTHER W23, in 14-t2-time-spec.md, now renumbered W26 there and here) stays pending until it lands, same as W12"); },
-    async run() {},
+    async setup(env) {
+      const ctx = await ownerCtx(env);
+      const oldFrom = Date.now() - 2 * 86_400_000;
+      const newFrom = Date.now() - 86_400_000;
+      await env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w26-old', 'We ship on Thursdays.', '[]', 'api', ?, '[]', ?, ?)`,
+      ).bind(oldFrom, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+      await env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w26-new', 'We ship on Fridays now.', '[]', 'api', ?, '[]', ?, ?)`,
+      ).bind(newFrom, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+      const older: Window = { id: "w26-old", from: oldFrom, until: null, workspaceId: ctx.roots.ownerPersonalWorkspaceId, status: null };
+      const newer: Window = { id: "w26-new", from: newFrom, until: null, workspaceId: ctx.roots.ownerPersonalWorkspaceId, status: null };
+      const plan = planSupersede(older, newer);
+      await env.DB.batch(supersedeStatements(env, plan, older, newer, ctx.change, DEFAULTS));
+    },
+    async run(ctx) {
+      // Mark the newer fact Wrong: D-RET's retraction hook restores the older one it had closed.
+      await gotoMemory(ctx.page, ctx.baseUrl, "w26-new");
+      const wrongOption = await ctx.page.$('#view-status [data-status="deprecated"]');
+      if (!wrongOption) throw new NotBuilt("UX-H.1: status control", 'no [data-status="deprecated"] option on the memory sheet');
+      await wrongOption.click();
+      const undoBtn = await waitForToast(ctx.page);
+      if (!undoBtn) throw new NotBuilt("Track 2 D3 (UX-F.1): Wrong toast naming what it restored", "marking a superseding fact Wrong produced no Undo toast");
+      await ctx.shot("wrong", "the toast after marking the newer fact Wrong");
+      // Undo the Wrong: the newer fact is trusted again, so it re-closes the older one.
+      await undoBtn.click();
+      await ctx.shot("undone", "after undoing the Wrong from the toast");
+      await gotoMemory(ctx.page, ctx.baseUrl, "w26-old");
+      // The caption re-fetches and re-renders asynchronously after the sheet opens; poll rather
+      // than reading it once immediately after the click.
+      await ctx.page.waitForFunction(
+        () => (document.getElementById("view-status-caption")?.textContent ?? "").includes("Replaced by"),
+        { timeout: 5000 },
+      ).catch(() => {});
+      const caption = await ctx.page.$eval("#view-status-caption", el => el.textContent).catch(() => null);
+      if (!caption || !caption.includes("Replaced by")) {
+        throw new NotBuilt("Track 2 D3 (UX-F.1 / SH-5): Replaced by after undo", `the restored memory's #view-status-caption does not show "Replaced by" again after the undo (${JSON.stringify(caption)})`);
+      }
+      await ctx.shot("desktop", "the older fact's sheet showing Replaced by again, desktop width");
+      await ctx.page.setViewport(VIEWPORTS.mobile);
+      await ctx.shot("mobile", "the older fact's sheet showing Replaced by again, mobile width");
+      await ctx.page.setViewport(VIEWPORTS.desktop);
+    },
   },
 ];
