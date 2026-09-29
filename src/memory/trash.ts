@@ -266,6 +266,15 @@ export function trashManyStatements(
     // fire-and-forget and skips this exact case now (routes/entries.ts, mcp/server.ts) so there is
     // one of these per tier-3 id, not two: this one is the reliable, minimal one finding 2's own
     // event-life filter (event = 'deleted' AND payload.trash = false) actually depends on.
+    //
+    // Round 5 re-review MAJOR: unguarded, this landed even when the entries DELETE below lost its
+    // own race (a share/unshare moved the row to a workspace outside this batch's own authorized
+    // pairs, between the caller's read and this batch) -- the row stayed live, untouched, but this
+    // marker still claimed its life had ended, permanently hiding every earlier event for the id
+    // the moment finding 2's own event-life filter next read it. Selected from `entries` now,
+    // under the SAME guard the DELETE below uses, plus NOT EXISTS on entries_trash (a losing
+    // tier-3 forget's stale size read can predate a shrink that let a racing forget trash the row
+    // normally instead) -- a marker lands only for an id this batch's own DELETE actually removed.
     {
       const tp = new Params();
       const tierIds = tp.add(JSON.stringify(plan.tier3));
@@ -276,9 +285,11 @@ export function trashManyStatements(
       stmts.push(env.DB.prepare(
         // scope-exempt: by-id: one life-end marker per tier-3 id this batch's own entries DELETE removes
         `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
-           SELECT lower(hex(randomblob(16))), value, ${tierActor}, 'deleted',
+           SELECT lower(hex(randomblob(16))), e.id, ${tierActor}, 'deleted',
                   json_object('reason', ${tierReason}, 'trash', json('false'), 'channel', ${tierChannel}), ${tierNow}
-             FROM json_each(${tierIds})`,
+             FROM entries e
+             WHERE e.id IN (SELECT value FROM json_each(${tierIds}))${entriesGuardSql(tp, "e")}
+               AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = e.id)`,
       ).bind(...tp.values()));
     }
   }

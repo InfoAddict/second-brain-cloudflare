@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (241 queries, 118 exceptions, 36 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (242 queries, 119 exceptions, 36 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1546,7 +1546,12 @@ describe("the checker over the real source tree", () => {
     // entries and one reading entries_trash, each scope-exempt by the same reasoning as the rest
     // of that batch's own by-workspace statements. trash.ts's own new tier-3 marker statement
     // reads only json_each(...), no corpus table, so it adds no query here at all.
-    ).toEqual({ queries: 241, exempt: 118, checked: 36, outerJoin: 1 });
+    // Deliberate: +1 query, +1 documented exception (241/118/36 -> 242/119/36) for the round 5
+    // re-review MAJOR ("the tier-3 life-end marker insert has no guard"): that marker now selects
+    // FROM entries (guarded by entriesGuardSql, plus a NOT EXISTS on entries_trash) instead of a
+    // bare json_each(...) -- a genuinely new corpus-table read, scope-exempt the same way the
+    // entries DELETE it shares a guard with already is.
+    ).toEqual({ queries: 242, exempt: 119, checked: 36, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
