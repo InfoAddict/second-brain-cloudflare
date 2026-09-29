@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import vm from "node:vm";
 import { installI18n } from "../ui/_i18n-harness";
-import { applyTagReplacement, isWorkerOwnedTag } from "../../src/tags/system";
+import { applyTagReplacement, isWorkerOwnedTag, normalizeTagList } from "../../src/tags/system";
 import { isReservedTag, isTopicTag } from "../../src/compression/eligibility";
 import { getStatus } from "../../src/memory/status";
 import {
@@ -85,6 +85,21 @@ describe("NOT_HELD_SQL excludes a row only for the five exact reasons this Worke
     const tooLongClause = NOT_HELD_SQL.split(" AND ").find(c => c.includes("too"));
     expect(tooLongClause).toContain("too\\_long");
     expect(tooLongClause).toContain("ESCAPE '\\'");
+  });
+
+  // Round 3 re-review NIT: NOT_HELD_SQL's LIKE pattern is an EXACT literal match against the
+  // stored JSON array element ('%"quarantine:instruction"%') -- it has no way to trim whitespace
+  // itself, unlike heldReason/isHeld's own `.trim()` in JS. The two only agree because every write
+  // boundary trims a tag before it is ever stored, so a stray space can never reach either check.
+  // This asserts that invariant holds at the actual writer, not just assumed.
+  it("a tag trims before it is ever stored, so the SQL's untrimmed exact match and the JS's trimmed one never disagree", () => {
+    const stored = normalizeTagList([" work ", ` ${QUARANTINE_TAG_PREFIX}instruction `, "\tstatus:canonical\n"]);
+    expect(stored).toEqual(["work", `${QUARANTINE_TAG_PREFIX}instruction`, "status:canonical"]);
+    // The stored (trimmed) form is exactly what NOT_HELD_SQL's own literal expects: a JSON array
+    // whose element has no leading/trailing whitespace inside the quotes.
+    const asStored = JSON.stringify(stored);
+    expect(asStored).toContain(`"${QUARANTINE_TAG_PREFIX}instruction"`);
+    expect(isHeld(stored)).toBe(true);
   });
 });
 
