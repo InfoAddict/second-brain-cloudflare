@@ -541,7 +541,7 @@ async function standingBriefItems(
   const { results } = await env.DB.prepare(
     `SELECT id, content, created_at FROM entries
       WHERE id IN (SELECT value FROM json_each(?)) AND ${scope.clause}
-        AND tags LIKE '%"standing:active"%' AND tags NOT LIKE '%"status:deprecated"%' AND tags NOT LIKE '%"quarantine:%'`,
+        AND tags LIKE '%"standing:active"%' AND tags NOT LIKE '%"status:deprecated"%' AND ${NOT_HELD_SQL}`,
   ).bind(JSON.stringify(ids), ...scope.bindings).all();
   return (results as { id: string; content: string; created_at: number }[])
     .sort((a, b) => a.created_at - b.created_at)

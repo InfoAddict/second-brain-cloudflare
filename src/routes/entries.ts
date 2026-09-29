@@ -526,7 +526,7 @@ export async function handleEntriesRoutes(
     }
     return json({
       ok: true, id: result.id, seq: result.seq, content: result.content, tags: result.tags,
-      status: result.status, at: result.at, reason: result.reason, channel: result.channel,
+      status: result.status, held: result.held, at: result.at, reason: result.reason, channel: result.channel,
       client: result.client, actor_name: result.actor_name,
     });
   }

@@ -9,6 +9,7 @@ import {
   canRevert, loadHistory, getVersionsSince, type VersionChain, type VersionReason,
 } from "./versions";
 import { readEntryTimeline } from "./history";
+import { isHeld } from "../quarantine/tags";
 
 /** BE-7/BE-11 (T-0101.1.1, T-0101.3.1): contract 4.1's unified history for one entry — the
  * dashboard's `GET /entry` and chat's `history` both read through this, so the two surfaces cannot
@@ -53,6 +54,8 @@ export interface HistoryChangeItem {
   actor_name: string;
   before_preview: string;
   before_status: string | null;
+  /** T-0102 MAJOR fix: this row's own pre-image tags were held. before_preview is "" whenever this is true. */
+  before_held: boolean;
   can_undo: boolean;
   can_restore: boolean;
   /** 6.5: set when meta.hold is (a `reason: "status"` version that quarantined the row, 5.4). */
@@ -151,6 +154,8 @@ export async function buildEntryHistoryFromReads(
     const until = cause
       ? (isNewest ? (row.valid_until ?? null) : (parseJsonObject(chain.rows[i - 1].state).valid_until as number | null ?? null))
       : null;
+    const beforeTags = parseTags(r.tags);
+    const beforeHeld = isHeld(beforeTags);
     return {
       kind: "change",
       seq: r.seq,
@@ -159,8 +164,9 @@ export async function buildEntryHistoryFromReads(
       channel: r.channel,
       client: typeof meta.client === "string" ? meta.client : null,
       actor_name: resolveActorLabel(r.actor_id, labelMap, { viewerId: identity.userId }),
-      before_preview: previewOf(chain.text(r.seq), PREVIEW_MAX_CHARS),
-      before_status: getStatus(parseTags(r.tags)),
+      before_preview: beforeHeld ? "" : previewOf(chain.text(r.seq), PREVIEW_MAX_CHARS),
+      before_status: getStatus(beforeTags),
+      before_held: beforeHeld,
       can_undo: isNewest && verdict.ok,
       can_restore: !isNewest && verdict.ok,
       hold: primaryReason ? { reason: primaryReason } : null,
@@ -226,6 +232,8 @@ export type EntryVersionResult =
       content: string;
       tags: string[];
       status: string | null;
+      /** T-0102 MAJOR fix: this version's own tags were held. content is "" whenever this is true. */
+      held: boolean;
       at: number;
       reason: VersionReason;
       channel: string;
@@ -267,13 +275,15 @@ export async function readEntryVersionFromRow(
   const labelMap = await lookupActorLabels(env, [target.actor_id]);
   const meta = parseJsonObject(target.meta);
   const tags = parseTags(target.tags);
+  const held = isHeld(tags);
   return {
     ok: true,
     id: row.id,
     seq: target.seq,
-    content: chain.text(target.seq),
+    content: held ? "" : chain.text(target.seq),
     tags,
     status: getStatus(tags),
+    held,
     at: target.created_at,
     reason: target.reason,
     channel: target.channel,

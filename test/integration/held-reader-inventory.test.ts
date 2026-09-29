@@ -79,10 +79,11 @@ describe("held text: the agent-facing reader inventory", () => {
     seedHeld("held-list");
     seedHeld("held-due", { whenAt: Date.now() + 1000 });
     seedHeld("held-seed");
-    // A row is held by ANY quarantine: tag, whatever the reason (isHeld, not
-    // a lookup against the known reason list): an unrecognized one must still
-    // hide its text everywhere, and still warn in get.
-    sqlite.seed({ id: "held-unknown", content: HELD_MARKER, createdAt: Date.now(), tags: ["quarantine:unknown", "status:draft"] });
+    // T-0102 MINOR fix: isHeld now matches only the app's five recognized hold reasons, not the
+    // whole quarantine: prefix -- a pre-4.0 user tag (`quarantine:review`, or any other value the
+    // hold mechanism never wrote) must NOT hold the row, or it could never be released (there is
+    // no hold version for undo to find). So an unrecognized reason reads as ordinary, unheld text.
+    sqlite.seed({ id: "not-held-unknown", content: "an ordinary note tagged quarantine:review before 4.0 existed", createdAt: Date.now(), tags: ["quarantine:review"] });
     sqlite.seed({ id: "readable-neighbor", content: "an ordinary note", createdAt: Date.now() });
     sqlite.db.prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'readable-neighbor'`)
       .bind(identity.personalWorkspaceId, identity.userId).run();
@@ -102,14 +103,16 @@ describe("held text: the agent-facing reader inventory", () => {
     const listed = await call("list_recent", { n: 10 });
     expect(listed, "list_recent").toContain("held-list");
     expect(listed, "list_recent").not.toContain(HELD_MARKER);
-    expect(listed, "list_recent (unknown reason)").toContain("held-unknown");
-    expect(listed, "list_recent (unknown reason)").not.toContain(HELD_MARKER);
+    // An unrecognized quarantine: value is not held (T-0102): its content shows normally.
+    expect(listed, "list_recent (unrecognized reason)").toContain("not-held-unknown");
+    expect(listed, "list_recent (unrecognized reason)").toContain("quarantine:review before 4.0 existed");
 
     // get: the agent asked for this id by name, so it is shown, warned first.
     const got = await call("get", { id: "held-list" });
     expect(got, "get").toMatch(/^Held out of recall:/);
-    const gotUnknown = await call("get", { id: "held-unknown" });
-    expect(gotUnknown, "get (unknown reason)").toMatch(/^Held out of recall:/);
+    const gotUnknown = await call("get", { id: "not-held-unknown" });
+    expect(gotUnknown, "get (unrecognized reason, not held)").not.toMatch(/^Held out of recall:/);
+    expect(gotUnknown, "get (unrecognized reason, not held)").toContain("quarantine:review before 4.0 existed");
 
     // brief (MCP, agent-facing)
     const brief = await call("brief");

@@ -1370,7 +1370,8 @@ export function buildMcpServer(
         }
         const date = new Date(result.at).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
         const via = result.client ?? channelNoun(result.channel);
-        const text = `[version ${result.seq} of ${result.id} · text before the change on ${date} · ${result.reason} by ${result.actor_name} via ${via}]\nID: ${result.id}\n${result.content}`;
+        const body = result.held ? "This version's text was held out of recall and was never reviewed. It is not shown here." : result.content;
+        const text = `[version ${result.seq} of ${result.id} · text before the change on ${date} · ${result.reason} by ${result.actor_name} via ${via}]\nID: ${result.id}\n${body}`;
         return { content: [{ type: "text", text }] };
       }
 

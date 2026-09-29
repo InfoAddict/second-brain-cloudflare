@@ -81,8 +81,8 @@ export interface RecallMatch {
   retractedSource: boolean;
   /**
    * As-of fields (spec 14 5.7), present only when `asOf` was set. A true-at-T result carries
-   * asOfTextChangedAt/statusAt/recordedAfterAsOf/asOfPruned/asOfTextHidden; a belief entry carries
-   * only retractedBelief.
+   * asOfTextChangedAt/statusAt/recordedAfterAsOf/asOfPruned/asOfTextHidden/asOfHeld; a belief
+   * entry carries only retractedBelief.
    */
   asOfTextChangedAt?: number | null;
   statusAt?: MemoryStatus | null;
@@ -91,6 +91,8 @@ export interface RecallMatch {
   asOfPruned?: boolean;
   /** D-SH cut the version chain before reaching a row at or before T (item 6). */
   asOfTextHidden?: boolean;
+  /** The text/tags this row had at T were held then (T-0102 MAJOR fix): `content` is "" here, whatever the row's current hold status. */
+  asOfHeld?: boolean;
   retractedBelief?: RetractedBelief | null;
 }
 
