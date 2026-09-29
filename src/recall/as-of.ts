@@ -67,6 +67,23 @@ function parseTagsSafe(raw: string): string[] {
   }
 }
 
+/** A `reason: "status"` version whose meta records a hold (5.4): the same structural check
+ * undo.ts's/history-view.ts's own `isHoldVersion` make (duplicated here rather than imported --
+ * lane ownership, and each caller's own Pick<> keeps this from depending on the others' imports). */
+function isHoldVersion(v: Pick<AsOfVersionRow, "reason" | "meta">): boolean {
+  if (v.reason !== "status") return false;
+  try { return !!(JSON.parse(v.meta || "{}") as Record<string, unknown>).hold; } catch { return false; }
+}
+
+/**
+ * Cross-vendor re-review MAJOR (T-0102, on top of 0b970baa): a hold-transition version's OWN tags
+ * are the pre-hold (unheld) state -- a hold never changes content, only tags -- so isHeld(tags)
+ * alone misses exactly the version whose reconstructed content IS the sensitive text.
+ */
+function textHeldAt(v: Pick<AsOfVersionRow, "reason" | "meta" | "tags">): boolean {
+  return isHeld(parseTagsSafe(v.tags)) || isHoldVersion(v);
+}
+
 export interface AtT { content: string; tags: string[]; changedAt: number | null; statusAt: MemoryStatus | null; pruned: boolean; textHidden: boolean; heldAtT: boolean }
 
 /**
@@ -97,9 +114,15 @@ export function resolveAtT(match: RecallMatch, rowsNewestFirst: AsOfVersionRow[]
   }
   const oldestRetired = retired[retired.length - 1];
   const tags = parseTagsSafe(oldestRetired.tags);
-  const heldAtT = isHeld(tags);
+  const historicalText = chain.text(oldestRetired.seq);
+  // Cloud re-review NIT (T-0102, on top of 0b970baa): a hold-transition version's text, released
+  // with no edit since, reconstructs to exactly the row's own CURRENT content -- match.content,
+  // already past the outer candidate SQL's NOT_HELD_SQL filter, so already visible, reviewed, and
+  // searchable today. Hiding it here adds no protection (an ordinary, non-as-of recall of the same
+  // row shows the same text plainly); it only confuses with a blank where the text is not a secret.
+  const heldAtT = textHeldAt(oldestRetired) && historicalText !== match.content;
   return {
-    content: heldAtT ? "" : chain.text(oldestRetired.seq),
+    content: heldAtT ? "" : historicalText,
     tags,
     changedAt: oldestRetired.created_at,
     statusAt: getStatus(tags),

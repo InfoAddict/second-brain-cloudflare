@@ -16,14 +16,17 @@ export interface VersionFixture {
   workspaceId?: string;
   reason?: string;
   actorId?: string;
+  /** e.g. `{ hold: { reasons: ["instruction"], score: 1, signals: [] } }` for a hold-transition version. */
+  meta?: Record<string, unknown>;
 }
 
 export function insertVersion(sqlite: SqliteD1, v: VersionFixture): void {
   sqlite.db.prepare(
     `INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, tags, state, actor_id, channel, reason, meta, valid_from, created_at)
-     VALUES (?, ?, ?, ?, NULL, ?, '{}', ?, 'rest', ?, '{}', NULL, ?)`,
+     VALUES (?, ?, ?, ?, NULL, ?, '{}', ?, 'rest', ?, ?, NULL, ?)`,
   ).bind(
-    v.entryId, v.workspaceId ?? "", v.seq, v.content, JSON.stringify(v.tags ?? []), v.actorId ?? "", v.reason ?? "update", v.createdAt,
+    v.entryId, v.workspaceId ?? "", v.seq, v.content, JSON.stringify(v.tags ?? []), v.actorId ?? "", v.reason ?? "update",
+    JSON.stringify(v.meta ?? {}), v.createdAt,
   ).run();
 }
 
