@@ -545,10 +545,13 @@ describe("recall cards carry validity chips and a stated-start label", () => {
     expect(card.innerHTML).toContain("True since");
   });
 
-  it("a retracted-source result shows the Check chip", () => {
+  it("a retracted-source result shows the Check chip and names what the check is about", () => {
     const ctx = load();
     const card = ctx.makeRecallCard(asRecallEntry(RETRACTED_SOURCE_ENTRY));
     expect(card.innerHTML).toContain("validity-chip--check");
+    // UI review round 3: the chip alone never says WHAT the check is about; the same
+    // sentence the sheet's caption uses reads the same way here.
+    expect(card.innerHTML).toContain("Based on a memory later marked Wrong");
   });
 });
 

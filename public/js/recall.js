@@ -328,10 +328,16 @@ ${entry.hop > 0 ? `<span class="tag-chip tag-chip--hop">${escHtml(tPlural('recal
       const stated = entry.valid_from_stated && entry.validity_state === 'current'
         ? `<span class="card-time">${escHtml(t('validity.trueSince', { from: formatDateUI(entry.valid_from, { year: 'numeric', month: 'short', day: 'numeric' }) }))}</span>`
         : ''
-      if (!entry.source && !at && !stated) return ''
+      // T-0101.6.1 (spec 14 7.7 item 6, UI review round 3): a retracted-source card carries
+      // the Check chip below (validityChipHtml), matching every other list surface, but that
+      // chip alone never says WHAT the check is about - the sheet's own retractedSource
+      // sentence does, so it reads the same way here.
+      const retracted = entry.retracted_source ? `<span class="card-time">${escHtml(t('validity.retractedSource'))}</span>` : ''
+      if (!entry.source && !at && !stated && !retracted) return ''
       return `<div class="card-meta">
         <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
         ${at ? `<span class="card-time" title="${escAttr(new Date(at).toLocaleString(localeTag()))}">${escHtml(relativeTime(at))}</span>` : ''}
+        ${retracted}
         ${stated}
       </div>`
     })()}
