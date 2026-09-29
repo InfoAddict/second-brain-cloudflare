@@ -890,11 +890,11 @@ export function buildMcpServer(
         if (r.status === "refused") return r.error;
         if (r.status === "no_change") return `Memory ${id} already has those dates; nothing changed.`;
         if (r.status === "conflict") return `Memory ${id} changed while saving, so nothing was written. Please try again.`;
-        return `No entry found with ID: ${id}`;
+        return `No memory found with ID: ${id}`;
       };
       if (content === undefined) {
         const target = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id");
-        if (!target) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+        if (!target) return { content: [{ type: "text", text: `No memory found with ID: ${id}` }] };
         const refused = assertCanEditContent(identity, target);
         if (refused) return { content: [{ type: "text", text: refused.message }] };
         return { content: [{ type: "text", text: await setValidity(target.workspace_id as string) }] };
