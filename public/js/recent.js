@@ -617,7 +617,7 @@ function makeRecentCard(entry, { selectable = true } = {}) {
     held || vec === 'on'
       ? ''
       : vec === 'pending'
-        ? `<span class="tag-chip vec-chip vec-chip--pending" title="${escAttr(t('memories.vecPendingTitle'))}"><i class="ti ti-clock"></i></span>`
+        ? `<span class="tag-chip vec-chip vec-chip--pending" role="img" aria-label="${escAttr(t('memories.vecPendingTitle'))}" title="${escAttr(t('memories.vecPendingTitle'))}"><i class="ti ti-clock"></i></span>`
         : `<span class="tag-chip vec-chip vec-chip--off" title="${escAttr(t('memories.vecOffTitle'))}">${escHtml(t('memories.vecNotIndexed'))}</span>`
   // Layer badge: shared memories are the team's — say so. Personal is the
   // quiet default and system rows (digests, insights) carry no badge. Built by

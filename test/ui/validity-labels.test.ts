@@ -339,6 +339,18 @@ describe("cards show Replaced, Ended and Check chips", () => {
     expect(card.innerHTML).toContain("validity-chip--check");
     expect(card.innerHTML).not.toContain(">retracted-source<");
   });
+
+  // UI review round 4: a card-chips screenshot showed a lone clock icon with no visible
+  // text (vec-chip--pending, a pre-existing not-yet-indexed indicator, unrelated to
+  // T-0101.6.1's own chips but flagged on the same shot) - it already had a title tooltip
+  // from an existing deck string, but no accessible name for a screen reader.
+  it("the pre-existing vectorize-pending chip has an accessible name, not just a title tooltip", () => {
+    const ctx = load();
+    // Pending is computed at render time from recency and an empty vector_ids - a card this
+    // fresh with nothing indexed yet, the same state a just-seeded entry is in.
+    const card = ctx.makeRecentCard(asCard({ ...CURRENT_STATED_ENTRY, vector_ids: undefined }));
+    expect(card.innerHTML).toMatch(/vec-chip--pending[^>]*aria-label="Getting it ready for search/);
+  });
 });
 
 describe("Wrong's toast names the restored memory, or counts several, and says how many were flagged", () => {
