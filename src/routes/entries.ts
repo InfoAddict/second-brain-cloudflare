@@ -224,10 +224,15 @@ export async function handleEntriesRoutes(
       return json({ ok: false, error: `No memory found with ID: ${id}` }, 404);
     }
 
-    auditEvent(env, ctx, {
-      entryId: id, actorId: auth.userId, event: "deleted",
-      payload: { deletedVectors: result.vectorCount, channel: "rest", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
-    });
+    // Round 4 re-review MINOR: the tier-3 case (not trashed) already has its own reliable
+    // life-end marker, written in forgetEntry's own batch (trashManyStatements) -- this
+    // fire-and-forget richer event would only duplicate it, so it is skipped for that case alone.
+    if (result.trashed) {
+      auditEvent(env, ctx, {
+        entryId: id, actorId: auth.userId, event: "deleted",
+        payload: { deletedVectors: result.vectorCount, channel: "rest", trash: result.trashed, reason: "forget", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
+      });
+    }
     return json({ ok: true, id, deletedVectors: result.vectorCount, trash: result.trashed, retention_days: cfg.TRASH_RETENTION_DAYS, validity: result.validity });
   }
 

@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (239 queries, 118 exceptions, 36 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (241 queries, 118 exceptions, 36 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1540,7 +1540,13 @@ describe("the checker over the real source tree", () => {
     // the same round ("reverse the fresh-id remap") keeps a reused id outright now, with no history
     // check to decide a remap -- but its own SELECT never read entries or entries_trash, so it was
     // never counted here either way (net 0 on this total).
-    ).toEqual({ queries: 239, exempt: 118, checked: 36, outerJoin: 1 });
+    // Deliberate: +2 queries, +0 net exceptions (239/118/36 -> 241/118/36) for the round 4
+    // re-review MINOR ("every hard-delete path writes a life-end marker inside the same batch"):
+    // team-admin.ts's offboarding batch gained two new INSERT...SELECT statements, one reading
+    // entries and one reading entries_trash, each scope-exempt by the same reasoning as the rest
+    // of that batch's own by-workspace statements. trash.ts's own new tier-3 marker statement
+    // reads only json_each(...), no corpus table, so it adds no query here at all.
+    ).toEqual({ queries: 241, exempt: 118, checked: 36, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

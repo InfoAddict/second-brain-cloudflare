@@ -260,6 +260,27 @@ export function trashManyStatements(
       `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(plan.tier3))}))
          AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id)${referencedEntryGuardSql(p, ["entry_versions.entry_id"])}`,
     ).bind(...p.values()));
+    // Round 4 re-review MINOR: a life-end marker, in the SAME batch as the entries DELETE below --
+    // every event reader relies on one of these existing for an id to ever be safely reused. The
+    // route layer's own richer "deleted" event (deletedVectors, client, edgesDropped) stays
+    // fire-and-forget and skips this exact case now (routes/entries.ts, mcp/server.ts) so there is
+    // one of these per tier-3 id, not two: this one is the reliable, minimal one finding 2's own
+    // event-life filter (event = 'deleted' AND payload.trash = false) actually depends on.
+    {
+      const tp = new Params();
+      const tierIds = tp.add(JSON.stringify(plan.tier3));
+      const tierNow = tp.add(meta.now);
+      const tierActor = tp.add(meta.change.actorId);
+      const tierChannel = tp.add(meta.change.channel);
+      const tierReason = tp.add(meta.reason);
+      stmts.push(env.DB.prepare(
+        // scope-exempt: by-id: one life-end marker per tier-3 id this batch's own entries DELETE removes
+        `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+           SELECT lower(hex(randomblob(16))), value, ${tierActor}, 'deleted',
+                  json_object('reason', ${tierReason}, 'trash', json('false'), 'channel', ${tierChannel}), ${tierNow}
+             FROM json_each(${tierIds})`,
+      ).bind(...tp.values()));
+    }
   }
   const ids = JSON.stringify(all);
   {
@@ -376,7 +397,10 @@ export async function trashMirroredEntries(
 
     const tier3 = new Set(plan.tier3);
     const tier2 = new Set(plan.tier2);
-    const events: AuditEventInput[] = done.map((r) => ({
+    // Round 4 re-review MINOR: a tier-3 row already has its own reliable life-end marker, written
+    // in trashManyStatements' own batch above -- this fire-and-forget richer event would only
+    // duplicate it, so it is skipped for that case alone (same as routes/entries.ts, mcp/server.ts).
+    const events: AuditEventInput[] = done.filter((r) => !tier3.has(r.id)).map((r) => ({
       entryId: r.id,
       actorId: auth.userId,
       event: "deleted",
@@ -385,7 +409,6 @@ export async function trashMirroredEntries(
         deletedVectors: (() => { try { return (JSON.parse(r.vector_ids ?? "[]") as string[]).length; } catch { return 0; } })(),
         trash: !tier3.has(r.id), channel: "rest",
         ...(tier2.has(r.id) ? { edgesDropped: true } : {}),
-        ...(tier3.has(r.id) ? { tooLargeForTrash: true } : {}),
       },
     }));
     await writeAuditEvents(env, events);
