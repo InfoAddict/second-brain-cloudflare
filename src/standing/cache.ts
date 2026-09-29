@@ -3,6 +3,7 @@ import type { Config } from "../config";
 import type { Env } from "../env";
 import { encodeVector, parseStandingCache, type StandingCacheItem, type StandingCacheV1 } from "./codec";
 import { currentValidityAt } from "../memory/validity";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 
 /** The config keys this module needs. Passed explicitly (Task 3: "no config.ts edit is needed yet"); STANDING_MAX and EMBEDDING_DIM are Task 6 additions to DEFAULTS, EMBEDDING_MODEL already exists there today. */
 export type StandingCacheConfig = { STANDING_MAX: number; EMBEDDING_DIM: number } & Pick<Config, "EMBEDDING_MODEL">;
@@ -72,7 +73,7 @@ async function buildStandingCacheNow(
         AND instr(lower(tags), '"standing:active"') > 0
         AND tags NOT LIKE '%"status:deprecated"%'
         AND tags NOT LIKE '%"conflict-held"%'
-        AND tags NOT LIKE '%"quarantine:%'
+        AND ${NOT_HELD_SQL}
         AND ${currentValidityAt("", "?3")}
       ORDER BY created_at ASC, id ASC
       LIMIT ?2`,

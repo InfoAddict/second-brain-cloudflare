@@ -16,6 +16,7 @@ import { readScopeWorkspaces } from "../lib/scope";
 import { resolveConfig, type Config } from "../config";
 import { scoreWrite } from "../quarantine/score";
 import { INTEGRATION_PROVIDERS } from "../integrations";
+import { isHeld } from "../quarantine/tags";
 
 /** Matches src/brief/compute.ts's RECENT_WINDOW_MS window. */
 export const BRIEF_CHANGES_WINDOW_HOURS = 48;
@@ -42,6 +43,8 @@ export interface ChangeItem {
   at: number;
   client: string | null;
   preview: string | null;
+  /** T-0102 MAJOR fix: the row's current held status, independent of `family`/`event` -- see Classified.heldNow. */
+  heldNow: boolean;
   reasons?: string[];
   source?: string | null;
   status?: string;
@@ -86,8 +89,10 @@ interface RawRow {
   created_at: number;
   actor_id: string;
   author_id: string | null;
+  entry_workspace_id: string | null;
   source: string | null;
   preview: string | null;
+  tags_json: string | null;
 }
 
 /**
@@ -119,6 +124,18 @@ function parsePayload(raw: string): Record<string, unknown> {
   }
 }
 
+/** The row's current tags: `entries.tags` (live) or `entries_trash.row_json.$.tags` (trashed),
+ * COALESCEd in SQL into one `tags_json` column -- null when the row is neither (purged). */
+function parseTagsJson(tagsJson: string | null): string[] {
+  if (!tagsJson) return [];
+  try {
+    const parsed = JSON.parse(tagsJson);
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 interface Classified {
   id: string;
   event: string;
@@ -127,6 +144,15 @@ interface Classified {
   client: string | null;
   createdAt: number;
   preview: string | null;
+  /** T-0102 MAJOR fix: the row's CURRENT held status (its live entries.tags, or its
+   * entries_trash row_json tags once trashed) -- not the "held" event family, which only fires
+   * for the moment a row was quarantined and says nothing about a later change to an already
+   * (or still) held row. Preview masking keys off this, not off family. */
+  heldNow: boolean;
+  /** T-0102 MINOR fix (finding 7c): whether THIS reader can actually undo/release this row --
+   * admin, their own personal-workspace row, or the row's own author -- not "yes" for every row
+   * the "held" family's workspace-wide visibility (below) merely let them see. */
+  canAct: boolean;
   reasons?: string[];
   source?: string | null;
   status?: string;
@@ -136,12 +162,18 @@ interface Classified {
 const STATUS_VALUES = new Set(["canonical", "draft", "deprecated"]);
 
 /** One row's classification, or null when it does not qualify for the line at all (5.8's "not listed"). */
-function classify(row: RawRow, cfg: Readonly<Config>): Classified | null {
+function classify(row: RawRow, identity: Identity, cfg: Readonly<Config>): Classified | null {
   const payload = parsePayload(row.payload);
   const client = safeClient(payload.client, cfg);
+  // Mirrors trash-list.ts's trashRestoreClauseFor / Q10: admin, their own personal workspace, or
+  // the row's own author -- "held" being visible workspace-wide (the outer actor/author OR below)
+  // is about being TOLD something was held, never a grant to act on someone else's memory.
+  const canAct = identity.role === "admin"
+    || row.entry_workspace_id === identity.personalWorkspaceId
+    || row.author_id === identity.userId;
   const base = {
     id: row.entry_id, event: row.event, actorId: row.actor_id, client,
-    createdAt: row.created_at, preview: row.preview,
+    createdAt: row.created_at, preview: row.preview, heldNow: isHeld(parseTagsJson(row.tags_json)), canAct,
   };
 
   switch (row.event) {
@@ -217,7 +249,11 @@ function group(rows: Classified[], cfg: Readonly<Config>): ChangeRow[] {
         until,
         client: run[0].client,
         group: groupKey(family, run[0].actorId, run[0].client, at, until),
-        ...(family === "held" ? { canReleaseAll: true } : { canUndoAll: true }),
+        // T-0102 MINOR fix (finding 7c): "all" only if the reader can actually act on every
+        // member, not "yes" for every group merely because it exists -- groupCandidates
+        // re-derives the exact id list at execution time, but offering the button at all must
+        // not promise something the reader cannot really do to any (or even most) of the group.
+        ...(run.every(x => x.canAct) ? (family === "held" ? { canReleaseAll: true } : { canUndoAll: true }) : {}),
       });
     } else {
       for (const r of run) {
@@ -229,11 +265,14 @@ function group(rows: Classified[], cfg: Readonly<Config>): ChangeRow[] {
           at: r.createdAt,
           client: r.client,
           preview: r.preview,
+          heldNow: r.heldNow,
           ...(r.reasons ? { reasons: r.reasons } : {}),
           ...(r.source !== undefined ? { source: r.source } : {}),
           ...(r.status ? { status: r.status } : {}),
           ...(r.capsuleChanged ? { capsuleChanged: true } : {}),
-          ...(r.family === "held" ? { canRelease: true } : { canUndo: true }),
+          // T-0102 MINOR fix (finding 7c): real permission, not "yes" for every row the "held"
+          // family's workspace-wide visibility merely let this reader see.
+          ...(r.canAct ? (r.family === "held" ? { canRelease: true } : { canUndo: true }) : {}),
         });
       }
     }
@@ -246,8 +285,16 @@ function group(rows: Classified[], cfg: Readonly<Config>): ChangeRow[] {
  * join is scoped to this reader — a corpus-wide burst in the window used to cost a corpus-wide
  * scan before LIMIT 200 could apply (R21 review, MINOR: 5,101 rows read to return one item
  * against 5,000 unrelated events). Caps the pre-join, pre-filter read so the worst case is
- * bounded by this constant regardless of deployment size, not by how many OTHER people's events
- * landed in the window. */
+ * bounded by this constant regardless of deployment size.
+ *
+ * R22 (budget auditor MAJOR): a WORKSPACE filter cannot run before this cap without a join (that
+ * was R22's own bug — see changeEventRows' comment), but entry_events DOES carry its own actor_id
+ * natively, no join required, and every non-"held" row this reader can ever see is one where
+ * actor_id already equals them (author_id-visible rows need the join too, and stay subject to
+ * this cap the same as before — see changeEventRows). So the raw scan is pre-filtered by
+ * `actor_id = reader OR event = 'held'` before the cap applies: a teammate's ordinary burst,
+ * under a different actor_id, can no longer fill the cap's slots and crowd out this reader's own
+ * changes or a workspace-wide held notice (cloud re-review MINOR, on top of 0b970baa). */
 const RAW_EVENT_SCAN_LIMIT = 1000;
 
 /**
@@ -262,37 +309,98 @@ async function changeEventRows(
   layer?: "personal" | "company", teamId?: string,
 ): Promise<{ rows: RawRow[]; rawCapped: boolean }> {
   const workspaces = readScopeWorkspaces(identity, { layer, teamId });
-  const eventFilter = `created_at > ?1 AND created_at <= ?2
+  const workspacesJson = JSON.stringify(workspaces);
+  const baseFilter = `created_at > ?1 AND created_at <= ?2
        AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')`;
+  // R22 (budget auditor MAJOR, on top of T-0102 finding 7): the workspace scope is checked per
+  // event row via a JOIN, not by matching entry_id against a subquery over the reader's WHOLE id
+  // list -- the earlier `entry_id IN (SELECT id FROM entries WHERE workspace_id IN (...) UNION
+  // ALL ...)` re-read every one of the reader's own entries/trash rows to build that list (twice
+  // per brief: once for the count probe, once for the main query), so cost grew with the size of
+  // the brain, not with RAW_EVENT_SCAN_LIMIT -- 20,158 rows at 10k memories with only 50 events in
+  // the window. RAW_EVENT_SCAN_LIMIT now caps the RAW scan of entry_events itself (it carries no
+  // workspace column to scope against directly), and the entries/entries_trash join that resolves
+  // each of those rows' workspace runs strictly after, one PRIMARY KEY lookup per row -- cost is
+  // bounded by the cap and by key lookups, never by brain size.
+  //
+  // Cloud re-review MINOR (on top of 0b970baa): a single unscoped cap can still be entirely filled
+  // by a teammate's own ordinary burst (a different actor_id, no hold involved), crowding this
+  // reader's own older changes and held notices out of the window before the join/visibility
+  // filter ever sees them. Two more branches, each backed by its own index (idx_entry_events_actor,
+  // idx_entry_events_held, db/init.ts) so each is a genuine index range scan -- NOT a full-table
+  // scan filtered in date order, which would cost the same as no reservation at all once the
+  // reader's own matches are sparse against the noise -- run alongside the original (unrestricted)
+  // one and are UNIONed in. Those two categories can now never be crowded out by noise, at two
+  // more flat, bounded scans: still O(RAW_EVENT_SCAN_LIMIT) each, not O(brain size) or O(noise).
+  // The OTHER outer-visible category (author_id = reader: someone else's tool touched MY memory)
+  // has no cheap pre-join handle -- author_id only exists on entries/entries_trash -- so it still
+  // rides the unrestricted branch and remains subject to the ORIGINAL crowd-out risk this file has
+  // always documented; only that narrower residual remains.
+  const rawBranch = (indexedBy: string, extraFilter: string) => `
+           SELECT * FROM (
+             SELECT id, entry_id, event, payload, created_at, actor_id
+               FROM entry_events INDEXED BY ${indexedBy}
+              WHERE ${baseFilter}${extraFilter}
+              ORDER BY created_at ${order}
+              LIMIT ${RAW_EVENT_SCAN_LIMIT}
+           )`;
+  // scope-checked: entry_workspace_id, COALESCEd by the join below, is filtered against the
+  // reader's scope in the outer query's WHERE (json_each(?3)) -- deliberately not here, so each
+  // inner branch's LIMIT bounds RAW rows examined, not rows matching that filter.
+  const scopedEvents = `
+         SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+                COALESCE(en.actor_id, t.actor_id) AS author_id,
+                COALESCE(en.workspace_id, t.workspace_id) AS entry_workspace_id,
+                COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
+                substr(COALESCE(en.content, t.content), 1, 160) AS preview,
+                COALESCE(en.tags, json_extract(t.row_json, '$.tags')) AS tags_json,
+                en.id AS live_id
+         FROM (
+           ${rawBranch("idx_entry_events_actor", " AND actor_id = ?4")}
+           UNION
+           ${rawBranch("idx_entry_events_held", " AND event = 'held'")}
+           UNION
+           ${rawBranch("idx_entry_events_created", "")}
+         ) e
+         LEFT JOIN entries en ON en.id = e.entry_id
+         LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id`;
+  // Q10 (T-0102 finding 7): a "held" event is otherwise visible workspace-wide (below), but a
+  // teammate's TRASHED row must still only surface to whoever could restore it -- the same rule
+  // trash-list.ts's trashRestoreClauseFor applies, collapsed into one cross-workspace OR since
+  // this query (unlike listTrash) is not decomposed per workspace: admin sees everything, anyone
+  // else only their own personal trash or a company row they personally deleted.
+  const isAdmin = identity.role === "admin";
+  // Trash-only columns are coalesced away by the join above, but when live_id IS NULL the row
+  // came from entries_trash, so entry_workspace_id/author_id ARE that trash row's own columns.
+  const trashVisible = isAdmin ? "1=1" : "(e.entry_workspace_id = ?5 OR e.author_id = ?6)";
+  const trashBindings = isAdmin ? [] : [identity.personalWorkspaceId, identity.userId];
   const [countResult, mainResult] = await env.DB.batch([
     // A cheap, bounded probe: capped at RAW_EVENT_SCAN_LIMIT + 1 so it can say "at least that
-    // many raw events exist in the window" without ever reading more than that to say so.
+    // many raw events exist in the window" without ever reading more than that to say so. No join,
+    // no workspace scope: it returns a bare count, no row content, so nothing here needs scoping
+    // (scope.ts's rule is about rows reaching the response). Deliberately the unrestricted branch's
+    // own filter (not the actor/held-reserved one): this only informs `rawCapped`/`truncated`, and
+    // the unrestricted branch is the one that can still be capped by volume.
+    // scope-exempt: count-only, no entry_id/content/tags leaves this statement.
     env.DB.prepare(
       `SELECT COUNT(*) as raw_count FROM (
          SELECT 1 FROM entry_events INDEXED BY idx_entry_events_created
-         WHERE ${eventFilter} LIMIT ${RAW_EVENT_SCAN_LIMIT + 1}
+         WHERE ${baseFilter} LIMIT ${RAW_EVENT_SCAN_LIMIT + 1}
        )`,
     ).bind(since, until),
+    // scope-checked: inScope's COALESCE(...) IN (json_each(?3)) below, filtering the already-capped
+    // and already-joined rows from scopedEvents above.
     env.DB.prepare(
-      // scope-checked: the reader's scope clause is applied to COALESCE(en.workspace_id, t.workspace_id); entry_events has no workspace column
       `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
-              COALESCE(en.actor_id, t.actor_id) AS author_id,
-              COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
-              substr(COALESCE(en.content, t.content), 1, 160) AS preview
-       FROM (
-         SELECT id, entry_id, event, payload, created_at, actor_id FROM entry_events INDEXED BY idx_entry_events_created
-         WHERE ${eventFilter}
-         ORDER BY created_at ${order}
-         LIMIT ${RAW_EVENT_SCAN_LIMIT}
-       ) e
-       LEFT JOIN entries en ON en.id = e.entry_id
-       LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id
-       WHERE (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
-         AND COALESCE(en.workspace_id, t.workspace_id) IN (SELECT value FROM json_each(?3))
-         AND (e.actor_id = ?4 OR COALESCE(en.actor_id, t.actor_id) = ?4 OR e.event = 'held')
+              e.author_id, e.entry_workspace_id, e.source, e.preview, e.tags_json
+       FROM (${scopedEvents}) e
+       WHERE e.entry_workspace_id IN (SELECT value FROM json_each(?3))
+         AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
+         AND (e.actor_id = ?4 OR e.author_id = ?4 OR e.event = 'held')
+         AND (e.live_id IS NOT NULL OR ${trashVisible})
        ORDER BY e.created_at ${order}
        LIMIT 200`,
-    ).bind(since, until, JSON.stringify(workspaces), identity.userId),
+    ).bind(since, until, workspacesJson, identity.userId, ...trashBindings),
   ]);
   const rawCount = ((countResult.results as { raw_count: number }[] | undefined)?.[0]?.raw_count) ?? 0;
   return { rows: (mainResult.results ?? []) as unknown as RawRow[], rawCapped: rawCount > RAW_EVENT_SCAN_LIMIT };
@@ -315,7 +423,7 @@ export async function getChanges(
   const since = now - windowHours * 60 * 60 * 1000;
   const { rows: results, rawCapped } = await changeEventRows(env, identity, since, now, "DESC", layer, teamId);
 
-  const classified = results.map(row => classify(row, cfg)).filter((c): c is Classified => c !== null);
+  const classified = results.map(row => classify(row, identity, cfg)).filter((c): c is Classified => c !== null);
   const held = classified.filter(c => c.family === "held").length;
 
   return {
@@ -372,7 +480,7 @@ export async function groupCandidates(
   const decoded = decodeGroupKey(groupKeyStr);
   if (!decoded) return null;
   const { rows } = await changeEventRows(env, identity, decoded.start - 1, decoded.end, "ASC");
-  const classified = rows.map(row => classify(row, cfg)).filter((c): c is Classified => c !== null);
+  const classified = rows.map(row => classify(row, identity, cfg)).filter((c): c is Classified => c !== null);
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const c of classified) {
@@ -412,7 +520,10 @@ export function changesToRestJson(result: ChangesResult, revealHeld = false): Re
         }
       : {
           kind: "item", event: row.event, family: row.family, id: row.id, at: row.at, client: row.client,
-          preview: row.family === "held" && !revealHeld ? null : row.preview,
+          // T-0102 MAJOR fix: masks on the row's CURRENT held status (heldNow), not on whether
+          // THIS event's own family happens to be "held" -- a row can be held today via an
+          // unrelated event (released-then-reheld, a status change on an already-held row, etc.).
+          preview: row.heldNow && !revealHeld ? null : row.preview,
           ...(row.reasons ? { reasons: row.reasons } : {}), ...(row.source !== undefined ? { source: row.source } : {}),
           ...(row.status ? { status: row.status } : {}), ...(row.capsuleChanged ? { capsule_changed: true } : {}),
           ...(row.canUndo ? { can_undo: true } : {}), ...(row.canRelease ? { can_release: true } : {}),

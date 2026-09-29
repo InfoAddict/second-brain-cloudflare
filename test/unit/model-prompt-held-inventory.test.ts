@@ -24,27 +24,37 @@ function* walk(dir: string): Generator<string> {
 
 interface Site { file: string; line: number }
 
+/**
+ * Cloud re-review MINOR, round 2: tracing which BINDING a `.run(` call resolves to -- `env.AI`,
+ * `const { AI } = env`, an `ai`/`AI` parameter threaded in from a caller several functions away,
+ * an alias 6+ lines up -- is data-flow analysis, not something a line-window regex can do
+ * reliably; every attempt to widen the window or the alias pattern just moves the blind spot
+ * somewhere else (LOOKBACK started at 2, moved to 5, and a parameter passed in from another
+ * function is invisible at ANY finite lookback, since the binding never appears in this file's
+ * text at all). Ban the unguarded pattern outright instead: ANY `.run(` call passed a `messages:`
+ * or `contexts:` argument is a genuine chat-completion call, whatever binding it was reached
+ * through. `messages:`/`contexts:` as object-literal keys are themselves distinctive enough to
+ * this codebase's own AI call shape (see the reranker's `contexts:`) that this is not expected to
+ * sweep in unrelated `.run(` calls (D1 statements, workflow runs) -- the real scan below proves
+ * that empirically, and over-matching earns another pinned exemption, not a silent miss, the same
+ * philosophy every other structural guard in this codebase already uses (PROJECTS_CONTENT, for one).
+ */
+export function isChatCallSite(lines: string[], i: number): boolean {
+  if (!/\.run\(/.test(lines[i])) return false;
+  const window = lines.slice(i, i + 6).join("\n");
+  return /messages\s*:|contexts\s*:/.test(window);
+}
+
 /** Every genuine chat-completion call: `.run(` on an AI binding, passed a `messages:` prompt.
  * Excludes embed calls (embedMany/embed in src/lib/ai.ts), which carry no free-text prompt. */
 function scanChatCalls(): Site[] {
   const sites: Site[] = [];
-  const CALL = /\benv\.AI\b[\s\S]*?\.run\(/;
   for (const path of walk(join(ROOT, "src"))) {
     const file = relative(ROOT, path);
     if (file === "lib/ai.ts") continue; // embed/embedMany only -- no chat prompt
-    const text = readFileSync(path, "utf8");
-    const lines = text.split("\n");
+    const lines = readFileSync(path, "utf8").split("\n");
     for (let i = 0; i < lines.length; i++) {
-      if (!/\.run\(/.test(lines[i])) continue;
-      // The AI binding can be cast/typed on the line(s) just above a `.run(` that starts a new
-      // line after the cast closes (model-reranker.ts's shape), not always on the call's own line.
-      const nearby = lines.slice(Math.max(0, i - 2), i + 1).join("\n");
-      if (!/\bAI\b/.test(nearby) || !CALL.test(nearby)) continue;
-      // A genuine prompt-bearing call passes messages: (chat) or contexts: (the reranker) within
-      // a few lines of the call itself.
-      const window = lines.slice(i, i + 6).join("\n");
-      if (!/messages\s*:|contexts\s*:/.test(window)) continue;
-      sites.push({ file, line: i + 1 });
+      if (isChatCallSite(lines, i)) sites.push({ file, line: i + 1 });
     }
   }
   return sites.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -69,11 +79,11 @@ const ACCOUNTED_FOR: { file: string; line: number; why: string }[] = [
   },
   {
     file: "src/insight/reason.ts", line: 372,
-    why: "reasonOverPair(a, b, ...) takes two rows its callers already read. src/insight/weekly.ts's draw query and routes/admin.ts's /insights/dry-run preview both now filter a.tags/b.tags NOT LIKE '%\"quarantine:%' alongside the status:deprecated/valid_until re-checks they already did for the same reason: a candidate accrued clean can be held by the time it is drawn, days later.",
+    why: "reasonOverPair(a, b, ...) takes two rows its callers already read. src/insight/weekly.ts's draw query and routes/admin.ts's /insights/dry-run preview both now filter a/b through notHeldSql (T-0102 MINOR fix: one NOT LIKE clause per recognized hold reason, alias-qualified) alongside the status:deprecated/valid_until re-checks they already did for the same reason: a candidate accrued clean can be held by the time it is drawn, days later.",
   },
   {
     file: "src/recall/insight.ts", line: 34,
-    why: "synthesizeInsight's only caller (search.ts) builds its matches from rcRows, which notHeld() (search.ts) filters before rerank, plus an explicit isHeld re-check on the evidence-slot fallback.",
+    why: "synthesizeInsight's only caller (search.ts) builds its matches from rcRows, which notHeld() (search.ts) filters before rerank, plus an explicit isHeld re-check on the evidence-slot fallback. An as-of call rewrites matches' content from entry_versions afterward (enrichWithAsOf); resolveAtT (as-of.ts, T-0102 MAJOR fix) redacts that rewritten content to \"\" whenever the resolved historical tags were held, so a version that WAS held at T can never reach this prompt even though the row is unheld and releasable today.",
   },
   {
     file: "src/recall/model-reranker.ts", line: 175,
@@ -100,5 +110,51 @@ describe("every chat-completion call site's row source excludes held rows, or is
     const actual = sites.map(s => `${s.file}:${s.line}`).sort();
     const expected = ACCOUNTED_FOR.map(s => `${s.file}:${s.line}`).sort();
     expect(actual).toEqual(expected);
+  });
+});
+
+// Cloud re-review MINOR, round 1: an AI binding aliased 3 lines above its own `.run(` call sat
+// outside the old 2-line lookback window. Round 2: the lookback itself was the wrong tool --
+// destructuring, and a binding passed in as a parameter from another function entirely, both
+// defeat ANY finite lookback. isChatCallSite no longer looks for a binding at all; each probe
+// below is a shape a lookback-based scanner could never have caught, asserted directly against
+// isChatCallSite(), no fixture file needed.
+describe("structural probes the reviewer found unguarded (banned pattern, no binding tracing)", () => {
+  it("finds a chat call whose AI binding is aliased 3 lines above it", () => {
+    const lines = [
+      "const ai = env.AI;",
+      "const rows = candidateRows;",
+      "const prompt = buildPrompt(rows);",
+      "const result = await ai.run(MODEL, { messages: [{ role: \"user\", content: prompt }] });",
+    ];
+    expect(isChatCallSite(lines, 3)).toBe(true);
+  });
+
+  it("finds a chat call through a destructured AI binding", () => {
+    const lines = [
+      "const { AI } = env;",
+      "const result = await AI.run(MODEL, { messages: [{ role: \"user\", content: prompt }] });",
+    ];
+    expect(isChatCallSite(lines, 1)).toBe(true);
+  });
+
+  it("finds a chat call whose AI binding was passed in as a parameter, never named env.AI at all", () => {
+    // The binding this file's own scan can never trace: `ai` arrives as this function's own
+    // parameter, from a caller in a completely different file.
+    const lines = [
+      "async function callModel(ai: Ai, prompt: string) {",
+      "  return ai.run(MODEL, { messages: [{ role: \"user\", content: prompt }] });",
+      "}",
+    ];
+    expect(isChatCallSite(lines, 1)).toBe(true);
+  });
+
+  it("finds a chat call whose alias sits 6 or more lines above it", () => {
+    const lines = [
+      "const ai = env.AI;",
+      "// unrelated", "// unrelated", "// unrelated", "// unrelated", "// unrelated",
+      "const result = await ai.run(MODEL, { messages: [{ role: \"user\", content: prompt }] });",
+    ];
+    expect(isChatCallSite(lines, 6)).toBe(true);
   });
 });

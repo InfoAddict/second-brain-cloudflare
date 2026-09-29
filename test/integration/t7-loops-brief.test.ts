@@ -115,6 +115,15 @@ describe("dashboard brief aggregate and preview", () => {
     expect(brief.loops.items.find((i: any) => i.id === "out1")?.direction).toBe("out");
   });
 
+  // Cross-vendor review MAJOR (T-0102), finding 6(b): the loop preview had no held guard at all
+  // (unlike GET /loops itself, and every other query in this file).
+  it("excludes a held row from the loops preview", async () => {
+    seedTask("out1", ["task"]);
+    seedTask("held1", ["task", "quarantine:instruction", "status:draft"]);
+    const brief = await computeBrief(env, owner, true);
+    expect(brief.loops.items.map((i: any) => i.id)).toEqual(["out1"]);
+  });
+
   it("runs the calibration query only once decisions_resolved reaches CALIBRATION_MIN_N (10)", async () => {
     for (let i = 0; i < 9; i++) {
       sqlite.db.prepare(

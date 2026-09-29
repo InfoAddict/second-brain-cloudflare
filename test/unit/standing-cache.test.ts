@@ -84,7 +84,7 @@ describe("buildStandingCache", () => {
     insertEntry(sqlite, { id: "keep", tags: ["standing:active"], createdAt: 1 });
     insertEntry(sqlite, { id: "deprecated", tags: ["standing:active", "status:deprecated"], createdAt: 2 });
     insertEntry(sqlite, { id: "held", tags: ["standing:active", "conflict-held"], createdAt: 3 });
-    insertEntry(sqlite, { id: "quarantined", tags: ["standing:active", "quarantine:hidden-instruction"], createdAt: 4 });
+    insertEntry(sqlite, { id: "quarantined", tags: ["standing:active", "quarantine:instruction"], createdAt: 4 });
     const { vectorize } = makeStandingVectorize({ keep: [1, 1], deprecated: [1, 1], held: [1, 1], quarantined: [1, 1] });
     const { kv } = makeStandingKV();
     const cache = await buildStandingCache(envFor(sqlite, vectorize, kv), cfg, "ws-a");
@@ -287,7 +287,7 @@ describe("buildStandingCache", () => {
           AND instr(lower(tags), '"standing:active"') > 0
           AND tags NOT LIKE '%"status:deprecated"%'
           AND tags NOT LIKE '%"conflict-held"%'
-          AND tags NOT LIKE '%"quarantine:%'
+          AND tags NOT LIKE '%"quarantine:instruction"%' AND tags NOT LIKE '%"quarantine:hidden"%' AND tags NOT LIKE '%"quarantine:burst"%' AND tags NOT LIKE '%"quarantine:capsule"%' AND tags NOT LIKE '%"quarantine:too_long"%'
         ORDER BY created_at ASC, id ASC
         LIMIT ?2`,
     ).bind("ws-a", 50).all()).results as { detail: string }[];

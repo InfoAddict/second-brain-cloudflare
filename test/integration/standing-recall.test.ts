@@ -128,7 +128,7 @@ describe("standing fires in recall", () => {
   it.each([
     ["stopped (tag removed)", { tags: ["work"] }],
     ["deprecated", { tags: ["standing:active", "status:deprecated"] }],
-    ["held", { tags: ["standing:active", "quarantine:signal"] }],
+    ["held", { tags: ["standing:active", "quarantine:instruction"] }],
   ])("a %s row never fires even with a stale cache saying it should", async (_label, rowOverrides) => {
     const { ai } = aiFor();
     const { env, ctx, sqlite, kv } = await setup({ ai });
@@ -260,7 +260,7 @@ describe("GET /standing", () => {
   });
 
   it("reports a held row as held, never firing", async () => {
-    insertEntry(sqlite, { id: "held", workspaceId: "", tags: ["standing:active", "quarantine:signal"] });
+    insertEntry(sqlite, { id: "held", workspaceId: "", tags: ["standing:active", "quarantine:instruction"] });
     await seedStandingCache(env.OAUTH_KV, "", [{ id: "held", vec: ON_TOPIC }]);
 
     const res = await call("GET", "/standing");

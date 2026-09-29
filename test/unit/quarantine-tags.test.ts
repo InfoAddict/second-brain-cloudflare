@@ -69,18 +69,19 @@ describe("public/utils.js hides both prefixes", () => {
   });
 });
 
-describe("NOT_HELD_SQL contains no LIKE wildcard other than the outer %", () => {
-  it("matches the exact literal", () => {
-    expect(NOT_HELD_SQL).toBe(`tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%'`);
+describe("NOT_HELD_SQL: one NOT LIKE clause per recognized hold reason (T-0102 MINOR fix), no other LIKE wildcard", () => {
+  const REASONS = ["instruction", "hidden", "burst", "capsule", "too_long"];
+
+  it("matches the exact literal: five ANDed clauses, one per recognized reason, in order", () => {
+    expect(NOT_HELD_SQL).toBe(REASONS.map(r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r}"%'`).join(" AND "));
   });
 
-  it("carries no underscore or bound placeholder", () => {
-    expect(NOT_HELD_SQL).not.toContain("_");
+  it("carries no bound placeholder (the underscore in too_long is a literal reason value, not a LIKE wildcard)", () => {
     expect(NOT_HELD_SQL).not.toContain("?");
   });
 
-  it("carries exactly two percent signs, the leading and trailing wildcards", () => {
-    expect(NOT_HELD_SQL.match(/%/g)?.length).toBe(2);
+  it("carries exactly two percent signs per clause, the leading and trailing wildcards", () => {
+    expect(NOT_HELD_SQL.match(/%/g)?.length).toBe(REASONS.length * 2);
   });
 });
 

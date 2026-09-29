@@ -6,7 +6,8 @@ import type { Config } from "../config";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { getStatus } from "./status";
 import {
-  canRevert, loadHistory, getVersionsSince, type VersionChain, type VersionReason,
+  canRevert, loadHistory, getVersionsSince, textHeldAt, wasReleasedContent,
+  type VersionChain, type VersionReason, type VersionRow,
 } from "./versions";
 import { readEntryTimeline } from "./history";
 
@@ -53,6 +54,8 @@ export interface HistoryChangeItem {
   actor_name: string;
   before_preview: string;
   before_status: string | null;
+  /** T-0102 MAJOR fix: this row's own pre-image tags were held. before_preview is "" whenever this is true. */
+  before_held: boolean;
   can_undo: boolean;
   can_restore: boolean;
   /** 6.5: set when meta.hold is (a `reason: "status"` version that quarantined the row, 5.4). */
@@ -151,6 +154,11 @@ export async function buildEntryHistoryFromReads(
     const until = cause
       ? (isNewest ? (row.valid_until ?? null) : (parseJsonObject(chain.rows[i - 1].state).valid_until as number | null ?? null))
       : null;
+    const beforeTags = parseTags(r.tags);
+    // Cloud re-review MAJOR (T-0102, on top of 0b970baa): text a LATER release (5.6) vouched for
+    // reads as approved here too, even if the row was edited again since -- the same
+    // wasReleasedContent rule as-of.ts's resolveAtT and readEntryVersionFromRow below now share.
+    const beforeHeld = textHeldAt(r) && !wasReleasedContent(chain, chain.text(r.seq));
     return {
       kind: "change",
       seq: r.seq,
@@ -159,8 +167,9 @@ export async function buildEntryHistoryFromReads(
       channel: r.channel,
       client: typeof meta.client === "string" ? meta.client : null,
       actor_name: resolveActorLabel(r.actor_id, labelMap, { viewerId: identity.userId }),
-      before_preview: previewOf(chain.text(r.seq), PREVIEW_MAX_CHARS),
-      before_status: getStatus(parseTags(r.tags)),
+      before_preview: beforeHeld ? "" : previewOf(chain.text(r.seq), PREVIEW_MAX_CHARS),
+      before_status: getStatus(beforeTags),
+      before_held: beforeHeld,
       can_undo: isNewest && verdict.ok,
       can_restore: !isNewest && verdict.ok,
       hold: primaryReason ? { reason: primaryReason } : null,
@@ -226,6 +235,8 @@ export type EntryVersionResult =
       content: string;
       tags: string[];
       status: string | null;
+      /** T-0102 MAJOR fix: this version's own tags were held. content is "" whenever this is true. */
+      held: boolean;
       at: number;
       reason: VersionReason;
       channel: string;
@@ -267,13 +278,17 @@ export async function readEntryVersionFromRow(
   const labelMap = await lookupActorLabels(env, [target.actor_id]);
   const meta = parseJsonObject(target.meta);
   const tags = parseTags(target.tags);
+  // Cloud re-review MAJOR (T-0102, on top of 0b970baa): the same wasReleasedContent rule
+  // buildEntryHistoryFromReads and as-of.ts's resolveAtT use.
+  const held = textHeldAt(target) && !wasReleasedContent(chain, chain.text(target.seq));
   return {
     ok: true,
     id: row.id,
     seq: target.seq,
-    content: chain.text(target.seq),
+    content: held ? "" : chain.text(target.seq),
     tags,
     status: getStatus(tags),
+    held,
     at: target.created_at,
     reason: target.reason,
     channel: target.channel,

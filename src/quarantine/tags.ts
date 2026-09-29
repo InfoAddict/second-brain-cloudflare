@@ -6,15 +6,29 @@ import { withStatus } from "../memory/status";
 export const QUARANTINE_TAG_PREFIX = "quarantine:";
 export const EDITED_CANONICAL_TAG_PREFIX = "edited-canonical:";
 
-/**
- * The only wildcard is the leading and trailing `%` that match the JSON
- * array's neighbours; the literal itself carries no LIKE metacharacter.
- */
-export const NOT_HELD_SQL = `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%'`;
-
 export type HoldReason = "instruction" | "hidden" | "burst" | "capsule" | "too_long";
 const HOLD_REASONS: readonly HoldReason[] = ["instruction", "hidden", "burst", "capsule", "too_long"];
 const EDITED_CANONICAL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * MINOR fix (T-0102 cross-vendor review): matches only the app's own recognized hold-reason
+ * values, not the whole `quarantine:` prefix. A pre-4.0 user tag that merely starts with this
+ * prefix (`quarantine:review`, written before the hold mechanism existed) is not one of the five
+ * values `withHold` ever writes, so it must not read as held -- there is no hold version for it,
+ * so a row stuck this way could never be released (undo finds nothing_to_undo). The only wildcard
+ * in each clause is the leading and trailing `%` that match the JSON array's neighbours; the
+ * literal itself carries no LIKE metacharacter.
+ */
+export const NOT_HELD_SQL = HOLD_REASONS.map(r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r}"%'`).join(" AND ");
+
+/**
+ * NOT_HELD_SQL, with every `tags` reference qualified by `alias.` -- needed at a call site that
+ * joins two tables both carrying a `tags` column, where a bare `${alias}.${NOT_HELD_SQL}` would
+ * leave every clause after the first unqualified (and ambiguous, since both sides have one).
+ */
+export function notHeldSql(alias: string): string {
+  return HOLD_REASONS.map(r => `${alias}.tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r}"%'`).join(" AND ");
+}
 
 function isTagString(t: unknown): t is string {
   return typeof t === "string";
@@ -30,9 +44,12 @@ export function isEditedCanonicalDateValue(value: string): boolean {
   return EDITED_CANONICAL_DATE_RE.test(value);
 }
 
-/** True when any tag holds the row out of recall, whatever the reason. */
+/**
+ * True when any tag holds the row out of recall. A `quarantine:` tag only counts when its value
+ * is one of the app's own recognized hold reasons (heldReason, below) -- MINOR fix, see NOT_HELD_SQL.
+ */
 export function isHeld(tags: readonly string[]): boolean {
-  return tags.some(t => isTagString(t) && t.trim().toLowerCase().startsWith(QUARANTINE_TAG_PREFIX));
+  return heldReason(tags) !== null;
 }
 
 /**
@@ -85,11 +102,10 @@ export function withEditedCanonical(tags: readonly string[], now: number): strin
 }
 
 /**
- * The one plain-English phrase per hold reason, shared by every agent-facing
- * reply (5.5). A row is held by ANY `quarantine:` tag, whatever the reason —
- * `heldReason` returns null for one it does not recognize, and that row is
- * still held: pass null through here for the generic phrase rather than
- * treating an unrecognized reason as "not held".
+ * The one plain-English phrase per hold reason, shared by every agent-facing reply (5.5). Since
+ * the MINOR fix above, `isHeld` and `heldReason` agree exactly (a row is held only by a
+ * recognized reason), so `null` is unreachable from a caller that already checked `isHeld` first
+ * -- kept as a generic fallback for any caller that has not, rather than removed.
  */
 export function holdReasonPhrase(reason: HoldReason | null): string {
   switch (reason) {

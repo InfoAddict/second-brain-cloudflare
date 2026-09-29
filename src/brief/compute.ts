@@ -208,7 +208,7 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
          SELECT id, content, source, tags, created_at,
            (CASE WHEN ${OWED_TO_ME_SQL} THEN 'in' ELSE 'out' END) AS direction,
            ROW_NUMBER() OVER (PARTITION BY (CASE WHEN ${OWED_TO_ME_SQL} THEN 1 ELSE 0 END) ORDER BY created_at DESC, id DESC) AS rn
-         FROM entries WHERE ${TASK_INDEXED} AND ${openLoopSql(now)} AND ${scope.clause}
+         FROM entries WHERE ${TASK_INDEXED} AND ${openLoopSql(now)} AND ${scope.clause} AND ${NOT_HELD_SQL}
        ) WHERE rn <= 3
        ORDER BY direction, rn`,
     ).bind(...scope.bindings).all(),
@@ -263,7 +263,7 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
     // replaced since it was shown — a superseded fact is not worth re-reading).
     // validity: current: a row replaced since it was shown falls through to a fresh pick (5.5)
     ? await env.DB.prepare(
-        `SELECT id, content, source, tags, created_at FROM entries WHERE id = ? AND (valid_until IS NULL OR valid_until > ?) AND ${scope.clause}`,
+        `SELECT id, content, source, tags, created_at FROM entries WHERE id = ? AND (valid_until IS NULL OR valid_until > ?) AND ${scope.clause} AND ${NOT_HELD_SQL}`,
       ).bind(priorState.shownId, now, ...scope.bindings).first() as ResurfaceRow | null
     : null;
 
@@ -272,7 +272,13 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
     resurfaceRow = await pickResurface(env, scope, resurfaceBefore, topics, excluded, today, now) ?? null;
     if (resurfaceRow) nextState = withShown(priorState, resurfaceRow.id, today);
   }
-  if (!preview && nextState !== priorState) {
+  // T-0102 MINOR fix (finding 8): the persisted state is keyed by workspace only, never by
+  // project, so a project-scoped pick (from a narrower `scope`) would overwrite the same slot the
+  // unscoped brief's own same-day stability reads from -- on every ?project= call whose scope
+  // does not already match whatever the last write left there, not just once. Treated like
+  // `preview`: a project-scoped pick is read fine (same-day stability still applies if the prior
+  // pick happens to fall inside this project's scope), but never written back.
+  if (!preview && !projectRows?.length && nextState !== priorState) {
     await writeResurfaceState(env, workspaceKey, nextState);
   }
 
@@ -541,7 +547,7 @@ async function standingBriefItems(
   const { results } = await env.DB.prepare(
     `SELECT id, content, created_at FROM entries
       WHERE id IN (SELECT value FROM json_each(?)) AND ${scope.clause}
-        AND tags LIKE '%"standing:active"%' AND tags NOT LIKE '%"status:deprecated"%' AND tags NOT LIKE '%"quarantine:%'`,
+        AND tags LIKE '%"standing:active"%' AND tags NOT LIKE '%"status:deprecated"%' AND ${NOT_HELD_SQL}`,
   ).bind(JSON.stringify(ids), ...scope.bindings).all();
   return (results as { id: string; content: string; created_at: number }[])
     .sort((a, b) => a.created_at - b.created_at)

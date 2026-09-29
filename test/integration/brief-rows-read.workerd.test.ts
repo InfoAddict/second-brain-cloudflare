@@ -147,10 +147,17 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("changes rows_read against 5,00
       await d1.db.prepare(
         `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
       ).bind("ev-mine", "reader-e1", "u1", "status_changed", JSON.stringify({ channel: "mcp", status: "canonical" }), now - 1000).run();
-      // 5,000 unrelated events: a different workspace and actor, spread across the rest of the 48h
+      // 5,000 unrelated events: a DIFFERENT, REAL tenant's own workspace and actor (T-0102 finding
+      // 7's own scenario -- another tenant's real activity, not an orphaned event row with no
+      // matching entry, which the reader's new workspace-scoped semi-join would exclude for free
+      // and so would not exercise the cap this test measures), spread across the rest of the 48h
       // window (2 hours to 48 hours back, all older than the genuine change above), of event types
       // getChanges' own WHERE clause would otherwise have to walk past.
       for (let start = 0; start < 5000; start += 1000) {
+        await d1.db.prepare(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids, recall_count, importance_score, workspace_id, actor_id)
+          WITH RECURSIVE c(x) AS (SELECT ? UNION ALL SELECT x+1 FROM c WHERE x < ?)
+          SELECT 'other-'||x, 'someone else''s memory '||x, '["work"]', 'api', ? - 7200000 - x * 33000, '["v"]', 0, 3, 'ws-other', 'u2'
+          FROM c`).bind(start + 1, Math.min(start + 1000, 5000), now).run();
         await d1.db.prepare(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
           WITH RECURSIVE c(x) AS (SELECT ? UNION ALL SELECT x+1 FROM c WHERE x < ?)
           SELECT 'ev-noise-'||x, 'other-'||x, 'u2', 'status_changed',
@@ -169,14 +176,29 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("changes rows_read against 5,00
       const lean = await measure(() => computeLeanBrief(env, ctx, auth));
       console.log(`R21 N=${N} rows_read REST /brief=${rest.rows} MCP brief=${mcp.rows} lean brief=${lean.rows}\nREST ${rest.detail}\nchanges=${JSON.stringify((rest.value as { changes: unknown }).changes)}`);
 
-      // The fix's own bound: the raw scan is capped at RAW_EVENT_SCAN_LIMIT (1,000) plus a probe
-      // capped at 1,001, regardless of how many of the 5,000 unrelated events exist -- ~2,003 rows
-      // for the changes read alone (measured: two BATCH entries of 1,001/1,002 above), a small
-      // constant next to N. Measured / budget: 2k REST 8,592/8,900 MCP 2,706/3,000 lean 2,457/2,700
-      // 10k REST 50,032/55,000 MCP 5,426/6,000 lean 4,217/4,700.
-      expect(rest.rows).toBeLessThanOrEqual(N === 2000 ? 8900 : 55000);
-      expect(mcp.rows).toBeLessThanOrEqual(N === 2000 ? 3000 : 6000);
-      expect(lean.rows).toBeLessThanOrEqual(N === 2000 ? 2700 : 4700);
+      // R22 (budget auditor MAJOR): RAW_EVENT_SCAN_LIMIT now caps the RAW, unscoped entry_events
+      // scan itself (at most 1,000 rows examined, in date order), with the entries/entries_trash
+      // join and workspace-scope filter applied strictly after -- one key lookup per already-capped
+      // row, so cost no longer depends on how much of the window belongs to another tenant, nor on
+      // brain size. This re-accepts finding 7's original crowd-out tradeoff (a window with over
+      // RAW_EVENT_SCAN_LIMIT other-tenant events can still crop the reader's own older events from
+      // the list; rawCapped/truncated says so honestly) in exchange for a bound that holds
+      // regardless of brain size or how adversarial the window's noise is. Measured / budget
+      // (superseded by the section-35 re-budget below, kept for the R22-era baseline):
+      // 2k REST 9,591/10,500 MCP 3,705/4,100 lean 3,456/3,800;
+      // 10k REST 51,031/56,000 MCP 6,425/7,100 lean 5,216/5,750.
+      //
+      // Budget ledger section 35 (auditor re-measurement on 7af964ea): the combined changes read
+      // (finding 4's actor/held-reserved branches, on top of R22's own scan) adds a flat ~1,000
+      // rows in a busy window, across REST, MCP and lean alike, at both N. The auditor's own two
+      // named failures -- REST 2k measured 10,595 (was budgeted 10,500), MCP 10k measured 7,429
+      // (was budgeted 7,100) -- are re-budgeted to those measured numbers plus the usual ~10%
+      // margin; re-measuring here found the same +1,000 shift had also pushed MCP 2k (4,709) and
+      // lean at both N (4,460 / 6,220) past their own old budgets, so those three are re-budgeted
+      // the same way, same section. REST 10k (52,035) still clears its existing budget.
+      expect(rest.rows).toBeLessThanOrEqual(N === 2000 ? 11700 : 56000);
+      expect(mcp.rows).toBeLessThanOrEqual(N === 2000 ? 5200 : 8200);
+      expect(lean.rows).toBeLessThanOrEqual(N === 2000 ? 4950 : 6850);
       // Still finds the reader's own genuine change, unaffected by being outnumbered 5,000 to 1.
       expect((rest.value as { changes: { count: number } }).changes.count).toBe(1);
     } finally { await d1.close(); }

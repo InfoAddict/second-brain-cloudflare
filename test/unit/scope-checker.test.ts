@@ -1513,6 +1513,14 @@ describe("the checker over the real source tree", () => {
     // MINOR/MAJOR follow-up: lowestQualifyingVersion's separate scope-exempt lookup merged into
     // classifyMember's single scope-checked chain scan (undo.ts), which now also carries the
     // actor check that closes the widened-group-key MAJOR. Net one fewer statement, not a new one.
+    // Deliberate, net no change (236/116/35 -> 237/116/36 -> 236/116/35) across two T-0102 rounds
+    // on brief/changes.ts's changeEventRows: finding 7 (final cloud review) first added an inScope
+    // workspace semi-join as its own scope-checked query; R22 (budget auditor MAJOR) then found
+    // that semi-join re-scanned the reader's entire entries/entries_trash id list on every brief
+    // with an event in its window, costing ~2 rows per memory regardless of RAW_EVENT_SCAN_LIMIT.
+    // The fix moves the workspace check to a per-row JOIN inside the already-1,000-row-capped raw
+    // scan (still scope-checked, since its clause is a JS-assembled fragment) instead of a separate
+    // query, landing back on the pre-finding-7 count with a materially cheaper query underneath it.
     ).toEqual({ queries: 236, exempt: 116, checked: 35, outerJoin: 1 });
   });
 

@@ -6,7 +6,8 @@ import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus, withStatus } from "./status";
 import { withUserEditMarker } from "../tags/system";
-import { isHeld, QUARANTINE_TAG_PREFIX } from "../quarantine/tags";
+import { isHeld, QUARANTINE_TAG_PREFIX, type HoldReason } from "../quarantine/tags";
+import { heldTagsFor } from "../quarantine/hold";
 import { deleteEntryVectors } from "../vectorize/batch";
 import { discardUpload, upsertEntryVectors, type StoredEntry } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
@@ -336,7 +337,18 @@ export async function revertEntry(
 
   const isPerson = change.channel === "rest" || change.channel === "mcp";
   const restoredContent = chain.text(target.seq);
-  const restoredTagsRaw: string[] = JSON.parse(target.tags);
+  // Cross-vendor re-review MINOR (T-0102, on top of 0b970baa): an EXPLICIT to_version reaching
+  // back past a later edit to land exactly on the hold transition itself must restore it held --
+  // target.tags is that version's own (pre-hold, unheld) tags by definition, so using it bare
+  // would publish the held text with clean tags. An implicit undo (toVersion === undefined)
+  // landing on the hold version is deliberately different: that already means "release" (the
+  // common case, handled above), so this only fires when toVersion was actually given.
+  const targetHoldMeta = toVersion !== undefined && isHoldVersion(target)
+    ? (JSON.parse(target.meta || "{}") as { hold?: { reasons: HoldReason[] } }).hold
+    : null;
+  const restoredTagsRaw: string[] = targetHoldMeta
+    ? heldTagsFor(JSON.parse(target.tags), targetHoldMeta.reasons)
+    : JSON.parse(target.tags);
   const restoredTags = isPerson ? withUserEditMarker(restoredTagsRaw) : restoredTagsRaw;
 
   const targetState = JSON.parse(target.state || "{}") as StateChange;
