@@ -90,6 +90,12 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   // MOVED (director follow-up, round 2 re-review, T-0102): import.ts's atomic-hold rewrite and
   // validity.ts's notHeldSqlFor swap (finding 4) added code above sites this table pins.
   // Recomputed against the real scanner output.
+  // MOVED +1 (round 3 re-review MAJOR, T-0089.1.1 close-out): a restored scope-exempt comment
+  // line above ENTRY_INSERT_SQL_TEMPLATE shifted this site by one line.
+  // MOVED (round 3 re-review, second pass, MAJOR "undo-group walk-back"): applyStatus and
+  // releaseHeldAfterEdit/revertEntry each mint an event_id above their own snapshot call, to link
+  // that version to the audit event it lands with moments later (see src/memory/undo.ts's
+  // classifyFromRows). Recomputed against the real scanner output.
   // MOVED (merge of release/v4 5a98da4a into v4/t7-d, lane W merged, T-0089.4.2/T-0089.7.1): lane
   // W's own class E/A/R20 deltas and lane D's Task 12 deferred call sites (captureEntry's merge
   // gate fix, the supersede-close touch, updateEntryContent and appendToEntry) are independently-
@@ -106,14 +112,14 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/capture/entry.ts', line: 648, kind: 'exempt', standing: 'exempt: a window-closed bump counter, no tags column' },
   { file: 'src/capture/entry.ts', line: 665, kind: 'exempt', standing: 'exempt: the lost-race retry\'s own protective retag; scheduleIndex(keptTags) right below it is this same row\'s own standingKnownVector touch' },
   { file: 'src/capture/lifecycle.ts', line: 178, kind: 'snapshot', standing: 'touch' },
-  { file: 'src/capture/lifecycle.ts', line: 256, kind: 'snapshot', standing: 'touch' },
+  { file: 'src/capture/lifecycle.ts', line: 264, kind: 'snapshot', standing: 'touch' },
   { file: 'src/capture/share.ts', line: 82, kind: 'exempt', standing: 'exempt: workspace_id only, no tags column; moveEntry\'s own touch call (both workspaces) reads tags separately after this statement' },
   { file: 'src/capture/store.ts', line: 109, kind: 'exempt', standing: 'exempt: vector_ids only, no tags column' },
   { file: 'src/capture/store.ts', line: 488, kind: 'snapshot', standing: 'touch' },
   { file: 'src/capture/store.ts', line: 740, kind: 'snapshot', standing: 'touch' },
   { file: 'src/capture/store.ts', line: 850, kind: 'snapshot', standing: 'touch' },
   { file: 'src/compression/digest.ts', line: 103, kind: 'snapshot', standing: 'exempt: rollup marker on the source row, unaffected by compressionEligibilitySql\'s own standing:active exclusion' },
-  { file: 'src/entries/import.ts', line: 49, kind: 'exempt', standing: 'touch' },
+  { file: 'src/entries/import.ts', line: 50, kind: 'exempt', standing: 'touch' },
   { file: 'src/integrations/mirror.ts', line: 125, kind: 'exempt', standing: 'exempt: mirrors cannot carry standing:active — 1.3 strips it via stripT7CallerTags before mirror tags are built' },
   { file: 'src/integrations/mirror.ts', line: 207, kind: 'snapshot', standing: 'exempt: mirrors cannot carry standing:active — 1.3 strips it via stripT7CallerTags before mirror tags are built' },
   { file: 'src/lib/team-admin.ts', line: 594, kind: 'hard-delete', standing: 'touch' },
@@ -128,9 +134,9 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/memory/actions.ts', line: 303, kind: 'snapshot', standing: 'exempt: auto-insight rows are system-generated candidates, never standing:active' },
   { file: 'src/memory/trash.ts', line: 283, kind: 'trash', standing: 'touch' },
   { file: 'src/memory/trash.ts', line: 708, kind: 'exempt', standing: 'touch' },
-  { file: 'src/memory/undo.ts', line: 194, kind: 'snapshot', standing: 'exempt: KNOWN GAP, not fixed here — releaseHeldAfterEdit releases a Track 4 hold via a tags-only change (5.6, the row was edited after the hold), which can restore standing:active without going through revertEntry\'s own touch. Not in the director\'s named list for this pass; self-heals within 24h (P7.4), flagged for the director rather than fixed in scope here' },
-  { file: 'src/memory/undo.ts', line: 505, kind: 'snapshot', standing: 'touch' },
-  { file: 'src/memory/undo.ts', line: 541, kind: 'exempt', standing: 'exempt: KNOWN GAP, not fixed here — a merge-undo re-creates the incoming row a merge had absorbed; if that absorbed content was itself standing:active this would need a touch too. Rare (a merge target and its incoming are topically close, not a disjoint standing instruction) and self-heals within 24h (P7.4), flagged for the director, not implemented in this pass' },
+  { file: 'src/memory/undo.ts', line: 198, kind: 'snapshot', standing: 'exempt: KNOWN GAP, not fixed here — releaseHeldAfterEdit releases a Track 4 hold via a tags-only change (5.6, the row was edited after the hold), which can restore standing:active without going through revertEntry\'s own touch. Not in the director\'s named list for this pass; self-heals within 24h (P7.4), flagged for the director rather than fixed in scope here' },
+  { file: 'src/memory/undo.ts', line: 510, kind: 'snapshot', standing: 'touch' },
+  { file: 'src/memory/undo.ts', line: 546, kind: 'exempt', standing: 'exempt: KNOWN GAP, not fixed here — a merge-undo re-creates the incoming row a merge had absorbed; if that absorbed content was itself standing:active this would need a touch too. Rare (a merge target and its incoming are topically close, not a disjoint standing instruction) and self-heals within 24h (P7.4), flagged for the director, not implemented in this pass' },
   { file: 'src/memory/validity.ts', line: 170, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
   { file: 'src/memory/validity.ts', line: 310, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
   { file: 'src/memory/validity.ts', line: 379, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },

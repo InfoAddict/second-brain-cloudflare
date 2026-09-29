@@ -45,6 +45,12 @@ export interface AuditEventInput {
   actorId: string;
   event: EntryEventName;
   payload?: Record<string, unknown>;
+  /** Round 3 re-review MAJOR (undo-group walk-back): a caller that also snapshots a version for
+   * this same write mints this id itself and embeds it in that version's own meta.event_id, so the
+   * two rows this one write produces can be told apart from any other row's, later, by nothing
+   * looser than an exact id -- never a time window, never actor or client. Defaults to a fresh id
+   * (the prior, only behavior) when the caller has no version to link. */
+  id?: string;
 }
 
 /**
@@ -66,10 +72,10 @@ export interface AuditEventInput {
  * one place that knows the entry_events INSERT and one EntryEventName union.
  */
 export function auditEventStatement(env: Env, event: AuditEventInput): D1PreparedStatement {
-  const { entryId, actorId, event: name, payload } = event;
+  const { entryId, actorId, event: name, payload, id } = event;
   return env.DB.prepare(
     `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(crypto.randomUUID(), entryId, actorId, name, JSON.stringify(payload ?? {}), Date.now());
+  ).bind(id ?? crypto.randomUUID(), entryId, actorId, name, JSON.stringify(payload ?? {}), Date.now());
 }
 
 /**

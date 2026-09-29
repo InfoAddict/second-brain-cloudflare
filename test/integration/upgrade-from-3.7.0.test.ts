@@ -234,7 +234,7 @@ describe("upgrade from a 3.7.0-shaped database", () => {
 
     const change = { actorId: roots.ownerUserId, channel: "rest" as const };
     const result = await applyStatus("e1", "deprecated", env, change, DEFAULTS, roots.ownerPersonalWorkspaceId);
-    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object) });
+    expect(result).toEqual({ status: "ok", indexed: false, validity: expect.any(Object), eventId: expect.any(String) });
 
     const versions = (await (d1.db as any).prepare(`SELECT * FROM entry_versions WHERE entry_id = 'e1' ORDER BY seq`).all()).results as any[];
     expect(versions).toHaveLength(1);
@@ -382,7 +382,10 @@ describe("upgrade from a 3.7.0-shaped database", () => {
   });
 
   it("a pre-4.0 shared event hides older events from a non-author", async () => {
-    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('p1', 'a shared memory', '["x"]', 'api', 1000, '[]')`);
+    // created_at is 0, before every seeded event below (round 3 re-review MAJOR: readEntryTimeline
+    // now hides an event older than its row's own created_at) -- this row is the pre-4.0 original,
+    // not a reused id, so its own real history must stay visible.
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('p1', 'a shared memory', '["x"]', 'api', 0, '[]')`);
     env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
     await initializeDatabase(env);
     const roots = await ensureTenantBootstrap(env);

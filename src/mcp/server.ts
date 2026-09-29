@@ -1028,7 +1028,7 @@ export function buildMcpServer(
         return { content: [{ type: "text", text: "Could not change the status: re-indexing failed. Nothing changed. Try again." }] };
       }
       if (identity) {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp", ...(client ? { client } : {}) } });
+        auditEvent(env, ctx, { id: result.eventId, entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp", ...(client ? { client } : {}) } });
       }
       // BE-12 (T-0101.8.2): names the meaning, not the mechanism — "wrong" is what a member acts
       // on; "removed from recall, kept for audit" is implementation detail moved into the tool's

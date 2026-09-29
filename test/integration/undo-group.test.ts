@@ -90,7 +90,11 @@ describe("undoGroup() (S3)", () => {
     let t = windowStart;
     for (const id of ids) {
       await seedEntry(id, ["work", "status:canonical"]);
-      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: t });
+      // Round 3 re-review MAJOR: classifyFromRows now matches a version to the group by an exact
+      // event id, stamped into the version's own meta.event_id -- the same id this member's own
+      // entry_events row carries, exactly the link src/capture/lifecycle.ts's applyStatus and
+      // src/memory/undo.ts's releaseHeldAfterEdit/revertEntry stamp for real at write time.
+      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: `ev-${id}` }, createdAt: t });
       await insertEvent({ id: `ev-${id}`, entryId: id, event: "status_changed", actorId: "u1", createdAt: t, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
       t += MIN;
     }
@@ -144,7 +148,11 @@ describe("undoGroup() (S3)", () => {
     const windowStart = now - HOUR;
     await seedStatusBurst(ids, windowStart);
     await sqlite.db.prepare(`UPDATE entries SET tags = ? WHERE id = 'e0'`).bind(JSON.stringify(["v2", "work", "status:canonical"])).run();
-    await insertVersion({ entryId: "e0", seq: 2, tags: ["work", "status:canonical"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: windowStart + 30_000 });
+    // e0's own SECOND group event (round 3 re-review MAJOR): classifyFromRows now requires a
+    // version's own meta.event_id, not a time window or an actor/client match, so a second
+    // in-group edit needs its own second qualifying event too, not just a second version.
+    await insertVersion({ entryId: "e0", seq: 2, tags: ["work", "status:canonical"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: "ev-e0-2" }, createdAt: windowStart + 30_000 });
+    await insertEvent({ id: "ev-e0-2", entryId: "e0", event: "status_changed", actorId: "u1", createdAt: windowStart + 30_000, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
 
     const group = await discoverGroup();
     const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
@@ -158,6 +166,50 @@ describe("undoGroup() (S3)", () => {
     expect(tags).not.toContain("status:canonical");
     expect(tags).not.toContain("v2");
     expect(tags).toContain("work");
+  });
+
+  it("an earlier separate edit by the group's own actor and client is never folded in (round 3 re-review MAJOR, repro 1)", async () => {
+    // e0's own real group event is seq 2. Seq 1 is a genuinely earlier, unrelated edit -- same
+    // actor (u1), same client label (Cursor), immediately adjacent in the chain -- exactly what
+    // the old actor/client walk-back could not tell apart from the group's own second change.
+    // classifyFromRows now only ever matches by meta.event_id, so seq 1 (no event_id at all) can
+    // never be folded in, whatever it shares with the group's own writer.
+    const windowStart = now - HOUR;
+    await seedEntry("e0", ["work", "status:canonical"]);
+    await insertVersion({ entryId: "e0", seq: 1, tags: ["original"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: windowStart - 30 * MIN });
+    await insertVersion({ entryId: "e0", seq: 2, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: "ev-e0" }, createdAt: windowStart });
+    await insertEvent({ id: "ev-e0", entryId: "e0", event: "status_changed", actorId: "u1", createdAt: windowStart, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+    await seedStatusBurst(["e1", "e2"], windowStart + MIN);
+
+    const group = await discoverGroup();
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId.e0).toBe("reverted");
+    // Reverted only to seq 2's own pre-image ("work"), never past it to seq 1's ("original").
+    expect(await tagsOf("e0")).toEqual(["work"]);
+  });
+
+  it("a third party's edit sandwiched between the group's own two events gives changed_since, never done (round 3 re-review MAJOR, repro 2)", async () => {
+    const windowStart = now - HOUR;
+    await seedEntry("e0", ["work", "status:canonical"]);
+    await insertVersion({ entryId: "e0", seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: "ev-e0-1" }, createdAt: windowStart });
+    await insertEvent({ id: "ev-e0-1", entryId: "e0", event: "status_changed", actorId: "u1", createdAt: windowStart, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+    // A third party's edit lands between the group's own two events -- same actor and client
+    // label even, the exact case the old design could not rule out without a real link.
+    await insertVersion({ entryId: "e0", seq: 2, tags: ["work", "status:canonical"], actorId: "u2", channel: "mcp", reason: "update", meta: { client: "Cursor" }, createdAt: windowStart + 20_000 });
+    await insertVersion({ entryId: "e0", seq: 3, tags: ["edited", "status:canonical"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: "ev-e0-3" }, createdAt: windowStart + 40_000 });
+    await insertEvent({ id: "ev-e0-3", entryId: "e0", event: "status_changed", actorId: "u1", createdAt: windowStart + 40_000, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+    await sqlite.db.prepare(`UPDATE entries SET tags = ? WHERE id = 'e0'`).bind(JSON.stringify(["final", "work", "status:canonical"])).run();
+    await seedStatusBurst(["e1", "e2"], windowStart + MIN);
+
+    const group = await discoverGroup();
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId.e0).toBe("changed_since");
+    expect(await tagsOf("e0")).toEqual(["final", "work", "status:canonical"]);
+    expect(await maxSeqOf("e0")).toBe(3);
   });
 
   it("a member changed since by someone else is skipped as changed_since and untouched", async () => {
@@ -380,45 +432,21 @@ describe("undoGroup() (S3)", () => {
     for (const id of ids) expect(await maxSeqOf(id)).toBe(1);
   });
 
-  it("the oldest member's version created_at one millisecond before the group's own start is still included (Codex review, T-0102 E1)", async () => {
+  it("the oldest member's version created_at, however far from the group's own event times, is still included (Codex review, T-0102 E1; round 3 re-review MAJOR supersedes the fix)", async () => {
+    // E1's own bug: a version's created_at can drift from its audit event's own, slightly later
+    // Date.now() call by an unbounded amount under real Workers scheduling, and the old design
+    // compared the two directly (decoded.start, a lower bound derived from event times). No fixed
+    // slack was ever enough (the director's own follow-up on E1's first fix). classifyFromRows no
+    // longer reads created_at AT ALL -- it matches a version to the group by its own meta.event_id,
+    // the same id its causing event carries -- so this now proves something stronger than either
+    // of E1's two prior tests: not just "close enough", but "time doesn't factor in at all".
     const ids = ["e0", "e1", "e2"];
     const windowStart = now - HOUR;
     let t = windowStart;
     for (const id of ids) {
       await seedEntry(id, ["work", "status:canonical"]);
-      // The oldest member's own version predates its audit event by 1ms -- the same ordering
-      // writeAuditEvents' own Date.now() call, a beat after the version snapshot's, produces in
-      // production. decoded.start is derived from the group's event timestamps (t here), so a
-      // strict >= against this version's created_at (t - 1) used to exclude it entirely.
-      const versionAt = id === ids[0] ? t - 1 : t;
-      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: versionAt });
-      await insertEvent({ id: `ev-${id}`, entryId: id, event: "status_changed", actorId: "u1", createdAt: t, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
-      t += MIN;
-    }
-    const group = await discoverGroup();
-
-    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
-
-    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
-    expect(byId[ids[0]]).toBe("reverted");
-    expect(result!.remaining).toBe(0);
-    expect(result!.done).toBe(true);
-  });
-
-  it("the oldest member's version created_at several milliseconds before the group's own start is still included (Codex review, T-0102, director follow-up: no fixed slack is enough)", async () => {
-    // The cloud re-review's own finding on E1: real Workers scheduling does not bound the drift
-    // between a version's own created_at and its audit event's slightly-later Date.now() call to
-    // any fixed number of milliseconds, so widening the old lower-bound-against-decoded.start
-    // check by a bigger constant only moves the same bug further out. classifyFromRows no longer
-    // anchors on decoded.start at all: it finds the LATEST group-qualifying version at or before
-    // decoded.end, which has no such precision problem.
-    const ids = ["e0", "e1", "e2"];
-    const windowStart = now - HOUR;
-    let t = windowStart;
-    for (const id of ids) {
-      await seedEntry(id, ["work", "status:canonical"]);
-      const versionAt = id === ids[0] ? t - 5 : t;
-      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: versionAt });
+      const versionAt = id === ids[0] ? t - HOUR : t;
+      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor", event_id: `ev-${id}` }, createdAt: versionAt });
       await insertEvent({ id: `ev-${id}`, entryId: id, event: "status_changed", actorId: "u1", createdAt: t, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
       t += MIN;
     }

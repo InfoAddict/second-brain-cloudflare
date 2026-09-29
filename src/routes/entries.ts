@@ -599,7 +599,7 @@ export async function handleEntriesRoutes(
       return json({ ok: false, error: "Could not change the status: re-indexing failed. Nothing changed. Try again." }, 502);
     }
 
-    auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { status, channel: "rest" } });
+    auditEvent(env, ctx, { id: result.eventId, entryId: id, actorId: auth.userId, event: "status_changed", payload: { status, channel: "rest" } });
     return json({ ok: true, id, status, indexed: result.indexed, validity: result.validity });
   }
 

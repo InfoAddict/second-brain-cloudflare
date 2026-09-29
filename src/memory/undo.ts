@@ -11,7 +11,7 @@ import { deleteEntryVectors } from "../vectorize/batch";
 import { discardUpload, upsertEntryVectors, type StoredEntry } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { OWNER_WRITE_CONTEXT, readScopeWorkspaces, type WriteContext } from "../lib/scope";
-import { groupCandidates, safeClient, UNDO_GROUP_PAGE, type ChangeFamily, type DecodedGroup } from "../brief/changes";
+import { groupCandidates, UNDO_GROUP_PAGE, type ChangeFamily, type DecodedGroup } from "../brief/changes";
 import type { Config } from "../config";
 import { VERSION_ROW_BUDGET_BYTES, UNDO_MERGE_REEMBED_INLINE } from "../constants";
 import { getTrashedEntry, restoreEntry } from "./trash";
@@ -170,6 +170,10 @@ async function releaseHeldAfterEdit(
   }
 
   const now = Date.now();
+  // Round 3 re-review MAJOR (undo-group walk-back): minted here, not by writeAuditEvents' own
+  // default, so this version's meta.event_id and the "released" event it lands with below share
+  // the SAME id -- an exact link, never a time window or an actor/client re-check.
+  const eventId = crypto.randomUUID();
   // Codex review, T-0102 D2: content added to the guard. Content is never touched by a release
   // (the comment above this function says so), but the re-embed above ran against the content
   // THIS call read -- a concurrent edit that changed content between that read and this commit
@@ -187,7 +191,7 @@ async function releaseHeldAfterEdit(
     results = await env.DB.batch([
       snapshotStatement(env, {
         entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags: releasedTags,
-        meta: { release: { of_seq: ofSeq } }, now,
+        meta: { release: { of_seq: ofSeq }, event_id: eventId }, now,
         guard: p2 => buildCasGuard(p2, casColumns),
       }),
       // versioning: snapshot
@@ -205,6 +209,7 @@ async function releaseHeldAfterEdit(
   }
 
   await writeAuditEvents(env, [{
+    id: eventId,
     entryId: id, actorId: change.actorId, event: "released",
     payload: { of_seq: ofSeq, channel: change.channel, ...(change.client ? { client: change.client } : {}) },
   }]);
@@ -552,8 +557,12 @@ export async function revertEntry(
   const contentIsFullCopy = contentChanged
     && !(restoredContent.startsWith(row.content) && !row.content.includes("\0") && !restoredContent.includes("\0"));
   const projectedStateBytes = utf8Bytes(JSON.stringify({ when_at: row.when_at, when_kind: row.when_kind, when_source: row.when_source, when_label: row.when_label, valid_from: row.valid_from, valid_until: row.valid_until }));
+  // Round 3 re-review MAJOR (undo-group walk-back): minted here, not by writeAuditEvents' own
+  // default, so this version's meta.event_id and the "released"/"reverted" event it lands with
+  // below share the SAME id -- an exact link, never a time window or an actor/client re-check.
+  const eventId = crypto.randomUUID();
   const metaCandidate = {
-    nonce, target_seq: target.seq, reverted_reason: target.reason,
+    nonce, target_seq: target.seq, reverted_reason: target.reason, event_id: eventId,
     ...(restoreWhen ? { when: true } : {}),
     ...(restoreValidity ? { validity: true } : {}),
     ...(recreatedForMeta.length ? { recreated_incoming: recreatedForMeta } : {}),
@@ -633,9 +642,11 @@ export async function revertEntry(
   // "released", not "reverted" — so the changes line (5.8) and the agent-facing copy (5.5) can
   // tell the two apart without inspecting tags.
   await writeAuditEvents(env, [releasing ? {
+    id: eventId,
     entryId: id, actorId: change.actorId, event: "released",
     payload: { of_seq: target.seq, channel: change.channel, ...(change.client ? { client: change.client } : {}) },
   } : {
+    id: eventId,
     entryId: id, actorId: change.actorId, event: "reverted",
     payload: { target_seq: target.seq, reverted_reason: target.reason, channel: change.channel },
   }, ...validityEvents(change, ...hookResults)]);
@@ -772,71 +783,62 @@ type MemberVerdict =
   | { kind: "changed_since" }
   | { kind: "not_found" };
 
-/**
- * Whether one memory is still owed the group's own revert, told from a stable, seq-based cursor
- * rather than a timestamp (reviewer MINOR: an undo landing in the group's own final millisecond
- * used to read as still-eligible on the next page, and paging repeated it instead of advancing).
- * `target_seq` is the "before this version" seq a plain revert always records (metaCandidate
- * above); a later version carrying `reason: "revert"` and that exact target_seq is unambiguous
- * proof this exact group-qualifying change was already undone, whatever time it landed at.
- * Nothing happening after the qualifying version at all (newest === toVersion) is "pending";
- * anything else that happened since, and is not that proof, is a third party's edit (reviewer
- * MAJOR, R21 follow-up: the qualifying version's own actor must equal the group's own actor, or a
- * same-window edit by someone else using the same client label could be reverted).
- */
 function parseVersionMeta(r: ChainRow): Record<string, unknown> {
   try { return JSON.parse(r.meta || "{}"); } catch { return {}; }
 }
 
-function matchesGroup(r: ChainRow, decoded: DecodedGroup, cfg: Readonly<Config>): boolean {
-  return r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(parseVersionMeta(r).client, cfg) === decoded.client;
+/**
+ * True exactly when `r` is the version one of the group's own recorded events produced (round 3
+ * re-review MAJOR: "the group's versions are exactly the versions linked to the group's own event
+ * ids. No time windows, and no matching by actor or client."). Every write that can join a group
+ * mints its own event id before its batch and stamps it into BOTH the version's own meta.event_id
+ * and the audit event it lands with moments later (src/capture/lifecycle.ts's applyStatus,
+ * src/memory/undo.ts's releaseHeldAfterEdit/revertEntry) -- a plain set-membership check, so a
+ * same-actor edit outside the group's own recorded events, or a third party's edit landing in
+ * between two of them, can never be mistaken for the group's own work, whatever its reason,
+ * channel, actor or client label happen to be.
+ */
+function isOwnVersion(r: ChainRow, ownEventIds: ReadonlySet<string>): boolean {
+  const id = parseVersionMeta(r).event_id;
+  return typeof id === "string" && ownEventIds.has(id);
 }
 
-function classifyFromRows(rows: readonly ChainRow[] | undefined, decoded: DecodedGroup, cfg: Readonly<Config>): MemberVerdict {
-  if (!rows?.length) return { kind: "not_found" };
-  // Codex review, T-0102, director follow-up (cloud re-review, the E1 slack fix was not enough):
-  // decoded.start comes from the group's own audit-event timestamps (brief/changes.ts), stamped
-  // at a separate, slightly later Date.now() call than the version row it describes -- under real
-  // Workers scheduling that drift is not bounded by any fixed millisecond, so a lower bound
-  // against decoded.start (with or without slack) can still read the group's oldest member as
-  // outside the window it is actually in. decoded.end has no such problem: every version this
-  // group could ever be about was necessarily written before the group's own LATEST event was
-  // audited, so scanning for the LATEST matching version at or before decoded.end -- rows arrive
-  // seq/time ascending -- finds this member's own last group-attributed edit (the anchor) without
-  // depending on how close decoded.start sits to the version's own clock.
-  let anchorIdx = -1;
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i].created_at > decoded.end) break; // ascending order: nothing later can qualify either
-    if (matchesGroup(rows[i], decoded, cfg)) anchorIdx = i;
-  }
-  if (anchorIdx === -1) return { kind: "not_found" };
+/** Walks back from `rows[upto]` (inclusive) through consecutive own-versions. `ok` is true only
+ * when the run found exactly `ownEventIds.size` of them -- not fewer (something else broke the
+ * run before all of the group's own events for this member were accounted for) and, since a
+ * version's own event id is unique to it, never more. */
+function walkOwn(rows: readonly ChainRow[], upto: number, ownEventIds: ReadonlySet<string>): { firstIdx: number; ok: boolean } {
+  let idx = upto;
+  let count = 0;
+  while (idx >= 0 && isOwnVersion(rows[idx], ownEventIds)) { idx--; count++; }
+  return { firstIdx: idx + 1, ok: count === ownEventIds.size };
+}
 
-  // Codex cross-vendor review, round 2 re-review MAJOR: a member written twice inside the group
-  // (two matching edits) used to revert to just before its SECOND edit, undoing only half of what
-  // the group actually did to it -- the spec says "reverts each member to before the group's
-  // first change". Walking back from the anchor through CONSECUTIVE matching edits (seq order, no
-  // gap) finds that first one: a non-matching version anywhere in between -- a third party's edit
-  // sandwiched inside what would otherwise be a run of the group's own edits -- stops the walk
-  // there instead of reaching further back, so it is never folded into this member's own revert.
-  let firstIdx = anchorIdx;
-  while (firstIdx > 0 && matchesGroup(rows[firstIdx - 1], decoded, cfg)) firstIdx--;
-  const toVersion = rows[firstIdx].seq;
-  const toVersionWorkspace = rows[firstIdx].workspace_id;
-  const anchorSeq = rows[anchorIdx].seq;
+/**
+ * "Revert a member only if its group versions are contiguous and are the newest versions. In
+ * every other case, report changed_since and touch nothing: a version outside the group in
+ * between, one after, or any doubt" (round 3 re-review MAJOR). `ownEventIds` is this one member's
+ * own share of the group's event ids, from groupCandidates' own per-entry derivation (never this
+ * whole group's ids -- a different member's own events say nothing about this one).
+ */
+function classifyFromRows(rows: readonly ChainRow[] | undefined, ownEventIds: ReadonlySet<string>): MemberVerdict {
+  if (!rows?.length || !ownEventIds.size) return { kind: "not_found" };
 
-  let consumed = false;
-  for (const r of rows) {
-    if (r.seq <= toVersion) continue;
-    if (r.reason === "revert" && parseVersionMeta(r).target_seq === toVersion) { consumed = true; break; }
+  const tip = rows.length - 1;
+  const atTip = walkOwn(rows, tip, ownEventIds);
+  if (atTip.ok) return { kind: "pending", toVersion: rows[atTip.firstIdx].seq, workspaceId: rows[atTip.firstIdx].workspace_id };
+
+  // Not pending at the tip -- maybe it is already done: the newest version is a revert whose own
+  // target_seq matches exactly what this same walk computes over everything before it, the group's
+  // own work already undone (by this group's own undo call, or anyone else's -- once reverted to
+  // that exact version, it no longer matters who did it).
+  const newest = rows[tip];
+  if (tip > 0 && newest.reason === "revert") {
+    const target = parseVersionMeta(newest).target_seq;
+    const underRevert = walkOwn(rows, tip - 1, ownEventIds);
+    if (underRevert.ok && typeof target === "number" && rows[underRevert.firstIdx].seq === target) return { kind: "done" };
   }
-  if (consumed) return { kind: "done" };
-  // Codex cross-vendor review, round 2 re-review MAJOR: "never report done on a half-undo" --
-  // pending/changed_since is decided against the group's own LAST matching edit (anchorSeq), not
-  // toVersion (the FIRST one): with two in-group edits those differ, and comparing against
-  // toVersion instead would read the row as changed_since the moment there is more than one
-  // group-attributed version to revert, even with nothing from outside the group in the way.
-  const newest = rows[rows.length - 1];
-  return newest.seq === anchorSeq ? { kind: "pending", toVersion, workspaceId: toVersionWorkspace } : { kind: "changed_since" };
+  return { kind: "changed_since" };
 }
 
 /**
@@ -850,7 +852,7 @@ function classifyFromRows(rows: readonly ChainRow[] | undefined, decoded: Decode
  * has no per-group LIMIT, so it is expressed as a ROW_NUMBER filter instead.
  */
 async function classifyMembers(
-  env: Env, ids: readonly string[], decoded: DecodedGroup, cfg: Readonly<Config>, scope: string[],
+  env: Env, ids: readonly string[], eventIdsByEntry: ReadonlyMap<string, ReadonlySet<string>>, scope: string[],
 ): Promise<Map<string, MemberVerdict>> {
   const out = new Map<string, MemberVerdict>();
   if (!ids.length) return out;
@@ -871,16 +873,17 @@ async function classifyMembers(
     const rows = byEntry.get(r.entry_id);
     if (rows) rows.push(r); else byEntry.set(r.entry_id, [r]);
   }
-  for (const id of ids) out.set(id, classifyFromRows(byEntry.get(id), decoded, cfg));
+  for (const id of ids) out.set(id, classifyFromRows(byEntry.get(id), eventIdsByEntry.get(id) ?? new Set()));
   return out;
 }
 
 async function resolveVersionGroup(
-  env: Env, identity: Identity, decoded: DecodedGroup, ids: string[], change: ChangeContext, config: Readonly<Config>,
+  env: Env, identity: Identity, decoded: DecodedGroup, ids: string[], eventIdsByEntry: ReadonlyMap<string, ReadonlySet<string>>,
+  change: ChangeContext, config: Readonly<Config>,
   ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
 ): Promise<UndoGroupResult> {
   const results: { id: string; result: string }[] = [];
-  const verdicts = await classifyMembers(env, ids, decoded, config, scope);
+  const verdicts = await classifyMembers(env, ids, eventIdsByEntry, scope);
   // Codex review, T-0102 E2: only an ACTUAL revert (verdict "pending") spends this call's page
   // budget now. The old bound (results.length, which also grew for "not_found"/"changed_since")
   // stopped the scan the moment UNDO_GROUP_PAGE blocked members turned up -- and since `i` is
@@ -915,13 +918,13 @@ export async function undoGroup(
 ): Promise<UndoGroupResult | null> {
   const candidates = await groupCandidates(env, identity, groupKeyStr, config);
   if (!candidates) return null;
-  const { decoded, ids, capped } = candidates;
+  const { decoded, ids, eventIdsByEntry, capped } = candidates;
   if (!ids.length) return { results: [], done: true, remaining: 0, group: groupKeyStr, capped, total: 0, family: decoded.family };
 
   const scope = readScopeWorkspaces(identity);
   if (decoded.family === "held") return resolveHeldGroup(env, identity, ids, change, config, ctx, groupKeyStr, capped, scope);
   if (decoded.family === "trash") return resolveTrashGroup(env, identity, ids, change, config, ctx, groupKeyStr, capped, scope);
-  return resolveVersionGroup(env, identity, decoded, ids, change, config, ctx, groupKeyStr, capped, scope);
+  return resolveVersionGroup(env, identity, decoded, ids, eventIdsByEntry, change, config, ctx, groupKeyStr, capped, scope);
 }
 
 /** "Undid 5 of 14 changes in that group; call undo with the same group again to continue." (5.9). */

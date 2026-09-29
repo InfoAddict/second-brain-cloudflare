@@ -240,7 +240,13 @@ describe("versioning: status", () => {
     await client.callTool({ name: "set_status", arguments: { id: "e1", status: "canonical" } });
     await client.close();
     const mcpV = await versions("e1");
-    const strip = ({ id: _i, channel: _c, created_at: _t, valid_from: _v, ...rest }: any) => rest;
+    // meta.event_id (round 3 re-review MAJOR) is minted fresh per call -- legitimately different
+    // between the REST and MCP writes this test compares, so it is stripped the same way id/
+    // channel/created_at/valid_from already are.
+    const strip = ({ id: _i, channel: _c, created_at: _t, valid_from: _v, meta, ...rest }: any) => {
+      const { event_id: _e, ...metaRest } = JSON.parse(meta || "{}");
+      return { ...rest, meta: metaRest };
+    };
     expect(restV[0].channel).toBe("rest");
     expect(mcpV[0].channel).toBe("mcp");
     expect(strip(mcpV[0])).toEqual(strip(restV[0]));

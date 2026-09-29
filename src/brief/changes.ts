@@ -121,6 +121,10 @@ function parsePayload(raw: string): Record<string, unknown> {
 
 interface Classified {
   id: string;
+  /** entry_events.id -- this row's own event, not the entry it describes (round 3 re-review
+   * MAJOR): groupCandidates threads this through so undo.ts can link a version to exactly the
+   * event that produced it, never a time window or an actor/client re-check. */
+  eventId: string;
   event: string;
   family: ChangeFamily;
   actorId: string;
@@ -140,7 +144,7 @@ function classify(row: RawRow, cfg: Readonly<Config>): Classified | null {
   const payload = parsePayload(row.payload);
   const client = safeClient(payload.client, cfg);
   const base = {
-    id: row.entry_id, event: row.event, actorId: row.actor_id, client,
+    id: row.entry_id, eventId: row.id, event: row.event, actorId: row.actor_id, client,
     createdAt: row.created_at, preview: row.preview,
   };
 
@@ -357,7 +361,15 @@ export function decodeGroupKey(key: string): DecodedGroup | null {
   }
 }
 
-export interface GroupCandidates { decoded: DecodedGroup; ids: string[]; capped: boolean }
+export interface GroupCandidates {
+  decoded: DecodedGroup;
+  ids: string[];
+  /** entry_id -> the exact set of entry_events.id this group's own read found for it (round 3
+   * re-review MAJOR): what undoGroup's version walk-back matches against instead of a time window
+   * or an actor/client re-check -- see classifyFromRows in src/memory/undo.ts. */
+  eventIdsByEntry: Map<string, Set<string>>;
+  capped: boolean;
+}
 
 /**
  * Re-derives a group's membership from the reader's own scoped read of the 5.8 event window
@@ -373,15 +385,15 @@ export async function groupCandidates(
   if (!decoded) return null;
   const { rows } = await changeEventRows(env, identity, decoded.start - 1, decoded.end, "ASC");
   const classified = rows.map(row => classify(row, cfg)).filter((c): c is Classified => c !== null);
-  const seen = new Set<string>();
   const ids: string[] = [];
+  const eventIdsByEntry = new Map<string, Set<string>>();
   for (const c of classified) {
     if (c.family !== decoded.family || c.actorId !== decoded.actorId || c.client !== decoded.client) continue;
-    if (seen.has(c.id)) continue;
-    seen.add(c.id);
-    ids.push(c.id);
+    let set = eventIdsByEntry.get(c.id);
+    if (!set) { set = new Set(); eventIdsByEntry.set(c.id, set); ids.push(c.id); }
+    set.add(c.eventId);
   }
-  return { decoded, ids: ids.slice(0, UNDO_GROUP_MAX), capped: ids.length > UNDO_GROUP_MAX };
+  return { decoded, ids: ids.slice(0, UNDO_GROUP_MAX), eventIdsByEntry, capped: ids.length > UNDO_GROUP_MAX };
 }
 
 // ── Rendering (S2) ────────────────────────────────────────────────────────────
