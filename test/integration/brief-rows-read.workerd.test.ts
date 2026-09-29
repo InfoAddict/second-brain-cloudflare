@@ -147,10 +147,17 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("changes rows_read against 5,00
       await d1.db.prepare(
         `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
       ).bind("ev-mine", "reader-e1", "u1", "status_changed", JSON.stringify({ channel: "mcp", status: "canonical" }), now - 1000).run();
-      // 5,000 unrelated events: a different workspace and actor, spread across the rest of the 48h
+      // 5,000 unrelated events: a DIFFERENT, REAL tenant's own workspace and actor (T-0102 finding
+      // 7's own scenario -- another tenant's real activity, not an orphaned event row with no
+      // matching entry, which the reader's new workspace-scoped semi-join would exclude for free
+      // and so would not exercise the cap this test measures), spread across the rest of the 48h
       // window (2 hours to 48 hours back, all older than the genuine change above), of event types
       // getChanges' own WHERE clause would otherwise have to walk past.
       for (let start = 0; start < 5000; start += 1000) {
+        await d1.db.prepare(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids, recall_count, importance_score, workspace_id, actor_id)
+          WITH RECURSIVE c(x) AS (SELECT ? UNION ALL SELECT x+1 FROM c WHERE x < ?)
+          SELECT 'other-'||x, 'someone else''s memory '||x, '["work"]', 'api', ? - 7200000 - x * 33000, '["v"]', 0, 3, 'ws-other', 'u2'
+          FROM c`).bind(start + 1, Math.min(start + 1000, 5000), now).run();
         await d1.db.prepare(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
           WITH RECURSIVE c(x) AS (SELECT ? UNION ALL SELECT x+1 FROM c WHERE x < ?)
           SELECT 'ev-noise-'||x, 'other-'||x, 'u2', 'status_changed',
@@ -169,14 +176,21 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("changes rows_read against 5,00
       const lean = await measure(() => computeLeanBrief(env, ctx, auth));
       console.log(`R21 N=${N} rows_read REST /brief=${rest.rows} MCP brief=${mcp.rows} lean brief=${lean.rows}\nREST ${rest.detail}\nchanges=${JSON.stringify((rest.value as { changes: unknown }).changes)}`);
 
-      // The fix's own bound: the raw scan is capped at RAW_EVENT_SCAN_LIMIT (1,000) plus a probe
-      // capped at 1,001, regardless of how many of the 5,000 unrelated events exist -- ~2,003 rows
-      // for the changes read alone (measured: two BATCH entries of 1,001/1,002 above), a small
-      // constant next to N. Measured / budget: 2k REST 8,592/8,900 MCP 2,706/3,000 lean 2,457/2,700
-      // 10k REST 50,032/55,000 MCP 5,426/6,000 lean 4,217/4,700.
-      expect(rest.rows).toBeLessThanOrEqual(N === 2000 ? 8900 : 55000);
-      expect(mcp.rows).toBeLessThanOrEqual(N === 2000 ? 3000 : 6000);
-      expect(lean.rows).toBeLessThanOrEqual(N === 2000 ? 2700 : 4700);
+      // T-0102 finding 7 traded this bound for correctness: the raw scan's own RAW_EVENT_SCAN_LIMIT
+      // (1,000 matching rows) still holds, but a workspace-scoped match is no longer guaranteed
+      // within the first RAW_EVENT_SCAN_LIMIT rows visited in date order -- the old, unscoped cap
+      // let another tenant's own burst in the window crowd the reader's own events out of it
+      // entirely (finding 7's own repro), silently. Fixing that means the scan must walk every
+      // non-matching row to confirm nothing is left to match once genuinely almost none of the
+      // window belongs to the reader, which this fixture (5,000 another-tenant events against 1 of
+      // the reader's own, in one 48h window) is an intentionally adversarial version of -- cost now
+      // scales with min(window activity, brain size) instead of a small constant. Still bounded
+      // (this is not unbounded, and D1's free tier is 5M rows/day), just not as cheap as the R21
+      // constant used to be. Measured / budget: 2k REST 20,602/23,000 MCP 14,716/16,500 lean
+      // 14,467/16,000; 10k REST 78,042/85,000 MCP 33,436/37,000 lean 32,227/35,500.
+      expect(rest.rows).toBeLessThanOrEqual(N === 2000 ? 23000 : 85000);
+      expect(mcp.rows).toBeLessThanOrEqual(N === 2000 ? 16500 : 37000);
+      expect(lean.rows).toBeLessThanOrEqual(N === 2000 ? 16000 : 35500);
       // Still finds the reader's own genuine change, unaffected by being outnumbered 5,000 to 1.
       expect((rest.value as { changes: { count: number } }).changes.count).toBe(1);
     } finally { await d1.close(); }

@@ -47,10 +47,10 @@ describe("getChanges() (S1)", () => {
     ).run();
   }
 
-  async function insertTrashRow(id: string, workspaceId: string, actorId: string, content: string, source = "api") {
+  async function insertTrashRow(id: string, workspaceId: string, actorId: string, content: string, source = "api", tags: string[] = []) {
     await sqlite.db.prepare(
       `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, deleted_at) VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(id, workspaceId, actorId, content, JSON.stringify({ source }), now).run();
+    ).bind(id, workspaceId, actorId, content, JSON.stringify({ source, tags }), now).run();
   }
 
   it("lists held (any channel), MCP canonical edits, capsule changes, status changes, trash moves, reverts and releases; never REST or dashboard changes; never ordinary creations or non-canonical edits", async () => {
@@ -110,10 +110,12 @@ describe("getChanges() (S1)", () => {
 
     expect(capturedBindArgs).not.toBeNull();
     const args = capturedBindArgs!;
-    // since, until, workspaces-json, actor -- exactly 4, regardless of team count
-    // (S3, T-0089.4.3: the window gained an upper bound so groupCandidates can share this
-    // same query with an exact [since, until] instead of a rolling "since Date.now()").
-    expect(args).toHaveLength(4);
+    // since, until, workspaces-json, actor, personal-workspace, actor (Q10 trash visibility, a
+    // non-admin member) -- exactly 6, regardless of team count (S3, T-0089.4.3: the window gained
+    // an upper bound so groupCandidates can share this same query with an exact [since, until]
+    // instead of a rolling "since Date.now()"; T-0102: the workspace list is now bound once for
+    // the inScope semi-join too, but it is the SAME ?3 placeholder reused, not a second bind).
+    expect(args).toHaveLength(6);
     expect(typeof args[2]).toBe("string");
     expect(() => JSON.parse(args[2] as string)).not.toThrow();
     expect((JSON.parse(args[2] as string) as string[])).toHaveLength(1 + manyTeams.length);
@@ -147,6 +149,65 @@ describe("getChanges() (S1)", () => {
     const item = result.items[0] as { id: string; preview: string | null };
     expect(item.id).toBe("trashed-1");
     expect(item.preview).toBe("Trashed content");
+  });
+
+  // Cross-vendor review MINOR (T-0102), finding 7: a "held" event is otherwise visible
+  // workspace-wide (it bypasses the actor/author check below), but a trashed row must still only
+  // surface to whoever could restore it -- the same trashRestoreClauseFor rule (Q10) listTrash
+  // applies: admin, their own personal trash, or a company row they personally deleted.
+  it("a teammate's trashed held row is hidden from a non-admin who did not delete it (Q10)", async () => {
+    await insertTrashRow("held-trashed", "ws-co", "u2", "the secret plan is X", "api", ["quarantine:instruction", "status:draft"]);
+    await insertEvent({ id: "ev-held-trashed", entryId: "held-trashed", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+    const nonAdmin = identityOf("u1", "ws-p", ["ws-co"]);
+    const result = await getChanges(env, nonAdmin);
+    expect(result.count).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("secret plan");
+  });
+
+  it("an admin still sees a teammate's trashed held row (Q10)", async () => {
+    await insertTrashRow("held-trashed", "ws-co", "u2", "the secret plan is X", "api", ["quarantine:instruction", "status:draft"]);
+    await insertEvent({ id: "ev-held-trashed", entryId: "held-trashed", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+    const admin: Identity = { userId: "u1", role: "admin", personalWorkspaceId: "ws-p", companyWorkspaceIds: ["ws-co"], defaultShare: "" };
+    const result = await getChanges(env, admin);
+    expect(result.count).toBe(1);
+    expect((result.items[0] as { id: string }).id).toBe("held-trashed");
+  });
+
+  it("the deleter themself still sees their own trashed held row (Q10)", async () => {
+    await insertTrashRow("held-trashed", "ws-co", "u1", "the secret plan is X", "api", ["quarantine:instruction", "status:draft"]);
+    await insertEvent({ id: "ev-held-trashed", entryId: "held-trashed", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+    const nonAdmin = identityOf("u1", "ws-p", ["ws-co"]);
+    const result = await getChanges(env, nonAdmin);
+    expect(result.count).toBe(1);
+    expect((result.items[0] as { id: string }).id).toBe("held-trashed");
+  });
+
+  // Cross-vendor review MINOR (T-0102), finding 7c: canRelease/canUndo must reflect real
+  // permission -- a "held" item is visible workspace-wide (so a teammate is TOLD it happened),
+  // but that is not a grant to release someone else's memory.
+  it("canRelease/canUndo reflect real permission, not mere visibility", async () => {
+    sqlite.seed({ id: "co-mem", content: "A company memory", createdAt: now - HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-co', actor_id = 'u2' WHERE id = 'co-mem'`).run();
+    await insertEvent({ id: "ev-held", entryId: "co-mem", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+    // A non-admin teammate who did not author it: sees the held alert, cannot release it.
+    const teammate = identityOf("u1", "ws-p", ["ws-co"]);
+    const asTeammate = await getChanges(env, teammate);
+    expect(asTeammate.count).toBe(1);
+    expect((asTeammate.items[0] as { canRelease?: boolean }).canRelease).toBeUndefined();
+
+    // The author themself: can release it.
+    const author = identityOf("u2", "ws-p2", ["ws-co"]);
+    const asAuthor = await getChanges(env, author);
+    expect((asAuthor.items[0] as { canRelease?: boolean }).canRelease).toBe(true);
+
+    // An admin: can release it too, authored by someone else or not.
+    const admin: Identity = { userId: "u3", role: "admin", personalWorkspaceId: "ws-p3", companyWorkspaceIds: ["ws-co"], defaultShare: "" };
+    const asAdmin = await getChanges(env, admin);
+    expect((asAdmin.items[0] as { canRelease?: boolean }).canRelease).toBe(true);
   });
 
   it("groups 14 status changes 2 minutes apart into one row with a group key; 3 more stay individual", async () => {
