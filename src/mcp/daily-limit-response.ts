@@ -42,7 +42,7 @@ export async function rewriteDailyLimitToolErrors(response: Response): Promise<R
   }
 
   if (contentType.includes("text/event-stream")) {
-    const body = await response.text();
+    const body = await response.clone().text();
     let changedAny = false;
     const rewritten = body.split("\n").map(line => {
       if (!line.startsWith("data: ")) return line;
