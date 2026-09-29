@@ -24,27 +24,42 @@ function* walk(dir: string): Generator<string> {
 
 interface Site { file: string; line: number }
 
+/** Same lookback distance check-scope.mjs and the other structural guards in this codebase use
+ * for a marker "a few lines above" a flagged line (scope-checked:, validity:, scope-outer-join:).
+ * The old value here, 2, was narrower than every other guard's own convention for no stated
+ * reason, and missed a binding aliased 3 lines above its own `.run(` (cloud re-review MINOR,
+ * held-reader-class tightening round): `const ai = env.AI` followed by two other lines before
+ * `ai.run({messages: ...})` sat entirely outside a window that only looked back 2 lines. */
+const LOOKBACK = 5;
+const CALL = /\benv\.AI\b[\s\S]*?\.run\(/;
+
+/** The pure per-line predicate: is `lines[i]` a genuine chat-completion `.run(` call, an AI
+ * binding reachable within LOOKBACK lines above it (aliased or not), passed a `messages:` or
+ * `contexts:` prompt within the next few lines? Split out from the file-walking scan so the
+ * reviewer's own probe can be asserted on directly, with no fixture file needed. */
+export function isChatCallSite(lines: string[], i: number): boolean {
+  if (!/\.run\(/.test(lines[i])) return false;
+  // The AI binding can be cast/typed on the line(s) just above a `.run(` that starts a new line
+  // after the cast closes (model-reranker.ts's shape), or aliased to a local const several lines
+  // earlier -- not always on the call's own line, and not always within a couple of lines.
+  const nearby = lines.slice(Math.max(0, i - LOOKBACK), i + 1).join("\n");
+  if (!/\bAI\b/.test(nearby) || !CALL.test(nearby)) return false;
+  // A genuine prompt-bearing call passes messages: (chat) or contexts: (the reranker) within a
+  // few lines of the call itself.
+  const window = lines.slice(i, i + 6).join("\n");
+  return /messages\s*:|contexts\s*:/.test(window);
+}
+
 /** Every genuine chat-completion call: `.run(` on an AI binding, passed a `messages:` prompt.
  * Excludes embed calls (embedMany/embed in src/lib/ai.ts), which carry no free-text prompt. */
 function scanChatCalls(): Site[] {
   const sites: Site[] = [];
-  const CALL = /\benv\.AI\b[\s\S]*?\.run\(/;
   for (const path of walk(join(ROOT, "src"))) {
     const file = relative(ROOT, path);
     if (file === "lib/ai.ts") continue; // embed/embedMany only -- no chat prompt
-    const text = readFileSync(path, "utf8");
-    const lines = text.split("\n");
+    const lines = readFileSync(path, "utf8").split("\n");
     for (let i = 0; i < lines.length; i++) {
-      if (!/\.run\(/.test(lines[i])) continue;
-      // The AI binding can be cast/typed on the line(s) just above a `.run(` that starts a new
-      // line after the cast closes (model-reranker.ts's shape), not always on the call's own line.
-      const nearby = lines.slice(Math.max(0, i - 2), i + 1).join("\n");
-      if (!/\bAI\b/.test(nearby) || !CALL.test(nearby)) continue;
-      // A genuine prompt-bearing call passes messages: (chat) or contexts: (the reranker) within
-      // a few lines of the call itself.
-      const window = lines.slice(i, i + 6).join("\n");
-      if (!/messages\s*:|contexts\s*:/.test(window)) continue;
-      sites.push({ file, line: i + 1 });
+      if (isChatCallSite(lines, i)) sites.push({ file, line: i + 1 });
     }
   }
   return sites.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -100,5 +115,21 @@ describe("every chat-completion call site's row source excludes held rows, or is
     const actual = sites.map(s => `${s.file}:${s.line}`).sort();
     const expected = ACCOUNTED_FOR.map(s => `${s.file}:${s.line}`).sort();
     expect(actual).toEqual(expected);
+  });
+});
+
+// Cloud re-review MINOR on 0b970baa: the reviewer's own probe -- an AI binding aliased 3 lines
+// above its own `.run(` call sat entirely outside the old, 2-line lookback window, so the scanner
+// never saw it at all (not flagged, not accounted for -- just invisible). Asserted directly
+// against isChatCallSite(), no fixture file needed.
+describe("structural probe the reviewer found unguarded (widened lookback)", () => {
+  it("finds a chat call whose AI binding is aliased 3 lines above it", () => {
+    const lines = [
+      "const ai = env.AI;",
+      "const rows = candidateRows;",
+      "const prompt = buildPrompt(rows);",
+      "const result = await ai.run(MODEL, { messages: [{ role: \"user\", content: prompt }] });",
+    ];
+    expect(isChatCallSite(lines, 3)).toBe(true);
   });
 });
