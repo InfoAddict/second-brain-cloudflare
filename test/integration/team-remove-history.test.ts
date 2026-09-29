@@ -4,7 +4,8 @@ import { makeTrashEnv, seedTrashRows, seedVersionsFor, type TrashEnv } from "../
 import { makeVectorizeMock } from "../helpers/make-env";
 import { createMember } from "../../src/lib/team-admin";
 import { runNightlyCleanup } from "../../src/memory/cleanup";
-import { NIGHTLY_CLEANUP_ROWS, MEMBER_HISTORY_CHUNK, MEMBER_HISTORY_MAX_CHUNKS } from "../../src/constants";
+import { drainPendingVectorDeletes } from "../../src/vectorize/batch";
+import { NIGHTLY_CLEANUP_ROWS, MEMBER_HISTORY_CHUNK, MEMBER_HISTORY_MAX_CHUNKS, VECTORIZE_DELETE_MAX_IDS_PER_CALL } from "../../src/constants";
 
 const pending: Promise<unknown>[] = [];
 const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); } } as ExecutionContext;
@@ -127,6 +128,32 @@ describe("member removal keeps history consistent", () => {
     expect(JSON.parse(ev.payload)).toMatchObject({ resumed: true, removedEntries: 1 });
     // Nothing pending on the next night: the probe finds nobody.
     expect((await runNightlyCleanup(t.env)).removalResumed).toBe(false);
+  });
+
+  it("FX3 finding 2: the nightly resume caps its own vector delete and the next drain finishes the rest", async () => {
+    const overCap = VECTORIZE_DELETE_MAX_IDS_PER_CALL + 50;
+    const vectorIds = Array.from({ length: overCap }, (_, i) => `vx-${i}`);
+    const m = await withMember({ VECTORIZE: makeVectorizeMock({ deleteByIds: vi.fn().mockResolvedValue({}) }) });
+    const P = m.personalWorkspaceId;
+    t.seed("big", { workspace_id: P, actor_id: m.userId, vector_ids: JSON.stringify(vectorIds) });
+    await seedVersionsFor(t, [], 0);
+    await t.sqlite.db.exec(`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10500)
+      INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, tags, actor_id, channel, reason, created_at)
+      SELECT 'big', '${P}', i, 'v', NULL, '[]', '', 'rest', 'update', i FROM n`);
+    expect((await remove(m.userId)).status).toBe(202);
+
+    // The nightly run finishes the D1 side (done:true) and its own vector delete is capped.
+    await runNightlyCleanup(t.env);
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'big'`)).toBeNull();
+    const deletedByNight = (t.env.VECTORIZE.deleteByIds as any).mock.calls.flat(2) as string[];
+    expect(deletedByNight).toHaveLength(VECTORIZE_DELETE_MAX_IDS_PER_CALL);
+
+    // The remainder is queued, not lost: a drain (the next night's own leading step, called here
+    // directly) finishes deleting every vector this removal ever owned.
+    await drainPendingVectorDeletes(t.env, overCap);
+    const deletedTotal = (t.env.VECTORIZE.deleteByIds as any).mock.calls.flat(2) as string[];
+    expect(new Set(deletedTotal)).toEqual(new Set(vectorIds));
   });
 
   it("the nightly run resumes at most one pending removal and at most 10 chunks", async () => {

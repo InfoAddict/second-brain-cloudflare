@@ -2,11 +2,11 @@ import type { Env } from "../env";
 import { resolveConfig, type Config } from "../config";
 import {
   MEMBER_REMOVAL_NIGHTLY_MAX, NIGHTLY_CLEANUP_ROWS, TRASH_PURGE_BATCH_ROWS, TRASH_PURGE_NIGHTLY,
-  TRASH_PURGE_NIGHTLY_MAX_BATCHES, TRASH_PURGE_NIGHTLY_ROWS,
+  TRASH_PURGE_NIGHTLY_MAX_BATCHES, TRASH_PURGE_NIGHTLY_ROWS, VECTORIZE_DELETE_MAX_IDS_PER_CALL,
 } from "../constants";
 import { writeAdminEvent } from "../lib/admin-audit";
 import { cleanupMemberData, findPendingRemoval } from "../lib/team-admin";
-import { deleteEntryVectors } from "../vectorize/batch";
+import { deleteEntryVectors, drainPendingVectorDeletes, persistPendingVectorDeletes } from "../vectorize/batch";
 import { purgeTrash } from "./trash";
 
 export interface NightlyCleanupResult {
@@ -42,6 +42,11 @@ export async function runNightlyCleanup(env: Env, ctx?: ExecutionContext): Promi
   const config = () => (cfg ??= resolveConfig(env));
   let purged = 0;
   let purgeRows = 0;
+
+  // FX3 finding 2: finishes whatever a capped deleteEntryVectors call (here or in the live
+  // member-removal route) could not reach in one invocation, before anything else below queues
+  // more. drainPendingVectorDeletes never throws — every failure inside it is already non-fatal.
+  await drainPendingVectorDeletes(env);
 
   try {
     for (let i = 0; i < TRASH_PURGE_NIGHTLY_MAX_BATCHES; i++) {
@@ -86,7 +91,10 @@ export async function runNightlyCleanup(env: Env, ctx?: ExecutionContext): Promi
       }
       if (!res.done) break;
       if (res.vectorIds.length) {
-        try { await deleteEntryVectors(env, res.ownedVectors); } catch (e) { console.error("Vectorize deleteByIds failed during member removal resume (non-fatal):", e); }
+        try {
+          const deletion = await deleteEntryVectors(env, res.ownedVectors, { maxIds: VECTORIZE_DELETE_MAX_IDS_PER_CALL });
+          if (!deletion.done) await persistPendingVectorDeletes(env, deletion.remaining);
+        } catch (e) { console.error("Vectorize deleteByIds failed during member removal resume (non-fatal):", e); }
       }
       await writeAdminEvent(env, {
         actorId: "",
