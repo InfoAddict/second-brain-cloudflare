@@ -1473,8 +1473,13 @@ export async function recallEntries(
 
   const compoundStale = computeCompoundStale(matches);
 
-  const insight = synthesize && matches.length > 1
-    ? await synthesizeInsight(lexicalQuery, matches.map(m => ({ id: m.id, content: m.content })), env, cfg)
+  // T-0102 (final cloud review, MAJOR class): as-of's own redaction already empties `content` for
+  // a held-at-T match (resolveAtT), but an entry with no text to add is still noise in a synthesis
+  // prompt -- drop it here rather than pass an empty-content row through, so the model never even
+  // sees a marker that something was hidden.
+  const synthesizable = matches.filter(m => !m.asOfHeld);
+  const insight = synthesize && synthesizable.length > 1
+    ? await synthesizeInsight(lexicalQuery, synthesizable.map(m => ({ id: m.id, content: m.content })), env, cfg)
     : "";
 
   markStage("synthesis");

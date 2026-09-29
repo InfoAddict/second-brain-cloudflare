@@ -140,9 +140,8 @@ export function withEditedCanonical(tags: readonly string[], now: number): strin
 
 /**
  * The one plain-English phrase per hold reason, shared by every agent-facing reply (5.5). `null`
- * is exhaustive-switch defense, not a live case: `isHeld`/`heldReason` are the same check now
- * (Codex review, T-0102, director follow-up), so a row this function is ever called for already
- * has a recognized reason.
+ * is exhaustive-switch defense, not a live case: `isHeld`/`heldReason` agree exactly, so a row
+ * this function is ever called for already has a recognized reason.
  */
 export function holdReasonPhrase(reason: HoldReason | null): string {
   switch (reason) {

@@ -348,7 +348,10 @@ describe("nightly cron D1 subrequest cost", () => {
     // rescan.ts itself.
     // MOVED 25 -> 26 (T-0089.2.3): the staleness pass now resolves config every night, for its
     // own volatility thresholds; its candidate SELECT is still one statement.
-    expect(statements.length).toBe(26);
+    // MOVED 26 -> 27 (FX3 finding 2): runNightlyCleanup now reads PENDING_DELETES_KV_KEY once,
+    // unconditionally, at the top of every run, to drain whatever a capped deleteEntryVectors
+    // call queued; nothing queued on this fixture, so it costs exactly the one read.
+    expect(statements.length).toBe(27);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -375,7 +378,8 @@ describe("nightly cron D1 subrequest cost", () => {
     // pass's own resolveConfig KV read plus its candidate SELECT, added then removed with
     // rescan.ts itself.
     // MOVED 26 -> 27 (T-0089.2.3): the staleness pass now resolves config every night.
-    expect(statements.length).toBe(27);
+    // MOVED 27 -> 28 (FX3 finding 2): runNightlyCleanup's unconditional PENDING_DELETES_KV_KEY read.
+    expect(statements.length).toBe(28);
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -421,7 +425,8 @@ describe("nightly cron D1 subrequest cost", () => {
     // pass's own resolveConfig KV read plus its candidate SELECT, added then removed with
     // rescan.ts itself.
     // MOVED 27 -> 28 (T-0089.2.3): the staleness pass now resolves config every night.
-    expect(statements.length).toBe(28);
+    // MOVED 28 -> 29 (FX3 finding 2): runNightlyCleanup's unconditional PENDING_DELETES_KV_KEY read.
+    expect(statements.length).toBe(29);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

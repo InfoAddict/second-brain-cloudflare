@@ -17,9 +17,8 @@ import { RETRACTED_SOURCE_TAG } from "../tags/system";
 export { RETRACTED_SOURCE_TAG };
 import { buildDerivedSnapshot, changesOf, Params, pruneStatement, snapshotStatement } from "./versions";
 import { buildStandingCache, standingTouched } from "../standing/cache";
-// Codex cross-vendor review, T-0102, director follow-up MINOR (round 2 re-review): this used to
-// hand-roll its own quarantine:-prefix LIKE check (a bare prefix match) instead of the shared
-// exact-match notHeldSqlFor (the aliased form: this query joins two tag-bearing tables).
+// This used to hand-roll its own quarantine:-prefix LIKE check instead of the shared exact-match
+// notHeldSqlFor (the aliased form: this query joins two tag-bearing tables).
 import { notHeldSqlFor } from "../quarantine/tags";
 
 /**

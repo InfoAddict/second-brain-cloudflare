@@ -16,9 +16,10 @@ import { OWED_TO_ME_TAG } from "../commitments/direction";
 import { standingTouched, type StandingCacheConfig } from "../standing/cache";
 import { buildOutcomeUpdate, isLedgerDecision, outcomeNoteText, type DecisionOutcomeResult } from "../decisions/outcome";
 import { auditValidity, retractionHook, RETRACTED_SOURCE_TAG, type ValidityHook } from "./validity";
+import { isHeld } from "../quarantine/tags";
 
 export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true" | "received" | "stop_standing";
-export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number; content?: string } | { ok: false; error: string; status: number };
+export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number; content?: string; held?: boolean } | { ok: false; error: string; status: number };
 export type OutcomeActionResult =
   { ok: true; id: string; reply: string; reviewAt: number | null; reviewsDone: boolean }
   | { ok: false; error: string; status: number };
@@ -178,7 +179,9 @@ export async function resolveEntryAction(
       return {
         ok: true, id, action,
         ...(action === "snooze" ? { when_at: until } : {}),
-        ...(action === "received" ? { content: row.content as string } : {}),
+        // T-0102 MINOR fix: a held row's content must never echo into the reply, even for an
+        // action the row's own guard (OWED_TO_ME_TAG) permits regardless of hold status.
+        ...(action === "received" ? { content: isHeld(tags) ? "" : (row.content as string), held: isHeld(tags) } : {}),
       };
     }
   }
@@ -223,7 +226,11 @@ export async function resolveDecisionOutcome(
 
     const priorWhen = { when_at: row.when_at ?? null, when_kind: row.when_kind ?? null, when_label: row.when_label ?? null, when_source: row.when_source ?? null };
     const now = Date.now();
-    const update = buildOutcomeUpdate(tags, result, row.content as string, now, { reviewDefaultDays: cfg.DECISION_REVIEW_DEFAULT_DAYS, timezone: cfg.TIMEZONE });
+    // T-0102 MINOR fix: buildOutcomeUpdate's `content` param feeds only its reply's
+    // shortDecision(...) subject (see its own doc comment) -- never the write itself (nextContent,
+    // below, always reads the real row.content) -- so a held row gets a blind, grammatical subject
+    // ("it") in the reply text without touching what gets written or reverted.
+    const update = buildOutcomeUpdate(tags, result, isHeld(tags) ? "it" : (row.content as string), now, { reviewDefaultDays: cfg.DECISION_REVIEW_DEFAULT_DAYS, timezone: cfg.TIMEZONE });
     const trimmedNote = note?.trim();
     const nextContent = trimmedNote ? `${row.content as string}${outcomeNoteSuffix(result, trimmedNote, now)}` : (row.content as string);
     const casColumns = { tags: row.tags, content: row.content, workspace_id: row.workspace_id, ...priorWhen };

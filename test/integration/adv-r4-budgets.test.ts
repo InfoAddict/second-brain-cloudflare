@@ -153,7 +153,7 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
 
     // Real measured cost of the busiest realistic night, on real SQLite: 65-69 D1 executions (a
     // batch counts as one; the exact figure is sensitive to which other tests already ran in this
-    // process) + 22 KV calls, well under the platform's real 1,000-subrequest ceiling either way.
+    // process) + 26 KV calls, well under the platform's real 1,000-subrequest ceiling either way.
     // MOVED 70 -> 72 (T-0089.1.1 close-out): the nightly vectorize-pending pass, a read plus one write batch.
     expect(L.calls.length).toBeGreaterThanOrEqual(60);
     // MOVED 72 -> 73 (T-0089.1.1 round 3): the pass's content read of the rows it chose.
@@ -164,7 +164,8 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // pass's own resolveConfig KV read, added then removed with rescan.ts itself.
     // MOVED 24 -> 25 (T-0089.2.3): the staleness pass now resolves config every night, for its own
     // volatility thresholds (STALE_AFTER_DAYS_VOLATILE/STATE), not only on a deferred-rows night.
-    expect(L.kv.length).toBe(25);
+    // MOVED 25 -> 26 (FX3 finding 2): runNightlyCleanup's unconditional PENDING_DELETES_KV_KEY read.
+    expect(L.kv.length).toBe(26);
     // The cron makes no external (non-Cloudflare) fetches at all, so it is nowhere near the
     // separate 50-external-fetch cap either.
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -187,7 +188,8 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // MOVED 21 -> 22 -> 21 (T-0089.4.2, Lane W follow-up, then withdrawn): the quarantine rescan
     // pass's own resolveConfig KV read, added then removed with rescan.ts itself.
     // MOVED 21 -> 22 (T-0089.2.3): the staleness pass now resolves config every night.
-    expect(L.kv.length).toBe(22);
+    // MOVED 22 -> 23 (FX3 finding 2): runNightlyCleanup's unconditional PENDING_DELETES_KV_KEY read.
+    expect(L.kv.length).toBe(23);
   });
 });
 

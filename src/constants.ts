@@ -340,6 +340,14 @@ export const MEMBER_HISTORY_CHUNK = 1000;
 export const MEMBER_HISTORY_SLICE = 1000;
 export const MEMBER_HISTORY_MAX_CHUNKS = 10;
 export const MEMBER_REMOVAL_NIGHTLY_MAX = 1;
+/**
+ * Vector ids deleteEntryVectors checks and deletes in one call, when a caller opts into the cap
+ * (FX3 finding 2). At VECTORIZE_GET_BY_IDS_BATCH that is at most 30 getByIds calls plus one
+ * deleteByIds — comfortably under the platform's 1,000-subrequest ceiling with room left for
+ * everything else the same invocation does, for a removed member's vectors that can run into the
+ * tens of thousands.
+ */
+export const VECTORIZE_DELETE_MAX_IDS_PER_CALL = 600;
 /** Undo: a to_version rollback re-creates one row per merge it crosses, but only re-embeds this
  * many inline (AI + Vectorize, one call each) — at VERSION_KEEP's ceiling that could otherwise be
  * hundreds of merges in one request, over the platform's per-invocation service subrequest limit.

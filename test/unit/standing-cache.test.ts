@@ -84,8 +84,7 @@ describe("buildStandingCache", () => {
     insertEntry(sqlite, { id: "keep", tags: ["standing:active"], createdAt: 1 });
     insertEntry(sqlite, { id: "deprecated", tags: ["standing:active", "status:deprecated"], createdAt: 2 });
     insertEntry(sqlite, { id: "held", tags: ["standing:active", "conflict-held"], createdAt: 3 });
-    // A recognized reason (director follow-up, T-0102, round 2 re-review): isHeld/NOT_HELD_SQL
-    // now match the five exact reasons this Worker writes, not any quarantine:-prefixed value.
+    // A recognized reason: isHeld/NOT_HELD_SQL match the five exact reasons this Worker writes.
     insertEntry(sqlite, { id: "quarantined", tags: ["standing:active", "quarantine:hidden"], createdAt: 4 });
     const { vectorize } = makeStandingVectorize({ keep: [1, 1], deprecated: [1, 1], held: [1, 1], quarantined: [1, 1] });
     const { kv } = makeStandingKV();
@@ -244,6 +243,41 @@ describe("buildStandingCache", () => {
     expect(puts).toHaveLength(0); // and the race was caught: no redundant write over the winner's identical result
   });
 
+  it("FX3 finding 5: refreshes builtAt when a stale cache's content is unchanged, instead of skipping the write forever", async () => {
+    insertEntry(sqlite, { id: "m", createdAt: 1, vectorIds: ["m"] });
+    const { vectorize } = makeStandingVectorize({ m: [1, 1] });
+    const staleButIdentical: StandingCacheV1 = {
+      v: 1, model: cfg.EMBEDDING_MODEL, dim: cfg.EMBEDDING_DIM, builtAt: 0,
+      items: [{ id: "m", projects: [], createdAt: 1, vecs: [encodeVector([1, 1])] }],
+    };
+    const { kv, puts } = makeStandingKV({ [standingKvKey("ws-a")]: staleButIdentical });
+    const env = envFor(sqlite, vectorize, kv);
+    const now = STANDING_CACHE_MAX_AGE_MS + 1;
+
+    const cache = await buildStandingCache(env, cfg, "ws-a", [], { now });
+
+    // Old behavior: sameContent ignored builtAt and skipped this write, so the stored builtAt
+    // never advanced and readStandingCaches would call this stale again on every future read.
+    expect(puts).toHaveLength(1);
+    expect(puts[0].value).toMatchObject({ builtAt: now, items: staleButIdentical.items });
+    expect(cache.builtAt).toBe(now);
+  });
+
+  it("still skips the write when content is unchanged and the stored cache is not yet stale", async () => {
+    insertEntry(sqlite, { id: "m", createdAt: 1, vectorIds: ["m"] });
+    const { vectorize } = makeStandingVectorize({ m: [1, 1] });
+    const fresh: StandingCacheV1 = {
+      v: 1, model: cfg.EMBEDDING_MODEL, dim: cfg.EMBEDDING_DIM, builtAt: 1000,
+      items: [{ id: "m", projects: [], createdAt: 1, vecs: [encodeVector([1, 1])] }],
+    };
+    const { kv, puts } = makeStandingKV({ [standingKvKey("ws-a")]: fresh });
+    const env = envFor(sqlite, vectorize, kv);
+
+    await buildStandingCache(env, cfg, "ws-a", [], { now: 1000 + 1000 }); // well inside STANDING_CACHE_MAX_AGE_MS
+
+    expect(puts).toHaveLength(0);
+  });
+
   it("the cache-build read is served by idx_entries_standing (EXPLAIN QUERY PLAN)", async () => {
     // Mirrors buildStandingCacheNow's own query text (src/standing/cache.ts) — kept as a
     // literal here, like test/unit/compress-held-plan.test.ts's raw-SQL checks, because the
@@ -254,7 +288,7 @@ describe("buildStandingCache", () => {
           AND instr(lower(tags), '"standing:active"') > 0
           AND tags NOT LIKE '%"status:deprecated"%'
           AND tags NOT LIKE '%"conflict-held"%'
-          AND tags NOT LIKE '%"quarantine:%'
+          AND tags NOT LIKE '%"quarantine:instruction"%' AND tags NOT LIKE '%"quarantine:hidden"%' AND tags NOT LIKE '%"quarantine:burst"%' AND tags NOT LIKE '%"quarantine:capsule"%' AND tags NOT LIKE '%"quarantine:too_long"%'
         ORDER BY created_at ASC, id ASC
         LIMIT ?2`,
     ).bind("ws-a", 50).all()).results as { detail: string }[];

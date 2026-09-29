@@ -13,10 +13,12 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import worker from "../../src/index";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
-import { makeTestEnv, makeVectorizeMock, ownedBy } from "../helpers/make-env";
+import { makeTestEnv, makeMemoryKV, makeVectorizeMock, ownedBy } from "../helpers/make-env";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { createMember } from "../../src/lib/team-admin";
+import { drainPendingVectorDeletes } from "../../src/vectorize/batch";
+import { VECTORIZE_DELETE_MAX_IDS_PER_CALL } from "../../src/constants";
 import type { Env } from "../../src/env";
 
 const BASE = "http://localhost";
@@ -106,5 +108,35 @@ describe("POST /team/members/remove with a failing Vectorize index", () => {
     await settle();
 
     expect(env.VECTORIZE.deleteByIds).toHaveBeenCalledWith(["v-p2"]);
+  });
+
+  it("FX3 finding 2: a removal with more vectors than one call's cap still answers 200, deletes only up to the cap, and queues the rest for the nightly drain", async () => {
+    const { member } = await createMember(env, { name: "Ada" });
+    const overCap = VECTORIZE_DELETE_MAX_IDS_PER_CALL + 1;
+    const ids = Array.from({ length: overCap }, (_, i) => `v-p3-${i}`);
+    await sqlite.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id)
+       VALUES ('p3', 'private', '[]', 'api', 1, ?, ?, ?)`,
+    ).bind(JSON.stringify(ids), member.personalWorkspaceId, member.userId).run();
+
+    const owners = Object.fromEntries(ids.map((id) => [id, "p3"]));
+    env.VECTORIZE = makeVectorizeMock({ getByIds: ownedBy(owners) });
+    // The nightly drain must see what this call queued: the default OAUTH_KV double never
+    // actually stores anything (see makeKVMock's own comment), so this test needs the stateful one.
+    env.OAUTH_KV = makeMemoryKV();
+
+    const res = await removeRequest(member.userId);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean; removedEntries: number; removedVectors: number };
+    expect(body).toMatchObject({ ok: true, removedEntries: 1, removedVectors: VECTORIZE_DELETE_MAX_IDS_PER_CALL });
+    await settle();
+
+    const deletedByFirstCall = (env.VECTORIZE.deleteByIds as any).mock.calls.flat(2) as string[];
+    expect(deletedByFirstCall).toHaveLength(VECTORIZE_DELETE_MAX_IDS_PER_CALL);
+
+    // The nightly drain finishes the one id the route's own call could not reach.
+    await drainPendingVectorDeletes(env, overCap);
+    const deletedTotal = (env.VECTORIZE.deleteByIds as any).mock.calls.flat(2) as string[];
+    expect(new Set(deletedTotal)).toEqual(new Set(ids));
   });
 });

@@ -15,6 +15,19 @@
  * REST /entry, /export, /list and the dashboard are deliberately NOT in this
  * inventory: those are human-facing surfaces (P7), and keeping full content
  * there is correct, not a leak.
+ *
+ * T-0102 (final cloud review): the same two policies now also cover text
+ * this Worker itself rebuilds or echoes, not just a row's own live content --
+ * a version-rebuilt reconstruction (as-of, get(version), the history
+ * preview: content that was true at a past moment, or before a specific
+ * change, can be held even when the row's CURRENT tags are not) and a reply
+ * that echoes a row's content back (resolve's received/outcome subjects).
+ * The version-rebuilt and trash-preview surfaces have their own dedicated,
+ * more detailed proofs (test/unit/as-of-state.test.ts,
+ * test/integration/entry-version.test.ts, entry-history.test.ts,
+ * trash-list.test.ts, mcp-list-trash.test.ts); the test below is the one
+ * place that walks get(version) and resolve(received) end to end, the same
+ * way the test above does for the older surfaces.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -79,6 +92,9 @@ describe("held text: the agent-facing reader inventory", () => {
     seedHeld("held-list");
     seedHeld("held-due", { whenAt: Date.now() + 1000 });
     seedHeld("held-seed");
+    // isHeld matches only the app's five recognized hold reasons, not the whole quarantine:
+    // prefix -- a pre-4.0 user tag (`quarantine:review`) must NOT hold the row.
+    sqlite.seed({ id: "not-held-unknown", content: "an ordinary note tagged quarantine:review before 4.0 existed", createdAt: Date.now(), tags: ["quarantine:review"] });
     sqlite.seed({ id: "readable-neighbor", content: "an ordinary note", createdAt: Date.now() });
     sqlite.db.prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'readable-neighbor'`)
       .bind(identity.personalWorkspaceId, identity.userId).run();
@@ -98,10 +114,16 @@ describe("held text: the agent-facing reader inventory", () => {
     const listed = await call("list_recent", { n: 10 });
     expect(listed, "list_recent").toContain("held-list");
     expect(listed, "list_recent").not.toContain(HELD_MARKER);
+    // An unrecognized quarantine: value is not held: its content shows normally.
+    expect(listed, "list_recent (unrecognized reason)").toContain("not-held-unknown");
+    expect(listed, "list_recent (unrecognized reason)").toContain("quarantine:review before 4.0 existed");
 
     // get: the agent asked for this id by name, so it is shown, warned first.
     const got = await call("get", { id: "held-list" });
     expect(got, "get").toMatch(/^Held out of recall:/);
+    const gotUnknown = await call("get", { id: "not-held-unknown" });
+    expect(gotUnknown, "get (unrecognized reason, not held)").not.toMatch(/^Held out of recall:/);
+    expect(gotUnknown, "get (unrecognized reason, not held)").toContain("quarantine:review before 4.0 existed");
 
     // brief (MCP, agent-facing)
     const brief = await call("brief");
@@ -121,5 +143,29 @@ describe("held text: the agent-facing reader inventory", () => {
     expect(neighbors.map(n => n.id)).not.toContain("held-seed");
     const connections = await getConnections("readable-neighbor", undefined, env, undefined, identity);
     expect(JSON.stringify(connections), "graph (getConnections)").not.toContain(HELD_MARKER);
+  });
+
+  // T-0102: the class extended to version-rebuilt text and reply echoes -- get(version) and
+  // resolve(received), walked end to end through the real MCP layer the way every reader above is.
+  it("get(version) warns instead of showing a held version's text; resolve(received) blinds the reply subject", async () => {
+    sqlite.seed({ id: "e1", content: "Y, the approved text", createdAt: Date.now(), tags: [] });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'e1'`)
+      .bind(identity.personalWorkspaceId, identity.userId).run();
+    // A hold version (Codex cross-vendor review MAJOR, T-0102 finding 2): reason "status", meta.hold
+    // set, content unchanged from what it held (the marker), pre-hold (unheld) tags.
+    sqlite.db.prepare(
+      `INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, tags, state, actor_id, channel, reason, meta, valid_from, created_at)
+       VALUES ('e1', ?, 1, ?, NULL, '[]', '{}', ?, 'rest', 'status', ?, NULL, ?)`,
+    ).bind(identity.personalWorkspaceId, HELD_MARKER, identity.userId, JSON.stringify({ hold: { reasons: ["instruction"], score: 1, signals: [] } }), Date.now()).run();
+
+    const version = await call("get", { id: "e1", version: 1 });
+    expect(version, "get(version)").toMatch(/^\[version 1 of e1/);
+    expect(version, "get(version)").not.toContain(HELD_MARKER);
+
+    sqlite.seed({ id: "owed1", content: HELD_MARKER, createdAt: Date.now(), tags: [...HELD_TAGS, "task", "owed-to-me", "counterparty:priya"] });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'owed1'`)
+      .bind(identity.personalWorkspaceId, identity.userId).run();
+    const received = await call("resolve", { id: "owed1", action: "received" });
+    expect(received, "resolve(received)").not.toContain(HELD_MARKER);
   });
 });

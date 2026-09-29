@@ -3,9 +3,6 @@ import type { Config } from "../config";
 import type { Env } from "../env";
 import { encodeVector, parseStandingCache, type StandingCacheItem, type StandingCacheV1 } from "./codec";
 import { currentValidityAt } from "../memory/validity";
-// Codex cross-vendor review, T-0102, director follow-up MINOR (round 2 re-review): this used to
-// hand-roll its own quarantine:-prefix LIKE check (a bare prefix match) instead of the shared
-// exact-match NOT_HELD_SQL.
 import { NOT_HELD_SQL } from "../quarantine/tags";
 
 /** The config keys this module needs. Passed explicitly (Task 3: "no config.ts edit is needed yet"); STANDING_MAX and EMBEDDING_DIM are Task 6 additions to DEFAULTS, EMBEDDING_MODEL already exists there today. */
@@ -135,7 +132,13 @@ async function buildStandingCacheNow(
   // was running. Any valid computation is as good as any other (P7.4), so skipping a redundant identical write
   // loses nothing.
   const justWritten = parseStandingCache(await env.OAUTH_KV.get(key, "json"), { model: cfg.EMBEDDING_MODEL, dim: cfg.EMBEDDING_DIM });
-  if (!sameContent(cache, justWritten)) {
+  // FX3 finding 5: sameContent ignores builtAt by design (a redundant write of identical content
+  // is pointless), but skipping unconditionally left the STORED builtAt never advancing once
+  // content stabilized — readStandingCaches saw it as permanently stale past STANDING_CACHE_MAX_AGE_MS
+  // and rescheduled a rebuild on every read forever, at most 60 seconds apart. Once the stored
+  // value has actually gone stale, write anyway, purely to refresh builtAt and reset that clock.
+  const storedIsStale = !justWritten || now - justWritten.builtAt > STANDING_CACHE_MAX_AGE_MS;
+  if (!sameContent(cache, justWritten) || storedIsStale) {
     const value = JSON.stringify(cache);
     try {
       await env.OAUTH_KV.put(key, value);

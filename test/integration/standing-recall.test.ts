@@ -128,10 +128,7 @@ describe("standing fires in recall", () => {
   it.each([
     ["stopped (tag removed)", { tags: ["work"] }],
     ["deprecated", { tags: ["standing:active", "status:deprecated"] }],
-    // Codex review, T-0102 A: isHeld now requires the exact pairing withHold writes
-    // (quarantine:<reason> AND status:draft); a bare quarantine:-prefixed tag alone no longer
-    // holds a row (that was the 3.7-legacy-tag bug this finding fixed).
-    ["held", { tags: ["standing:active", "quarantine:instruction", "status:draft"] }],
+    ["held", { tags: ["standing:active", "quarantine:instruction"] }],
   ])("a %s row never fires even with a stale cache saying it should", async (_label, rowOverrides) => {
     const { ai } = aiFor();
     const { env, ctx, sqlite, kv } = await setup({ ai });
@@ -263,7 +260,7 @@ describe("GET /standing", () => {
   });
 
   it("reports a held row as held, never firing", async () => {
-    insertEntry(sqlite, { id: "held", workspaceId: "", tags: ["standing:active", "quarantine:instruction", "status:draft"] });
+    insertEntry(sqlite, { id: "held", workspaceId: "", tags: ["standing:active", "quarantine:instruction"] });
     await seedStandingCache(env.OAUTH_KV, "", [{ id: "held", vec: ON_TOPIC }]);
 
     const res = await call("GET", "/standing");

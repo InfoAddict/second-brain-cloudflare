@@ -112,6 +112,7 @@ function asOfMarkers(m: RecallMatch, timezone: string): string {
   }
   if (m.asOfPruned) parts.push(" · text before that date is not kept");
   if (m.asOfTextHidden) parts.push(" · earlier text is not visible to you");
+  if (m.asOfHeld) parts.push(" · the text at that date was held and is not shown");
   return parts.join("");
 }
 

@@ -70,15 +70,20 @@ describe("public/utils.js hides both prefixes", () => {
 });
 
 describe("NOT_HELD_SQL excludes a row only for the five exact reasons this Worker writes", () => {
+  const REASONS = ["instruction", "hidden", "burst", "capsule", "too_long"];
+
   it("matches the exact literal: one exact-format NOT LIKE clause per HoldReason, ANDed, ESCAPEd", () => {
-    const reasons = ["instruction", "hidden", "burst", "capsule", "too_long"];
     expect(NOT_HELD_SQL).toBe(
-      reasons.map(r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r.replace("_", "\\_")}"%' ESCAPE '\\'`).join(" AND "),
+      REASONS.map(r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r.replace("_", "\\_")}"%' ESCAPE '\\'`).join(" AND "),
     );
   });
 
   it("carries no bound placeholder", () => {
     expect(NOT_HELD_SQL).not.toContain("?");
+  });
+
+  it("carries exactly two percent signs per clause, the leading and trailing wildcards", () => {
+    expect(NOT_HELD_SQL.match(/%/g)?.length).toBe(REASONS.length * 2);
   });
 
   it("escapes too_long's underscore, so it can't act as LIKE's single-character wildcard", () => {
@@ -87,16 +92,12 @@ describe("NOT_HELD_SQL excludes a row only for the five exact reasons this Worke
     expect(tooLongClause).toContain("ESCAPE '\\'");
   });
 
-  // Round 3 re-review NIT: NOT_HELD_SQL's LIKE pattern is an EXACT literal match against the
-  // stored JSON array element ('%"quarantine:instruction"%') -- it has no way to trim whitespace
-  // itself, unlike heldReason/isHeld's own `.trim()` in JS. The two only agree because every write
-  // boundary trims a tag before it is ever stored, so a stray space can never reach either check.
-  // This asserts that invariant holds at the actual writer, not just assumed.
+  // NOT_HELD_SQL's LIKE pattern is an EXACT literal match against the stored JSON array element --
+  // it has no way to trim whitespace itself, unlike heldReason/isHeld's own `.trim()` in JS. The
+  // two only agree because every write boundary trims a tag before it is ever stored.
   it("a tag trims before it is ever stored, so the SQL's untrimmed exact match and the JS's trimmed one never disagree", () => {
     const stored = normalizeTagList([" work ", ` ${QUARANTINE_TAG_PREFIX}instruction `, "\tstatus:canonical\n"]);
     expect(stored).toEqual(["work", `${QUARANTINE_TAG_PREFIX}instruction`, "status:canonical"]);
-    // The stored (trimmed) form is exactly what NOT_HELD_SQL's own literal expects: a JSON array
-    // whose element has no leading/trailing whitespace inside the quotes.
     const asStored = JSON.stringify(stored);
     expect(asStored).toContain(`"${QUARANTINE_TAG_PREFIX}instruction"`);
     expect(isHeld(stored)).toBe(true);

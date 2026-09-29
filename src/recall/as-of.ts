@@ -13,7 +13,7 @@ import type { Identity } from "../lib/identity";
 import { scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus, type MemoryStatus } from "../memory/status";
-import { buildChain, workspaceReadable, type VersionRow } from "../memory/versions";
+import { buildChain, workspaceReadable, textHeldAt, wasReleasedContent, type VersionRow } from "../memory/versions";
 import { currentValidityAt, EFFECTIVE_FROM } from "../memory/validity";
 import { NOT_HELD_SQL } from "../quarantine/tags";
 import type { RecallMatch, RetractedBelief } from "./types";
@@ -67,13 +67,21 @@ function parseTagsSafe(raw: string): string[] {
   }
 }
 
-export interface AtT { content: string; tags: string[]; changedAt: number | null; statusAt: MemoryStatus | null; pruned: boolean; textHidden: boolean }
+export interface AtT { content: string; tags: string[]; changedAt: number | null; statusAt: MemoryStatus | null; pruned: boolean; textHidden: boolean; heldAtT: boolean }
 
 /**
  * `text`/`tags` a match had at T, from its full stored version chain (buildChain, Track 1): the
  * newest contiguous run whose `created_at > T` are the changes made after T (item 6), so the text
  * just before the oldest of them is the text at T. `pruned` marks a chain that ran out of stored
  * history (VERSION_KEEP eviction) before crossing T; `textHidden` marks one D-SH cut first.
+ *
+ * `heldAtT` (Codex cross-vendor review MAJOR, T-0102): the current row may be releasable and
+ * unheld today, but the text this rebuilds is whatever it was at T -- which can be a version that
+ * WAS held then (update(X), held; edited to Y while held; released -- only Y was ever approved).
+ * Nothing downstream re-checks isHeld on version-rebuilt tags, and synthesize defaults to true, so
+ * an unguarded `content` here would put unreviewed historical text into a model prompt and the
+ * caller's own reply. `content` is redacted to "" whenever the resolved tags were held: the one
+ * choke point every as-of output (matches, synthesis, the MCP/REST reply) flows through.
  */
 export function resolveAtT(match: RecallMatch, rowsNewestFirst: AsOfVersionRow[], canRead: (ws: string) => boolean, asOf: number): AtT {
   const chain = buildChain(match.content, rowsNewestFirst, canRead);
@@ -83,15 +91,27 @@ export function resolveAtT(match: RecallMatch, rowsNewestFirst: AsOfVersionRow[]
   const crossedT = cut < chain.rows.length; // a kept row exists with created_at <= T
   if (!retired.length) {
     const textHidden = chain.truncatedAt === "unreadable" && chain.rows.length === 0;
-    return { content: match.content, tags: match.tags, changedAt: null, statusAt: getStatus(match.tags), pruned: false, textHidden };
+    // match.tags is the CURRENT row's tags, already filtered NOT_HELD_SQL by recall's own
+    // candidate SQL -- no version was rebuilt here, so there is nothing to re-check.
+    return { content: match.content, tags: match.tags, changedAt: null, statusAt: getStatus(match.tags), pruned: false, textHidden, heldAtT: false };
   }
   const oldestRetired = retired[retired.length - 1];
   const tags = parseTagsSafe(oldestRetired.tags);
+  const historicalText = chain.text(oldestRetired.seq);
+  // Cloud re-review MAJOR (T-0102, on top of 0b970baa): a version whose text a LATER release (5.6)
+  // vouched for must read as approved at every as-of date, not only ones where it also happens to
+  // match the row's CURRENT content -- a further edit after the release used to flip this same
+  // text from "shown" back to "hidden" depending on which T a caller asked for, which is exactly
+  // backwards (the review moment does not depend on what changed afterward). wasReleasedContent is
+  // the one rule history-view.ts's buildEntryHistoryFromReads and readEntryVersionFromRow (the
+  // history list and get(version)) now share with this function.
+  const heldAtT = textHeldAt(oldestRetired) && !wasReleasedContent(chain, historicalText);
   return {
-    content: chain.text(oldestRetired.seq),
+    content: heldAtT ? "" : historicalText,
     tags,
     changedAt: oldestRetired.created_at,
     statusAt: getStatus(tags),
+    heldAtT,
     pruned: !crossedT && chain.truncatedAt === "none" && oldestRetired.seq > 1,
     textHidden: !crossedT && chain.truncatedAt === "unreadable",
   };
@@ -180,6 +200,7 @@ export async function enrichWithAsOf(
       recordedAfterAsOf: match.createdAt > asOf,
       asOfPruned: resolved.pruned,
       asOfTextHidden: resolved.textHidden,
+      asOfHeld: resolved.heldAtT,
       retractedBelief: null,
     };
   });

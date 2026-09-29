@@ -26,9 +26,9 @@ import { createMember } from "../../src/lib/team-admin";
 import { resolveIdentityFromToken, type Identity } from "../../src/lib/identity";
 import { VERSIONS_SINCE_KV_KEY } from "../../src/constants";
 import { DEFAULTS } from "../../src/config";
+import { isHeld, NOT_HELD_SQL, heldReason } from "../../src/quarantine/tags";
 import type { Env } from "../../src/env";
 import { recallEntries } from "../../src/recall/search";
-import { isHeld, heldReason } from "../../src/quarantine/tags";
 
 // A string path, not new URL(...): a duplicate global URL type (DOM lib vs node:url) makes
 // readFileSync's URL overload unresolvable under this project's tsconfig. Same convention as
@@ -128,6 +128,25 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     ).first()).n as number;
     expect(ledgerCount).toBe(0);
     expect(standingCount).toBe(0);
+  });
+
+  it("MINOR (T-0102): a 3.7.0 user tag that merely starts with 'quarantine:' is not held after the upgrade", async () => {
+    // A genuine pre-4.0 user tag ("quarantine:review" -- their own word, written long before the
+    // hold mechanism existed): its value is not one of the app's five recognized hold reasons, so
+    // it must never read as held. Before the fix, isHeld matched the whole prefix: this row would
+    // read as held with no hold version ever written for it, so undo could never release it.
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'needs a second look before the audit', '["quarantine:review"]', 'api', 1000, '[]')`);
+    env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
+
+    await initializeDatabase(env);
+
+    const row = (await (d1.db as any).prepare(`SELECT tags FROM entries WHERE id = 'e1'`).first()) as { tags: string };
+    expect(isHeld(JSON.parse(row.tags))).toBe(false);
+
+    // The real SQL predicate every candidate query filters through, not just the JS helper: a
+    // held row would be excluded here.
+    const found = (await (d1.db as any).prepare(`SELECT id FROM entries WHERE id = 'e1' AND ${NOT_HELD_SQL}`).first()) as { id: string } | null;
+    expect(found?.id).toBe("e1");
   });
 
   it("a second cold start issues only the probe, no more CREATEs", async () => {

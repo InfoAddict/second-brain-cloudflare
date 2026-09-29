@@ -1551,6 +1551,14 @@ describe("the checker over the real source tree", () => {
     // FROM entries (guarded by entriesGuardSql, plus a NOT EXISTS on entries_trash) instead of a
     // bare json_each(...) -- a genuinely new corpus-table read, scope-exempt the same way the
     // entries DELETE it shares a guard with already is.
+    //
+    // Merge of release/v4 1cbc817b into v4/gate-fx2: brief/changes.ts's own changeEventRows carried
+    // an independent delta on this lane's own base (236/116/35 -> 237/116/36 -> 236/116/35, net no
+    // change): finding 7 added an inScope workspace semi-join as its own scope-checked query, R22
+    // (budget auditor MAJOR) then replaced that semi-join with a per-row JOIN inside the
+    // already-1,000-row-capped raw scan (still scope-checked, a JS-assembled fragment), landing
+    // back on the pre-finding-7 count underneath a materially cheaper query. Recomputed against the
+    // real scanner output on the merged tree, not hand-combined.
     ).toEqual({ queries: 242, exempt: 119, checked: 36, outerJoin: 1 });
   });
 

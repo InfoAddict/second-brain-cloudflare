@@ -109,6 +109,9 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   // gate fix, the supersede-close touch, updateEntryContent and appendToEntry) are independently-
   // tracked from the same base c870e5ac — recomputed against the real scanner output on the
   // merged tree, not hand-combined.
+  // MOVED (merge of release/v4 1cbc817b into v4/gate-fx2): FX1's own actions.ts/undo.ts/validity.ts/
+  // admin.ts deltas and this lane's own round 4/5/6 deltas are independently-tracked from the same
+  // base — recomputed against the real scanner output on the merged tree, not hand-combined.
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt', standing: 'exempt: importance_score only, no tags column' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt', standing: 'exempt: withKind/withStatus only add or replace the kind/canonical marker; standing:active (if present) survives unchanged either way' },
   { file: 'src/capture/entry.ts', line: 370, kind: 'snapshot', standing: 'exempt: a system job merges only into what a system job wrote (isSystemRow), which a person\'s standing capture never is' },
@@ -132,29 +135,29 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/integrations/mirror.ts', line: 207, kind: 'snapshot', standing: 'exempt: mirrors cannot carry standing:active — 1.3 strips it via stripT7CallerTags before mirror tags are built' },
   { file: 'src/lib/team-admin.ts', line: 615, kind: 'hard-delete', standing: 'touch' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt', standing: 'exempt: one-time pre-v3 tenancy bootstrap moving every legacy "" row to the new owner workspace; a legacy standing row would need a cache rebuild after migration, which the 24h revalidation (P7.4) supplies on its own' },
-  { file: 'src/memory/actions.ts', line: 73, kind: 'snapshot', standing: 'exempt: withoutStaleAsOf/RETRACTED_SOURCE_TAG only, never touches standing:active' },
-  { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot', standing: 'exempt: withTaskDone/withoutTask only, never touches standing:active' },
-  { file: 'src/memory/actions.ts', line: 145, kind: 'snapshot', standing: 'touch' },
-  { file: 'src/memory/actions.ts', line: 157, kind: 'snapshot', standing: 'exempt: when_at only, no tags column' },
-  { file: 'src/memory/actions.ts', line: 169, kind: 'snapshot', standing: 'exempt: when_* only, no tags column' },
-  { file: 'src/memory/actions.ts', line: 250, kind: 'snapshot', standing: 'exempt: a decision outcome; decision and standing are mutually exclusive at capture (2.1/4.1)' },
-  { file: 'src/memory/actions.ts', line: 291, kind: 'snapshot', standing: 'exempt: auto-insight rows are system-generated candidates, never standing:active' },
-  { file: 'src/memory/actions.ts', line: 303, kind: 'snapshot', standing: 'exempt: auto-insight rows are system-generated candidates, never standing:active' },
+  { file: 'src/memory/actions.ts', line: 74, kind: 'snapshot', standing: 'exempt: withoutStaleAsOf/RETRACTED_SOURCE_TAG only, never touches standing:active' },
+  { file: 'src/memory/actions.ts', line: 132, kind: 'snapshot', standing: 'exempt: withTaskDone/withoutTask only, never touches standing:active' },
+  { file: 'src/memory/actions.ts', line: 146, kind: 'snapshot', standing: 'touch' },
+  { file: 'src/memory/actions.ts', line: 158, kind: 'snapshot', standing: 'exempt: when_at only, no tags column' },
+  { file: 'src/memory/actions.ts', line: 170, kind: 'snapshot', standing: 'exempt: when_* only, no tags column' },
+  { file: 'src/memory/actions.ts', line: 257, kind: 'snapshot', standing: 'exempt: a decision outcome; decision and standing are mutually exclusive at capture (2.1/4.1)' },
+  { file: 'src/memory/actions.ts', line: 298, kind: 'snapshot', standing: 'exempt: auto-insight rows are system-generated candidates, never standing:active' },
+  { file: 'src/memory/actions.ts', line: 310, kind: 'snapshot', standing: 'exempt: auto-insight rows are system-generated candidates, never standing:active' },
   { file: 'src/memory/trash.ts', line: 305, kind: 'trash', standing: 'touch' },
   { file: 'src/memory/trash.ts', line: 731, kind: 'exempt', standing: 'touch' },
-  { file: 'src/memory/undo.ts', line: 198, kind: 'snapshot', standing: 'exempt: KNOWN GAP, not fixed here — releaseHeldAfterEdit releases a Track 4 hold via a tags-only change (5.6, the row was edited after the hold), which can restore standing:active without going through revertEntry\'s own touch. Not in the director\'s named list for this pass; self-heals within 24h (P7.4), flagged for the director rather than fixed in scope here' },
-  { file: 'src/memory/undo.ts', line: 525, kind: 'snapshot', standing: 'touch' },
-  { file: 'src/memory/undo.ts', line: 561, kind: 'exempt', standing: 'exempt: KNOWN GAP, not fixed here — a merge-undo re-creates the incoming row a merge had absorbed; if that absorbed content was itself standing:active this would need a touch too. Rare (a merge target and its incoming are topically close, not a disjoint standing instruction) and self-heals within 24h (P7.4), flagged for the director, not implemented in this pass' },
-  { file: 'src/memory/validity.ts', line: 170, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
-  { file: 'src/memory/validity.ts', line: 310, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
-  { file: 'src/memory/validity.ts', line: 379, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
-  { file: 'src/memory/validity.ts', line: 422, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
-  { file: 'src/memory/validity.ts', line: 466, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
-  { file: 'src/memory/validity.ts', line: 626, kind: 'snapshot', standing: 'touch' },
-  { file: 'src/memory/validity.ts', line: 644, kind: 'snapshot', standing: 'exempt: the propagate UPDATE moves a REPLACED row\'s own valid_until; a standing row is never itself in a supersede chain, and if it were, the primary row\'s own touch above plus the 24h revalidation (2.4) covers it' },
+  { file: 'src/memory/undo.ts', line: 199, kind: 'snapshot', standing: 'exempt: KNOWN GAP, not fixed here — releaseHeldAfterEdit releases a Track 4 hold via a tags-only change (5.6, the row was edited after the hold), which can restore standing:active without going through revertEntry\'s own touch. Not in the director\'s named list for this pass; self-heals within 24h (P7.4), flagged for the director rather than fixed in scope here' },
+  { file: 'src/memory/undo.ts', line: 537, kind: 'snapshot', standing: 'touch' },
+  { file: 'src/memory/undo.ts', line: 573, kind: 'exempt', standing: 'exempt: KNOWN GAP, not fixed here — a merge-undo re-creates the incoming row a merge had absorbed; if that absorbed content was itself standing:active this would need a touch too. Rare (a merge target and its incoming are topically close, not a disjoint standing instruction) and self-heals within 24h (P7.4), flagged for the director, not implemented in this pass' },
+  { file: 'src/memory/validity.ts', line: 169, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
+  { file: 'src/memory/validity.ts', line: 309, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
+  { file: 'src/memory/validity.ts', line: 378, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
+  { file: 'src/memory/validity.ts', line: 421, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
+  { file: 'src/memory/validity.ts', line: 465, kind: 'snapshot', standing: 'exempt: current validity is re-checked at hydration independent of the cache (2.4/2.6); a missed touch here only delays pruning, never a false fire' },
+  { file: 'src/memory/validity.ts', line: 625, kind: 'snapshot', standing: 'touch' },
+  { file: 'src/memory/validity.ts', line: 643, kind: 'snapshot', standing: 'exempt: the propagate UPDATE moves a REPLACED row\'s own valid_until; a standing row is never itself in a supersede chain, and if it were, the primary row\'s own touch above plus the 24h revalidation (2.4) covers it' },
   { file: 'src/quarantine/hold.ts', line: 121, kind: 'snapshot', standing: 'exempt: Track 4\'s own quarantine hold/release wiring (spec 15 2.13, Task 16), not lane D' },
   { file: 'src/recall/search.ts', line: 1425, kind: 'exempt', standing: 'exempt: recall_count bookkeeping only, no tags column' },
-  { file: 'src/routes/admin.ts', line: 1578, kind: 'exempt', standing: 'exempt: same hygiene classify write as capture/classify.ts:78 (withKind/withStatus only), never touches standing:active' },
+  { file: 'src/routes/admin.ts', line: 1593, kind: 'exempt', standing: 'exempt: same hygiene classify write as capture/classify.ts:78 (withKind/withStatus only), never touches standing:active' },
   { file: 'src/staleness/pass.ts', line: 91, kind: 'exempt', standing: 'exempt: a staleness marker addition, never removes standing:active, and hydration re-checks validity independently (2.4/2.6) regardless' },
   { file: 'src/staleness/pass.ts', line: 101, kind: 'exempt', standing: 'exempt: staleness_checked_at only, no tags column' },
   { file: 'src/vectorize/pending.ts', line: 168, kind: 'exempt', standing: 'exempt: vector_ids only, no tags column' },
@@ -172,7 +175,7 @@ const HYGIENE_EXEMPT = new Set([
   // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): recomputed against the real
   // scanner output on the merged tree.
   "src/when/pass.ts:373",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1578", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1593", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   // MOVED 540/601 -> 589/650 -> 591/652 -> 598/659 -> 600/661 -> 604/665 (T-0089.4.2 Lane W, then

@@ -5,6 +5,7 @@ import { assertCanEditContent } from "../lib/entry-access";
 import { readableWorkspaces } from "../lib/scope";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { VERSIONS_SINCE_KV_KEY } from "../constants";
+import { isHeld } from "../quarantine/tags";
 
 export type VersionReason = "update" | "append" | "merge" | "replace" | "rollup" | "status" | "due" | "mirror" | "revert" | "validity";
 export type ContentChange = { kind: "unchanged" } | { kind: "suffix" } | { kind: "next"; content: string };
@@ -462,6 +463,65 @@ export function buildChain(
       return hit.base.slice(0, hit.end);
     },
   };
+}
+
+// ── Held / released text, shared by every reader of a version's reconstructed content ──
+
+function parseTagsSafe(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseMetaSafe(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+/** A `reason: "status"` version whose meta records a hold (5.4): the same structural check
+ * undo.ts's own `isHoldVersion` makes (duplicated there -- its revert semantics are a different
+ * concern from the display-redaction rule below, and lane ownership keeps the two independent). */
+export function isHoldVersion(v: Pick<VersionRow, "reason" | "meta">): boolean {
+  if (v.reason !== "status") return false;
+  return !!parseMetaSafe(v.meta).hold;
+}
+
+/**
+ * True when version `v`'s own reconstructed text must be treated as held: its own tags are held,
+ * or it is itself the hold transition (isHoldVersion) -- a hold-transition version's OWN tags are
+ * the pre-hold (unheld) state by definition, so isHeld(tags) alone misses exactly the version
+ * whose reconstructed content IS the sensitive text (T-0102 cross-vendor review MAJOR).
+ */
+export function textHeldAt(v: Pick<VersionRow, "reason" | "meta" | "tags">): boolean {
+  return isHeld(parseTagsSafe(v.tags)) || isHoldVersion(v);
+}
+
+/**
+ * True when `text` is, at some point in `chain`, exactly the content a release (5.6) vouched for
+ * on this row -- a human reviewed and approved it, even if the row was edited again since (cloud
+ * re-review, T-0102, on top of 0b970baa's finding 1 fix). A hold or release never changes content
+ * (only tags), so a release version's own reconstructed text is exactly what was live at that
+ * moment; matching it against `text` needs no seq/ordering bookkeeping.
+ *
+ * Shared by every surface that redacts a version's text from textHeldAt above -- as-of.ts's
+ * resolveAtT, history-view.ts's buildEntryHistoryFromReads (the history list) and
+ * readEntryVersionFromRow (get(version)) -- so the same historical text can never read as held
+ * from one surface and approved from another (cloud re-review MAJOR: "make history-view,
+ * get(version) and as-of use one rule").
+ */
+export function wasReleasedContent(chain: Pick<VersionChain, "rows" | "text">, text: string): boolean {
+  return chain.rows.some(v => {
+    if (v.reason !== "status") return false;
+    const meta = parseMetaSafe(v.meta);
+    return meta.release != null && chain.text(v.seq) === text;
+  });
 }
 
 // ── Who may read and revert ──

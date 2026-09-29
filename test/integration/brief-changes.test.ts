@@ -47,10 +47,10 @@ describe("getChanges() (S1)", () => {
     ).run();
   }
 
-  async function insertTrashRow(id: string, workspaceId: string, actorId: string, content: string, source = "api") {
+  async function insertTrashRow(id: string, workspaceId: string, actorId: string, content: string, source = "api", tags: string[] = []) {
     await sqlite.db.prepare(
       `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, deleted_at) VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(id, workspaceId, actorId, content, JSON.stringify({ source }), now).run();
+    ).bind(id, workspaceId, actorId, content, JSON.stringify({ source, tags }), now).run();
   }
 
   it("lists held (any channel), MCP canonical edits, capsule changes, status changes, trash moves, reverts and releases; never REST or dashboard changes; never ordinary creations or non-canonical edits", async () => {
@@ -110,10 +110,12 @@ describe("getChanges() (S1)", () => {
 
     expect(capturedBindArgs).not.toBeNull();
     const args = capturedBindArgs!;
-    // since, until, workspaces-json, actor -- exactly 4, regardless of team count
-    // (S3, T-0089.4.3: the window gained an upper bound so groupCandidates can share this
-    // same query with an exact [since, until] instead of a rolling "since Date.now()").
-    expect(args).toHaveLength(4);
+    // since, until, workspaces-json, actor, personal-workspace, actor (Q10 trash visibility, a
+    // non-admin member) -- exactly 6, regardless of team count (S3, T-0089.4.3: the window gained
+    // an upper bound so groupCandidates can share this same query with an exact [since, until]
+    // instead of a rolling "since Date.now()"; T-0102: the workspace list is now bound once for
+    // the inScope semi-join too, but it is the SAME ?3 placeholder reused, not a second bind).
+    expect(args).toHaveLength(6);
     expect(typeof args[2]).toBe("string");
     expect(() => JSON.parse(args[2] as string)).not.toThrow();
     expect((JSON.parse(args[2] as string) as string[])).toHaveLength(1 + manyTeams.length);
@@ -147,6 +149,65 @@ describe("getChanges() (S1)", () => {
     const item = result.items[0] as { id: string; preview: string | null };
     expect(item.id).toBe("trashed-1");
     expect(item.preview).toBe("Trashed content");
+  });
+
+  // Cross-vendor review MINOR (T-0102), finding 7: a "held" event is otherwise visible
+  // workspace-wide (it bypasses the actor/author check below), but a trashed row must still only
+  // surface to whoever could restore it -- the same trashRestoreClauseFor rule (Q10) listTrash
+  // applies: admin, their own personal trash, or a company row they personally deleted.
+  it("a teammate's trashed held row is hidden from a non-admin who did not delete it (Q10)", async () => {
+    await insertTrashRow("held-trashed", "ws-co", "u2", "the secret plan is X", "api", ["quarantine:instruction", "status:draft"]);
+    await insertEvent({ id: "ev-held-trashed", entryId: "held-trashed", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+    const nonAdmin = identityOf("u1", "ws-p", ["ws-co"]);
+    const result = await getChanges(env, nonAdmin);
+    expect(result.count).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("secret plan");
+  });
+
+  it("an admin still sees a teammate's trashed held row (Q10)", async () => {
+    await insertTrashRow("held-trashed", "ws-co", "u2", "the secret plan is X", "api", ["quarantine:instruction", "status:draft"]);
+    await insertEvent({ id: "ev-held-trashed", entryId: "held-trashed", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+    const admin: Identity = { userId: "u1", role: "admin", personalWorkspaceId: "ws-p", companyWorkspaceIds: ["ws-co"], defaultShare: "" };
+    const result = await getChanges(env, admin);
+    expect(result.count).toBe(1);
+    expect((result.items[0] as { id: string }).id).toBe("held-trashed");
+  });
+
+  it("the deleter themself still sees their own trashed held row (Q10)", async () => {
+    await insertTrashRow("held-trashed", "ws-co", "u1", "the secret plan is X", "api", ["quarantine:instruction", "status:draft"]);
+    await insertEvent({ id: "ev-held-trashed", entryId: "held-trashed", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+    const nonAdmin = identityOf("u1", "ws-p", ["ws-co"]);
+    const result = await getChanges(env, nonAdmin);
+    expect(result.count).toBe(1);
+    expect((result.items[0] as { id: string }).id).toBe("held-trashed");
+  });
+
+  // Cross-vendor review MINOR (T-0102), finding 7c: canRelease/canUndo must reflect real
+  // permission -- a "held" item is visible workspace-wide (so a teammate is TOLD it happened),
+  // but that is not a grant to release someone else's memory.
+  it("canRelease/canUndo reflect real permission, not mere visibility", async () => {
+    sqlite.seed({ id: "co-mem", content: "A company memory", createdAt: now - HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-co', actor_id = 'u2' WHERE id = 'co-mem'`).run();
+    await insertEvent({ id: "ev-held", entryId: "co-mem", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
+
+    // A non-admin teammate who did not author it: sees the held alert, cannot release it.
+    const teammate = identityOf("u1", "ws-p", ["ws-co"]);
+    const asTeammate = await getChanges(env, teammate);
+    expect(asTeammate.count).toBe(1);
+    expect((asTeammate.items[0] as { canRelease?: boolean }).canRelease).toBeUndefined();
+
+    // The author themself: can release it.
+    const author = identityOf("u2", "ws-p2", ["ws-co"]);
+    const asAuthor = await getChanges(env, author);
+    expect((asAuthor.items[0] as { canRelease?: boolean }).canRelease).toBe(true);
+
+    // An admin: can release it too, authored by someone else or not.
+    const admin: Identity = { userId: "u3", role: "admin", personalWorkspaceId: "ws-p3", companyWorkspaceIds: ["ws-co"], defaultShare: "" };
+    const asAdmin = await getChanges(env, admin);
+    expect((asAdmin.items[0] as { canRelease?: boolean }).canRelease).toBe(true);
   });
 
   it("groups 14 status changes 2 minutes apart into one row with a group key; 3 more stay individual", async () => {
@@ -335,7 +396,9 @@ describe("getChanges() (S1)", () => {
     // dashboard-session concept, so a held item's own text must not leak to any token caller by
     // default -- only revealHeld: true (a future dashboard "reveal" action, S4) gets it.
     it("changesToRestJson: held preview withheld by default, shown only with revealHeld", async () => {
-      sqlite.seed({ id: "e1", content: "The secret plan is X", createdAt: now - HOUR, tags: [], source: "api" });
+      // The row's own tags carry the hold (nothing has released it since) -- matches what a real
+      // "held" event leaves behind, and is what T-0102's fix actually keys masking off of.
+      sqlite.seed({ id: "e1", content: "The secret plan is X", createdAt: now - HOUR, tags: ["quarantine:instruction", "status:draft"], source: "api" });
       sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
       await insertEvent({ id: "ev-held", entryId: "e1", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
 
@@ -346,6 +409,32 @@ describe("getChanges() (S1)", () => {
 
       const revealed = changesToRestJson(result, true);
       expect((revealed.items as unknown[])[0]).toMatchObject({ kind: "item", event: "held", id: "e1", preview: "The secret plan is X" });
+    });
+
+    // Cross-vendor review MAJOR (T-0102), finding 6(a): masking must key off the row's CURRENT
+    // held status, not off this event's own family -- a "status_changed" event on a row that is
+    // (still, or again) held must be masked too, even though its own family is not "held".
+    it("changesToRestJson: masks a non-held-family event's preview when the row is currently held", async () => {
+      sqlite.seed({ id: "e1", content: "The secret plan is X", createdAt: now - HOUR, tags: ["quarantine:instruction", "status:draft"], source: "api" });
+      sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+      await insertEvent({ id: "ev-status", entryId: "e1", event: "status_changed", createdAt: now - 30 * MIN, payload: { channel: "mcp", status: "draft" } });
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"));
+      const byDefault = changesToRestJson(result);
+      expect((byDefault.items as unknown[])[0]).toMatchObject({ kind: "item", event: "status_changed", id: "e1", preview: null });
+      expect(JSON.stringify(byDefault)).not.toContain("secret plan");
+    });
+
+    it("changesToRestJson: masks a trashed row's preview when its row_json tags are held", async () => {
+      await insertTrashRow("e2", "ws-p", "u1", "The secret plan is X");
+      await sqlite.db.prepare(`UPDATE entries_trash SET row_json = ? WHERE id = 'e2'`)
+        .bind(JSON.stringify({ source: "api", tags: ["quarantine:instruction", "status:draft"] })).run();
+      await insertEvent({ id: "ev-trash", entryId: "e2", event: "deleted", createdAt: now - 30 * MIN, payload: { channel: "mcp", trash: true } });
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"));
+      const byDefault = changesToRestJson(result);
+      expect((byDefault.items as unknown[])[0]).toMatchObject({ kind: "item", event: "deleted", id: "e2", preview: null });
+      expect(JSON.stringify(byDefault)).not.toContain("secret plan");
     });
 
     it("changesToRestJson: a group row maps can_undo_all/can_release_all to snake_case", async () => {
@@ -403,5 +492,77 @@ describe("getChanges() (S1)", () => {
       expect(text).toContain("Undo all");
       expect(text).toContain(result.items[0].kind === "group" ? result.items[0].group : "");
     });
+  });
+});
+
+// Cloud re-review MINOR on 0b970baa: R22 capped the raw entry_events scan BEFORE any workspace
+// filter can run (entry_events carries no workspace column at all -- the join that would resolve
+// one has to happen after). A teammate's ordinary burst, under a different actor_id, could fill
+// every one of that cap's slots with noise newer than the reader's own genuine (but older) event,
+// crowding it out of the brief entirely before the workspace/visibility filter ever saw it -- the
+// same failure mode finding 7a fixed for workspace scope, reopened for RAW_EVENT_SCAN_LIMIT itself.
+describe("a teammate's burst cannot crowd out this reader's own changes or a held notice (R22 residual)", () => {
+  let sqlite: SqliteD1;
+  let env: Env;
+  let now: number;
+
+  beforeEach(() => {
+    sqlite = makeSqliteD1();
+    env = { DB: sqlite.db as unknown as Env["DB"] } as Env;
+    now = Date.UTC(2026, 8, 27, 12, 0, 0);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+  });
+  afterEach(() => {
+    sqlite.close();
+    vi.restoreAllMocks();
+  });
+
+  async function insertEvent(opts: {
+    id: string; entryId: string; event: string; actorId?: string; createdAt?: number;
+    payload?: Record<string, unknown>;
+  }) {
+    await sqlite.db.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      opts.id, opts.entryId, opts.actorId ?? "u1", opts.event,
+      JSON.stringify(opts.payload ?? { channel: "mcp" }), opts.createdAt ?? now,
+    ).run();
+  }
+
+  /** 1,500 same-workspace, real events by a DIFFERENT actor, all newer than the reader's own
+   * event below -- enough to fill RAW_EVENT_SCAN_LIMIT (1,000) on their own, in date order. */
+  async function seedBurst() {
+    for (let start = 0; start < 1500; start += 500) {
+      await sqlite.db.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id)
+         WITH RECURSIVE c(x) AS (SELECT ? UNION ALL SELECT x + 1 FROM c WHERE x < ?)
+         SELECT 'noise-e'||x, 'noise memory '||x, '["work"]', 'api', ? - 40 * 3600000 - x, '["v"]', 'ws-p', 'u2' FROM c`,
+      ).bind(start + 1, Math.min(start + 500, 1500), now).run();
+      await sqlite.db.prepare(
+        `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+         WITH RECURSIVE c(x) AS (SELECT ? UNION ALL SELECT x + 1 FROM c WHERE x < ?)
+         SELECT 'noise-ev'||x, 'noise-e'||x, 'u2', 'status_changed', '{"channel":"mcp","status":"canonical"}', ? - 30 * 3600000 - x FROM c`,
+      ).bind(start + 1, Math.min(start + 500, 1500), now).run();
+    }
+  }
+
+  it("still finds this reader's own older change", async () => {
+    sqlite.seed({ id: "e1", content: "A memory", createdAt: now - 47 * HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+    await insertEvent({ id: "ev-mine", entryId: "e1", event: "status_changed", actorId: "u1", createdAt: now - 47 * HOUR, payload: { channel: "mcp", status: "canonical" } });
+    await seedBurst();
+
+    const result = await getChanges(env, identityOf("u1", "ws-p"));
+    expect(result.items.some(i => i.kind === "item" && i.id === "e1")).toBe(true);
+  });
+
+  it("still finds an older held notice", async () => {
+    sqlite.seed({ id: "e1", content: "The launch codes are 1234", createdAt: now - 47 * HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+    await insertEvent({ id: "ev-held", entryId: "e1", event: "held", actorId: "", createdAt: now - 47 * HOUR, payload: { channel: "rest", reasons: ["instruction"] } });
+    await seedBurst();
+
+    const result = await getChanges(env, identityOf("u1", "ws-p"));
+    expect(result.items.some(i => i.kind === "item" && i.id === "e1" && i.event === "held")).toBe(true);
   });
 });

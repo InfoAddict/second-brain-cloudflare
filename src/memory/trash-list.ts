@@ -5,6 +5,7 @@ import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import type { Config } from "../config";
 import { Params } from "./params";
 import type { TrashReason } from "./trash";
+import { isHeld } from "../quarantine/tags";
 
 export interface TrashListItem {
   id: string;
@@ -19,6 +20,8 @@ export interface TrashListItem {
   layer: "personal" | "company" | "system";
   can_restore: boolean;
   can_delete_forever: boolean;
+  /** T-0102 MAJOR fix: the trashed row's own tags (at deletion) were held. `preview` is "" here. */
+  held: boolean;
   /**
    * The trash row's own per-row identity (Track 1, adv-final MAJOR 1): a purge can free `id`
    * and a fresh forget can reuse it, so restore and Delete forever pin their mutation to this,
@@ -67,6 +70,7 @@ interface TrashRow {
   deleted_by: string;
   workspace_id: string;
   source: string | null;
+  tags_json: string | null;
   nonce: string;
 }
 
@@ -99,6 +103,20 @@ function collapsePreview(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 160);
 }
 
+/** The trashed row's own tags, from `json_extract(row_json, '$.tags')` -- a JSON array as text,
+ * or null when row_json predates the column or carries no tags. Cross-vendor review MAJOR
+ * (T-0102): the row's tags are checked so a held row's preview is masked in the trash listing
+ * too, not only while it was live. */
+function trashRowTags(tagsJson: string | null): string[] {
+  if (!tagsJson) return [];
+  try {
+    const parsed = JSON.parse(tagsJson);
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /** One workspace's own indexed page: a plain seek on idx_entries_trash_workspace_deleted. */
 async function pageForWorkspace(
   env: Env,
@@ -121,7 +139,7 @@ async function pageForWorkspace(
 
   const { results } = await env.DB.prepare(
     `SELECT t.id, substr(t.content, 1, 400) AS preview, t.deleted_at, t.reason, t.deleted_by, t.workspace_id,
-            json_extract(t.row_json, '$.source') AS source, t.nonce
+            json_extract(t.row_json, '$.source') AS source, json_extract(t.row_json, '$.tags') AS tags_json, t.nonce
        FROM entries_trash t
       WHERE t.workspace_id = ${wsSql} AND ${restoreSql}${cursorSql}
       ORDER BY t.deleted_at DESC, t.id DESC
@@ -208,9 +226,10 @@ export async function listTrash(
   const retentionMs = opts.config.TRASH_RETENTION_DAYS * DAY_MS;
   const items: TrashListItem[] = page.map((row) => {
     const event = eventByEntry.get(row.id);
+    const held = isHeld(trashRowTags(row.tags_json));
     return {
       id: row.id,
-      preview: collapsePreview(row.preview),
+      preview: held ? "" : collapsePreview(row.preview),
       deleted_at: row.deleted_at,
       days_left: Math.max(0, Math.ceil((row.deleted_at + retentionMs - now) / DAY_MS)),
       reason: row.reason,
@@ -221,6 +240,7 @@ export async function listTrash(
       layer: layerOfRow(row),
       can_restore: true,
       can_delete_forever: true,
+      held,
       nonce: row.nonce,
     };
   });

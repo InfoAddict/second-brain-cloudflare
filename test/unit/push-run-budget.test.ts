@@ -48,12 +48,13 @@ function seedDue(s: SqliteD1, id: string, workspaceId = "", whenAt = Date.now() 
     .bind(workspaceId, whenAt, id).run();
 }
 
-/** Marks a due row held (quarantine:<reason> paired with status:draft), as withHold does and as
- * Q3's contradiction/quarantine path does.
- * Codex review, T-0102 A: isHeld now requires that exact pairing -- a bare quarantine:-prefixed
- * tag alone, with no status:draft alongside it, is a 3.7 user tag, not a hold. */
+/**
+ * Marks a due row held (quarantine:<reason>), as Q3's contradiction/quarantine path does. The
+ * default is a real recognized reason -- isHeld matches only the app's five own reason values,
+ * see src/quarantine/tags.ts's HoldReason.
+ */
 function holdEntry(s: SqliteD1, id: string, reason = "instruction") {
-  s.db.prepare(`UPDATE entries SET tags = json_insert(json_insert(tags, '$[#]', ?), '$[#]', 'status:draft') WHERE id = ?`)
+  s.db.prepare(`UPDATE entries SET tags = json_insert(tags, '$[#]', ?) WHERE id = ?`)
     .bind(`${QUARANTINE_TAG_PREFIX}${reason}`, id).run();
 }
 
@@ -257,7 +258,11 @@ describe("one budget per invocation on every entry point", () => {
 });
 
 describe("pinned worst case for one cron invocation", () => {
-  it("500 subscribed workspaces: at most 102 D1 calls, 40 external fetches, 104 KV reads, 42 KV writes and 1 delete", async () => {
+  // MOVED 104 -> 105 reads, 42 -> 43 writes (FX3 finding 4): pushDueItemsAllWorkspaces now
+  // reads and writes a self-imposed daily KV-write counter (MAX_PUSH_KV_WRITES_PER_DAY), once per
+  // invocation that has something due, not once per workspace — so the worst case gains exactly
+  // one read and, on a run that actually writes anything, exactly one write.
+  it("500 subscribed workspaces: at most 102 D1 calls, 40 external fetches, 105 KV reads, 43 KV writes and 1 delete", async () => {
     let d1 = 0;
     const db = {
       prepare(sql: string) {
@@ -288,8 +293,8 @@ describe("pinned worst case for one cron invocation", () => {
 
     expect(d1).toBeLessThanOrEqual(102);
     expect(fetchSpy.mock.calls.length).toBe(40);
-    expect(get.mock.calls.length).toBeLessThanOrEqual(104);
-    expect(put.mock.calls.length).toBeLessThanOrEqual(42);
+    expect(get.mock.calls.length).toBeLessThanOrEqual(105);
+    expect(put.mock.calls.length).toBeLessThanOrEqual(43);
     expect(del.mock.calls.length).toBeLessThanOrEqual(1);
   });
 });
