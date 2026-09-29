@@ -543,10 +543,34 @@ function initGraphSim(canvas, nodes, edges) {
       ctx.globalAlpha = 1
     }
     // labels scale with zoom; hide the always-on ones when zoomed far out to avoid clutter
+    //
+    // T-0101.6.1 UI review: two nodes close enough to touch (the common case inside one small
+    // cluster ring) drew their labels on top of each other, both fully illegible. Each label's
+    // own rectangle (measured with the same font labelPill uses) is checked against every
+    // rectangle already placed this frame; a collision nudges it down one row rather than
+    // stacking in place, so a crowded cluster reads as a short list under it instead of a
+    // smear of overlapping text. Capped at a few nudges — past that, a cluster is dense enough
+    // that hovering (which always draws its own label alone, at full alpha) is the real way to
+    // read one, not the always-on layer.
     if (SHOW_LABELS && cam.scale >= 0.5) {
+      ctx.font = '11px "Geist", system-ui, sans-serif'
+      const placed = []
+      const rowH = 18 / cam.scale
+      const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
       for (const n of nodes) {
         if (n === hover) continue
-        labelPill(shortLabel(n), n.x, n.y + nodeRadius(n) + 4, false, isDimmedGraphNode(n) ? 0.5 : 1)
+        const text = shortLabel(n)
+        const tw = ctx.measureText(text).width
+        const w = tw + 10
+        const x = n.x - w / 2
+        let y = n.y + nodeRadius(n) + 4
+        let tries = 0
+        while (tries < 4 && placed.some((p) => overlaps({ x, y, w, h: rowH }, p))) {
+          y += rowH
+          tries++
+        }
+        placed.push({ x, y, w, h: rowH })
+        labelPill(text, n.x, y, false, isDimmedGraphNode(n) ? 0.5 : 1)
       }
     }
     // Cluster labels: a bold, cluster-colored pill above each cluster's top edge.
