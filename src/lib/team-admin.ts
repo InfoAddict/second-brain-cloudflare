@@ -572,11 +572,10 @@ export async function cleanupMemberData(
   const removedEntries = count?.entries ?? 0;
   // A final batch that would not fit the night's budget waits for a night when nothing else wrote,
   // unless it is the only thing left to do (the 3.7 route paid this cost at click time).
-  // Round 5 re-review MINOR: +3 per entries row and +3 per trashed row for their own life-end
-  // marker INSERT -- roughly the same per-row weight (3) the trashed-row term already used for its
-  // own entries_trash DELETE, since an entry_events insert costs about the same as one of those.
+  // +5 per entries row and +5 per trashed row for their own life-end marker INSERT (FX1's actor
+  // index makes one entry_events row cost 5 rows written on release's schema).
   const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0)
-    + 3 * removedEntries + 3 * (count?.trashed ?? 0);
+    + 5 * removedEntries + 5 * (count?.trashed ?? 0);
   if (opts.rowsLeft !== undefined && estimate > left() && !opts.allowOversize) {
     return { done: false, removedEntries: 0, vectorIds: [], ownedVectors: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten, blockedByBudget: true };
   }
@@ -588,11 +587,8 @@ export async function cleanupMemberData(
       // scope-exempt: offboarding: leftover versions of the removed member's rows and trash rows
       `DELETE FROM entry_versions WHERE entry_id IN (SELECT id FROM entries WHERE workspace_id = ?1 UNION SELECT id FROM entries_trash WHERE workspace_id = ?1)`,
     ).bind(personalWid),
-    // Round 4 re-review MINOR: a life-end marker, in the SAME batch as the DELETE below -- every
-    // event reader (readEntryTimeline, the admin feed, brief/changes.ts) relies on one of these
-    // existing for an id to ever be safely reused; a fire-and-forget write here could be lost,
-    // permanently leaking a removed member's history into whoever's row reuses the id later.
-    // Never entered the trash from here (tier 3's own shape: `deleted`, payload.trash false).
+    // A life-end marker, in the SAME batch as the DELETE below -- a fire-and-forget write here
+    // could be lost, leaking a removed member's history into whoever reuses the id later.
     env.DB.prepare(
       // scope-exempt: offboarding: one life-end marker per entry this batch's own DELETE removes
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)

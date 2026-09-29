@@ -256,14 +256,12 @@ describe("a losing tier-3 forget racing a tier-1 forget of the same id", () => {
     expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'a'`)).not.toBeNull();
     // The trashed memory's history must be intact (the plan promises versions survive a trash).
     expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'a'`)).length).toBe(2);
-    // Round 5 re-review MAJOR: the LOSING tier-3 attempt's own life-end marker must not have
-    // landed -- it never actually removed the row (the winner already trashed it normally), so a
-    // "deleted, trash: false" event here would permanently hide 'a''s own earlier history the
-    // next time any event reader looked for the latest one.
+    // The LOSING tier-3 attempt's own life-end marker must not have landed -- it never actually
+    // removed the row, so this event would permanently hide 'a''s own earlier history.
     expect(await t.one(`SELECT id FROM entry_events WHERE entry_id = 'a' AND event = 'deleted'`)).toBeNull();
   });
 
-  it("round 5 re-review MAJOR: a share moves the row's workspace between the read and the batch — not_found, and its event history stays visible", async () => {
+  it("a share moves the row's workspace between the read and the batch — not_found, and its event history stays visible", async () => {
     t = await makeTrashEnv();
     t.seed("b", { content: "x".repeat(20_000) });
     await t.sqlite.db.prepare(

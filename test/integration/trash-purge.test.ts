@@ -74,10 +74,10 @@ describe("purge", () => {
   });
 
   it("purgeLimit adapts to VERSION_KEEP and is capped by the ceiling", () => {
-    expect(purgeLimit(20, 10, 1000)).toBe(10); // 1000 / 47 = 21, ceiling 10
-    expect(purgeLimit(500, 10, 1000)).toBe(1); // 1000 / 1007 = 0, at least one
-    expect(purgeLimit(20, 400, 5000)).toBe(106); // 5000 / 47
-    expect(purgeLimit(5, 400, 5000)).toBe(294); // 5000 / 17
+    expect(purgeLimit(20, 10, 1000)).toBe(10); // 1000 / 48 = 20, ceiling 10
+    expect(purgeLimit(500, 10, 1000)).toBe(1); // 1000 / 1008 = 0, at least one
+    expect(purgeLimit(20, 400, 5000)).toBe(104); // 5000 / 48
+    expect(purgeLimit(5, 400, 5000)).toBe(277); // 5000 / 18
   });
 
   it("is chosen from the real version counts: a row trashed with 500 versions is costed at 500", async () => {
@@ -178,14 +178,14 @@ describe("nightly cleanup", () => {
   it("runs at most 5 batches of at most 400 rows, inside the purge's rows-written share", async () => {
     t = await makeTrashEnv();
     await seedTrashRows(t, 2050);
-    // 7 rows per version-less trash row: 400 rows cost 2,800, so the 10,000-row share ends the night
-    // in the fourth batch (400 + 400 + 400 + 228 rows). The spec's "2,000 on night one" ignores its own budget.
+    // 8 rows per version-less trash row: 400 rows cost 3,200, so the 10,000-row share ends the night
+    // in the fourth batch (400 + 400 + 400 + 50 rows). The spec's "2,000 on night one" ignores its own budget.
     const first = await runNightlyCleanup(t.env);
-    expect(first.purged).toBe(1428);
+    expect(first.purged).toBe(1250);
     expect(first.rowsWritten).toBeLessThanOrEqual(TRASH_PURGE_NIGHTLY_ROWS);
-    expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(2050 - 1428);
+    expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(2050 - 1250);
     const second = await runNightlyCleanup(t.env);
-    expect(second.purged).toBe(622);
+    expect(second.purged).toBe(800);
     expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(0);
   });
 

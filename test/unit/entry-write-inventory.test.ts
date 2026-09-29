@@ -103,9 +103,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   // appendToEntry each mint event_id above their own snapshot calls; team-admin.ts's offboarding
   // batch and trash.ts's tier-3 branch each gained their own life-end marker statement above the
   // sites this table pins. Recomputed against the real scanner output.
-  // MOVED (round 5 re-review MAJOR "tier-3 life-end marker insert has no guard", MINOR "offboarding
-  // estimate"): trash.ts's tier-3 marker gained its own guard clause and explanatory comment above
-  // it; team-admin.ts's own estimate comment grew. Recomputed against the real scanner output.
+  // MOVED: trash.ts's tier-3 marker gained a guard clause; comments were trimmed since. Recomputed.
   // MOVED (merge of release/v4 5a98da4a into v4/t7-d, lane W merged, T-0089.4.2/T-0089.7.1): lane
   // W's own class E/A/R20 deltas and lane D's Task 12 deferred call sites (captureEntry's merge
   // gate fix, the supersede-close touch, updateEntryContent and appendToEntry) are independently-
@@ -132,7 +130,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/entries/import.ts', line: 50, kind: 'exempt', standing: 'touch' },
   { file: 'src/integrations/mirror.ts', line: 125, kind: 'exempt', standing: 'exempt: mirrors cannot carry standing:active — 1.3 strips it via stripT7CallerTags before mirror tags are built' },
   { file: 'src/integrations/mirror.ts', line: 207, kind: 'snapshot', standing: 'exempt: mirrors cannot carry standing:active — 1.3 strips it via stripT7CallerTags before mirror tags are built' },
-  { file: 'src/lib/team-admin.ts', line: 619, kind: 'hard-delete', standing: 'touch' },
+  { file: 'src/lib/team-admin.ts', line: 615, kind: 'hard-delete', standing: 'touch' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt', standing: 'exempt: one-time pre-v3 tenancy bootstrap moving every legacy "" row to the new owner workspace; a legacy standing row would need a cache rebuild after migration, which the 24h revalidation (P7.4) supplies on its own' },
   { file: 'src/memory/actions.ts', line: 73, kind: 'snapshot', standing: 'exempt: withoutStaleAsOf/RETRACTED_SOURCE_TAG only, never touches standing:active' },
   { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot', standing: 'exempt: withTaskDone/withoutTask only, never touches standing:active' },
@@ -142,8 +140,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/memory/actions.ts', line: 250, kind: 'snapshot', standing: 'exempt: a decision outcome; decision and standing are mutually exclusive at capture (2.1/4.1)' },
   { file: 'src/memory/actions.ts', line: 291, kind: 'snapshot', standing: 'exempt: auto-insight rows are system-generated candidates, never standing:active' },
   { file: 'src/memory/actions.ts', line: 303, kind: 'snapshot', standing: 'exempt: auto-insight rows are system-generated candidates, never standing:active' },
-  { file: 'src/memory/trash.ts', line: 315, kind: 'trash', standing: 'touch' },
-  { file: 'src/memory/trash.ts', line: 742, kind: 'exempt', standing: 'touch' },
+  { file: 'src/memory/trash.ts', line: 305, kind: 'trash', standing: 'touch' },
+  { file: 'src/memory/trash.ts', line: 731, kind: 'exempt', standing: 'touch' },
   { file: 'src/memory/undo.ts', line: 198, kind: 'snapshot', standing: 'exempt: KNOWN GAP, not fixed here — releaseHeldAfterEdit releases a Track 4 hold via a tags-only change (5.6, the row was edited after the hold), which can restore standing:active without going through revertEntry\'s own touch. Not in the director\'s named list for this pass; self-heals within 24h (P7.4), flagged for the director rather than fixed in scope here' },
   { file: 'src/memory/undo.ts', line: 525, kind: 'snapshot', standing: 'touch' },
   { file: 'src/memory/undo.ts', line: 561, kind: 'exempt', standing: 'exempt: KNOWN GAP, not fixed here — a merge-undo re-creates the incoming row a merge had absorbed; if that absorbed content was itself standing:active this would need a touch too. Rare (a merge target and its incoming are topically close, not a disjoint standing instruction) and self-heals within 24h (P7.4), flagged for the director, not implemented in this pass' },

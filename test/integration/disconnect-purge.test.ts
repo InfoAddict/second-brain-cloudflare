@@ -108,8 +108,7 @@ describe("disconnect purge through the trash", () => {
     expect(res).toEqual({ purged: 3, skipped: 0 });
     // trash tier 1 + trash tier 2 + version delete (tier 3) + edges + entries = 5 statements, then one audit batch.
     // MOVED 5 -> 9 (T-0089.2.4): the D-RET restore hook's four statements ride in the same batch (still one execution).
-    // MOVED 9 -> 10 (round 4 re-review MINOR): tier 3's own life-end marker rides in the same
-    // batch as its entries DELETE now, not a separate fire-and-forget write after.
+    // MOVED 9 -> 10: tier 3's own life-end marker now rides in the same batch as its DELETE.
     expect(batches[0]).toBe(10);
     expect((await t.one<any>(`SELECT edges_json FROM entries_trash WHERE id = 'p00000'`))!.edges_json).not.toBe("[]");
     expect((await t.one<any>(`SELECT edges_json FROM entries_trash WHERE id = 'p00001'`))!.edges_json).toBe("[]");
@@ -119,9 +118,8 @@ describe("disconnect purge through the trash", () => {
     const ev = (await t.all<any>(`SELECT entry_id, payload FROM entry_events WHERE event = 'deleted' ORDER BY entry_id`)).map((e) => [e.entry_id, JSON.parse(e.payload)]);
     expect(ev.map((e) => e[0])).toEqual(["p00000", "p00001", "p00002"]);
     expect(ev[1][1]).toMatchObject({ trash: true, edgesDropped: true, reason: "disconnect" });
-    // p00002 is tier 3: its own "deleted" event is the reliable, minimal life-end marker
-    // trashManyStatements writes in the same batch now (round 4 re-review MINOR), not the richer
-    // fire-and-forget one (which would have duplicated it) -- no deletedVectors, no tooLargeForTrash.
+    // p00002 is tier 3: its own "deleted" event is the minimal life-end marker written in-batch,
+    // not the richer fire-and-forget one -- no deletedVectors, no tooLargeForTrash.
     expect(ev[2][1]).toEqual({ reason: "disconnect", trash: false, channel: "rest" });
   });
 

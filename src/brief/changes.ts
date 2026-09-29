@@ -121,9 +121,8 @@ function parsePayload(raw: string): Record<string, unknown> {
 
 interface Classified {
   id: string;
-  /** entry_events.id -- this row's own event, not the entry it describes (round 3 re-review
-   * MAJOR): groupCandidates threads this through so undo.ts can link a version to exactly the
-   * event that produced it, never a time window or an actor/client re-check. */
+  /** entry_events.id -- this row's own event, not the entry it describes. groupCandidates threads
+   * this through so undo.ts can link a version to exactly the event that produced it. */
   eventId: string;
   event: string;
   family: ChangeFamily;
@@ -266,12 +265,9 @@ async function changeEventRows(
   layer?: "personal" | "company", teamId?: string,
 ): Promise<{ rows: RawRow[]; rawCapped: boolean }> {
   const workspaces = readScopeWorkspaces(identity, { layer, teamId });
-  // Round 3 re-review MAJOR (director follow-up: this file belongs to the FX1 lane, 230d0afe,
-  // already merged -- flagging for merge order): a reused id's earlier life always ends with a
-  // `purged` event or a `deleted` event with payload.trash false (tier 3); everything at or before
-  // the LATEST such end event for this id belongs to whoever's row is now gone, never the live or
-  // trashed row the query below joins against. rowid, not created_at -- insertion order, immune to
-  // an old export's own created_at or one a legacy client set in the future.
+  // A reused id's earlier life always ends with a `purged` event or a `deleted` event with
+  // payload.trash false; everything at or before the latest such event belongs to the row that's
+  // now gone. rowid, not created_at -- insertion order, immune to a backdated or future timestamp.
   const eventFilter = `created_at > ?1 AND created_at <= ?2
        AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')
        AND rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = entry_events.entry_id
@@ -348,9 +344,8 @@ export const UNDO_GROUP_PAGE = 5;
 
 export interface DecodedGroup { family: ChangeFamily; actorId: string; client: string | null; start: number; end: number }
 
-// Exported (round 5 re-review NIT): the event-id-writer structural test
-// (test/unit/undo-group-event-id-writers.test.ts) derives its own family list from this one,
-// rather than keeping a second hand-maintained copy that could drift from it silently.
+// Exported so test/unit/undo-group-event-id-writers.test.ts can derive its family list from
+// this one instead of keeping a second copy that could drift.
 export const GROUP_FAMILIES: readonly ChangeFamily[] = ["held", "released", "canonical_edit", "capsule_changed", "status", "trash", "revert"];
 
 function fromBase64Url(key: string): string {

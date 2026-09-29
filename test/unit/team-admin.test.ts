@@ -238,9 +238,7 @@ describe("team member administration", () => {
       const danglingShared = await env.DB.prepare(`SELECT id FROM entries WHERE id = 'p1'`).first();
       expect(danglingShared).toBeNull();
 
-      // Round 4 re-review MINOR: p1's removal writes its own reliable life-end marker, in the
-      // SAME batch as the row's own DELETE -- every event reader relies on one of these existing
-      // before an id is safe to reuse.
+      // p1's removal writes its own life-end marker, in the same batch as the row's own DELETE.
       const marker = await env.DB.prepare(`SELECT event, payload FROM entry_events WHERE entry_id = 'p1'`).first<{ event: string; payload: string }>();
       expect(marker?.event).toBe("deleted");
       expect(JSON.parse(marker!.payload)).toMatchObject({ trash: false, reason: "offboarding" });

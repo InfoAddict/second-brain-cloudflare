@@ -260,21 +260,11 @@ export function trashManyStatements(
       `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(plan.tier3))}))
          AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id)${referencedEntryGuardSql(p, ["entry_versions.entry_id"])}`,
     ).bind(...p.values()));
-    // Round 4 re-review MINOR: a life-end marker, in the SAME batch as the entries DELETE below --
-    // every event reader relies on one of these existing for an id to ever be safely reused. The
-    // route layer's own richer "deleted" event (deletedVectors, client, edgesDropped) stays
-    // fire-and-forget and skips this exact case now (routes/entries.ts, mcp/server.ts) so there is
-    // one of these per tier-3 id, not two: this one is the reliable, minimal one finding 2's own
-    // event-life filter (event = 'deleted' AND payload.trash = false) actually depends on.
-    //
-    // Round 5 re-review MAJOR: unguarded, this landed even when the entries DELETE below lost its
-    // own race (a share/unshare moved the row to a workspace outside this batch's own authorized
-    // pairs, between the caller's read and this batch) -- the row stayed live, untouched, but this
-    // marker still claimed its life had ended, permanently hiding every earlier event for the id
-    // the moment finding 2's own event-life filter next read it. Selected from `entries` now,
-    // under the SAME guard the DELETE below uses, plus NOT EXISTS on entries_trash (a losing
-    // tier-3 forget's stale size read can predate a shrink that let a racing forget trash the row
-    // normally instead) -- a marker lands only for an id this batch's own DELETE actually removed.
+    // A life-end marker, in the SAME batch as the entries DELETE below and under the SAME guard
+    // (plus NOT EXISTS on entries_trash) -- every event reader relies on one of these existing
+    // before an id is safe to reuse, so it must land only when this DELETE actually removed the
+    // row. The route layer's own richer "deleted" event (routes/entries.ts, mcp/server.ts) skips
+    // this case to avoid writing two.
     {
       const tp = new Params();
       const tierIds = tp.add(JSON.stringify(plan.tier3));
@@ -408,9 +398,8 @@ export async function trashMirroredEntries(
 
     const tier3 = new Set(plan.tier3);
     const tier2 = new Set(plan.tier2);
-    // Round 4 re-review MINOR: a tier-3 row already has its own reliable life-end marker, written
-    // in trashManyStatements' own batch above -- this fire-and-forget richer event would only
-    // duplicate it, so it is skipped for that case alone (same as routes/entries.ts, mcp/server.ts).
+    // A tier-3 row already got its own reliable life-end marker in trashManyStatements' batch
+    // above; skip it here so it is not written twice (same as routes/entries.ts, mcp/server.ts).
     const events: AuditEventInput[] = done.filter((r) => !tier3.has(r.id)).map((r) => ({
       entryId: r.id,
       actorId: auth.userId,
@@ -432,8 +421,8 @@ export async function trashMirroredEntries(
 const DAY_MS = 86_400_000;
 /** The lowest TRASH_RETENTION_DAYS the config accepts (src/config.ts RULES). */
 const MIN_RETENTION_DAYS = 1;
-/** Rows written to purge one trash row: the purged event (4) and the trash row (3), plus 2 per version. */
-const PURGE_ROW_COST = 7;
+/** Rows written to purge one trash row: the purged event (5) and the trash row (3), plus 2 per version. */
+const PURGE_ROW_COST = 8;
 
 /** A ceiling on the trash rows a purge reads, sized for rows holding VERSION_KEEP versions (the batch is still costed from the real counts). */
 export function purgeLimit(versionKeep: number, ceiling: number, rowTarget: number): number {
@@ -555,7 +544,7 @@ export async function purgeTrash(
     ).bind(...trashP.values()),
   ]);
   const purged = changedRows(results3[2]);
-  const estimate = 4 * changedRows(results3[0]) + 2 * changedRows(results3[1]) + 3 * purged;
+  const estimate = 5 * changedRows(results3[0]) + 2 * changedRows(results3[1]) + 3 * purged;
   // Codex review, T-0102 F1: the DELETE above only ever removed entries_trash's own row -- the
   // vectors a forgotten note still carried (Vectorize keeps its own copy independent of D1) were
   // never told the row was gone, so a purge orphaned them permanently. Only the rows that

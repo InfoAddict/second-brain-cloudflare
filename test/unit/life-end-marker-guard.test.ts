@@ -1,41 +1,33 @@
 /**
- * Round 5 re-review MAJOR: the tier-3 life-end marker (src/memory/trash.ts) used to select its
- * ids straight from the batch's own pre-computed plan, with no guard at all -- when the row's own
- * DELETE lost its race (a share moved the row to a workspace outside this batch's own authorized
- * pairs, between the caller's read and this batch), the row stayed live and untouched, but the
- * marker still landed, permanently hiding every earlier event for the id.
- *
- * A life-end marker (an entry_events INSERT for "deleted" or "purged") makes a real, permanent
- * claim: after this row, an id is safe to reuse. That claim can only ever be as trustworthy as the
- * row-removal statement it rides alongside, so this scans every INSERT INTO entry_events writing
- * one of those two event names and asserts it is not unconditional over a plain id list -- it must
- * reference a real guard (entriesGuardSql's own call, or the same `workspace_id = ?` team-admin.ts's
- * own bulk deletes use), the same one guarding the row removal it is paired with in the same batch.
+ * A life-end marker (an entry_events INSERT for "deleted" or "purged") permanently claims an id
+ * is safe to reuse, so it can only be as trustworthy as the row-removal statement it rides
+ * alongside. This scans all of src/ for such an INSERT and asserts each one carries a real WHERE
+ * guard, not a bare id list (the tier-3 marker in trash.ts once had none).
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import { templateSpans } from "../../scripts/check-scope.mjs";
 
 const ROOT = join(import.meta.dirname, "../..");
-
-/** Files known to write a life-end marker (event 'deleted' or 'purged') inside a batch, alongside
- * the row removal it describes. A new file doing this without being added here is exactly the gap
- * this guard exists to catch -- see the "finds only the known sites" test below. */
-const FILES = ["src/memory/trash.ts", "src/lib/team-admin.ts"];
+const SRC = join(ROOT, "src");
 
 const LIFE_END_EVENT = /'deleted'|'purged'/;
-/** Not a specific guard shape -- this codebase has several (entriesGuardSql's EXISTS, a plain
- * workspace_id = ?, a deleted_at < cutoff re-check, a by-id nonce match) -- but every one of them
- * is a WHERE clause on the marker's own SELECT. The bug this guards against had none at all: a
- * bare `SELECT ... FROM json_each(ids)`, true unconditionally for every id the caller planned to
- * remove, whether or not this batch's own DELETE actually removed it. */
+/** Several real guard shapes exist (entriesGuardSql's EXISTS, workspace_id = ?, deleted_at <
+ * cutoff, a by-id nonce match) but every one is a WHERE clause on the marker's own SELECT. */
 const HAS_WHERE_CLAUSE = /\bWHERE\b/;
 
 interface Hit { file: string; line: number; sql: string }
 
-function markerInserts(file: string): Hit[] {
-  const text = readFileSync(join(ROOT, file), "utf8");
+function* walk(dir: string): Generator<string> {
+  for (const name of readdirSync(dir).sort()) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) yield* walk(path);
+    else if (name.endsWith(".ts")) yield path;
+  }
+}
+
+function markerInserts(file: string, text: string): Hit[] {
   const spans = templateSpans(text) as unknown as { start: number; end: number; balanced?: boolean }[];
   if ((spans as unknown as { balanced?: boolean }).balanced === false) {
     throw new Error(`life-end-marker-guard scan: ${file} has unbalanced template literals`);
@@ -50,18 +42,33 @@ function markerInserts(file: string): Hit[] {
   return hits;
 }
 
+function scan(): Hit[] {
+  const hits: Hit[] = [];
+  for (const path of walk(SRC)) {
+    const file = relative(ROOT, path).replace(/\\/g, "/");
+    hits.push(...markerInserts(file, readFileSync(path, "utf8")));
+  }
+  return hits;
+}
+
 describe("every life-end marker insert shares its delete's guard", () => {
-  it("finds at least one marker per known file (the scan is not silently empty)", () => {
-    for (const file of FILES) expect(markerInserts(file).length, file).toBeGreaterThan(0);
+  it("finds at least 3 markers (the scan is not silently empty)", () => {
+    expect(scan().length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("finds only the known sites", () => {
+    const sites = scan().map((h) => `${h.file}:${h.line}`).sort();
+    expect(sites).toEqual([
+      "src/lib/team-admin.ts:594",
+      "src/lib/team-admin.ts:602",
+      "src/memory/trash.ts:277",
+      "src/memory/trash.ts:530",
+      "src/memory/trash.ts:849",
+    ].sort());
   });
 
   it("every life-end marker (event 'deleted' or 'purged') is guarded, not a bare id list", () => {
-    const unguarded: string[] = [];
-    for (const file of FILES) {
-      for (const hit of markerInserts(file)) {
-        if (!HAS_WHERE_CLAUSE.test(hit.sql)) unguarded.push(`${file}:${hit.line}`);
-      }
-    }
+    const unguarded = scan().filter((h) => !HAS_WHERE_CLAUSE.test(h.sql)).map((h) => `${h.file}:${h.line}`);
     expect(unguarded).toEqual([]);
   });
 });
