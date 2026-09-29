@@ -254,7 +254,11 @@ describe("one budget per invocation on every entry point", () => {
 });
 
 describe("pinned worst case for one cron invocation", () => {
-  it("500 subscribed workspaces: at most 102 D1 calls, 40 external fetches, 104 KV reads, 42 KV writes and 1 delete", async () => {
+  // MOVED 104 -> 105 reads, 42 -> 43 writes (FX3 finding 4): pushDueItemsAllWorkspaces now
+  // reads and writes a self-imposed daily KV-write counter (MAX_PUSH_KV_WRITES_PER_DAY), once per
+  // invocation that has something due, not once per workspace — so the worst case gains exactly
+  // one read and, on a run that actually writes anything, exactly one write.
+  it("500 subscribed workspaces: at most 102 D1 calls, 40 external fetches, 105 KV reads, 43 KV writes and 1 delete", async () => {
     let d1 = 0;
     const db = {
       prepare(sql: string) {
@@ -285,8 +289,8 @@ describe("pinned worst case for one cron invocation", () => {
 
     expect(d1).toBeLessThanOrEqual(102);
     expect(fetchSpy.mock.calls.length).toBe(40);
-    expect(get.mock.calls.length).toBeLessThanOrEqual(104);
-    expect(put.mock.calls.length).toBeLessThanOrEqual(42);
+    expect(get.mock.calls.length).toBeLessThanOrEqual(105);
+    expect(put.mock.calls.length).toBeLessThanOrEqual(43);
     expect(del.mock.calls.length).toBeLessThanOrEqual(1);
   });
 });

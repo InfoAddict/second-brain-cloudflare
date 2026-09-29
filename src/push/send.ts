@@ -60,6 +60,18 @@ export const PUSH_CURSOR_KV_KEY = "push:cursor";
 export const PUSH_LEASE_KV_KEY = "push:lease";
 const PUSH_LEASE_TTL_SECONDS = 60;
 
+/**
+ * FX3 finding 4: pushDueItemsAllWorkspaces writes one delivery record per workspace it reserves
+ * into, plus the lease and the cursor — up to 42 KV writes an hour, so run every hour with nothing
+ * else slowing it down that is ~1,008 a day, alone close to exhausting a shared account-wide daily
+ * KV write quota before the standing cache, nightly cleanup, or anything else gets a write in.
+ * MAX_PUSH_KV_WRITES_PER_DAY is push's own self-imposed slice of that shared budget, tracked in
+ * PUSH_KV_WRITE_COUNT_KEY (one extra read and one extra write per invocation that sends anything,
+ * not per workspace) and reset at UTC midnight.
+ */
+export const MAX_PUSH_KV_WRITES_PER_DAY = 300;
+export const PUSH_KV_WRITE_COUNT_KEY = "push:kv-writes";
+
 /** Per-invocation state: the fetch budget, and the run lease shared by every workspace call that uses it. */
 export interface PushBudget {
   fetchesLeft: number;
@@ -130,6 +142,31 @@ function parseLease(raw: string | null): { token: string; until: number } | null
     return typeof value.token === "string" && typeof value.until === "number" ? { token: value.token, until: value.until } : null;
   } catch {
     return null;
+  }
+}
+
+const utcDate = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+
+/** Today's write count against MAX_PUSH_KV_WRITES_PER_DAY, or 0 for a stored day that has passed. */
+async function readDailyKvWriteCount(env: Env, now: number): Promise<number> {
+  try {
+    const raw = await env.OAUTH_KV.get(PUSH_KV_WRITE_COUNT_KEY);
+    if (!raw) return 0;
+    const parsed = JSON.parse(raw) as { date?: unknown; count?: unknown };
+    if (parsed.date !== utcDate(now) || typeof parsed.count !== "number") return 0;
+    return parsed.count;
+  } catch {
+    return 0;
+  }
+}
+
+/** Adds this run's writes to today's count. Never throws: a failure here costs only the count's accuracy, not the run. */
+async function recordDailyKvWrites(env: Env, now: number, before: number, thisRun: number): Promise<void> {
+  if (!thisRun) return;
+  try {
+    await env.OAUTH_KV.put(PUSH_KV_WRITE_COUNT_KEY, JSON.stringify({ date: utcDate(now), count: before + thisRun }));
+  } catch (e) {
+    console.error("push: recording today's KV write count failed (non-fatal):", e);
   }
 }
 
@@ -570,8 +607,12 @@ async function refreshTasks(env: Env, push: WorkspacePush): Promise<void> {
 
 const okCount = (sends: SendRecord[]) => sends.filter(s => s.result === "ok").length;
 
-/** Why a run sent nothing although something was due: another run held the lease, or KV writes failed. */
-export type PushSkip = "busy" | "kv_write_failed";
+/**
+ * Why a run sent nothing although something was due: another run held the lease, KV writes
+ * failed, or (pushDueItemsAllWorkspaces only, FX3 finding 4) today's self-imposed KV write
+ * allowance is already spent.
+ */
+export type PushSkip = "busy" | "kv_write_failed" | "daily_kv_cap";
 
 /**
  * Pushes due items (overdue and due today, dueSql) for one workspace to
@@ -641,10 +682,11 @@ function interleave(pushes: WorkspacePush[]): SendTask[] {
  * bounded number of runs.
  *
  * Worst case per invocation, alone: 102 D1 calls (1 ring scan + 2 per workspace x
- * 50 + 1 batch), 40 external fetches, 104 KV reads (cursor, 50 records, 50
- * re-reads under the lease, 2 lease reads, 1 at release) and 42 KV writes
- * (lease, at most 40 records, cursor) plus 1 lease delete. A run with
- * nothing new writes nothing.
+ * 50 + 1 batch), 40 external fetches, 105 KV reads (cursor, 50 records, 50
+ * re-reads under the lease, 2 lease reads, 1 at release, 1 daily-write-count read)
+ * and 43 KV writes (lease, at most 40 records, cursor, 1 daily-write-count write)
+ * plus 1 lease delete. A run with nothing new writes nothing, and never reaches
+ * the daily-cap check (FX3 finding 4) at all.
  */
 export async function pushDueItemsAllWorkspaces(
   env: Env, resolved?: Readonly<Config>, budget: PushBudget = newPushBudget(),
@@ -662,8 +704,14 @@ export async function pushDueItemsAllWorkspaces(
   for (const workspaceId of selection) pushes.push(await prepareWorkspacePush(env, workspaceId, now, config.TIMEZONE));
   if (!pushes.some(p => p.tasks.length)) return { sent: 0 };
 
+  // FX3 finding 4: checked only once something is actually due, so a quiet hour costs nothing
+  // extra — matching the function's existing "nothing new, nothing written" economy.
+  const dailyWritesBefore = await readDailyKvWriteCount(env, now);
+  if (dailyWritesBefore >= MAX_PUSH_KV_WRITES_PER_DAY) return { sent: 0, skipped: "daily_kv_cap" };
+
   const lease = await acquireRunLease(env, budget);
   if (lease !== "held") return { sent: 0, skipped: lease };
+  let writesThisRun = 0;
   try {
     for (const push of pushes) if (push.tasks.length) await refreshTasks(env, push);
     const tasks = interleave(pushes);
@@ -674,6 +722,7 @@ export async function pushDueItemsAllWorkspaces(
     const recorded: SendTask[] = [];
     for (const [push, own] of byPush) {
       if (!await recordAhead(env, push, own, budget)) break;
+      writesThisRun++;
       recorded.push(...own);
     }
     await sendReserved(env, reserved.filter(task => recorded.includes(task)));
@@ -686,11 +735,12 @@ export async function pushDueItemsAllWorkspaces(
         next = index > 0 ? selection[index - 1] : cursor;
       }
       if (next !== null && next !== cursor) {
-        try { await env.OAUTH_KV.put(PUSH_CURSOR_KV_KEY, next); } catch (e) { logKvWriteFailure(budget, e); }
+        try { await env.OAUTH_KV.put(PUSH_CURSOR_KV_KEY, next); writesThisRun++; } catch (e) { logKvWriteFailure(budget, e); }
       }
     }
     return { sent: pushes.reduce((n, p) => n + okCount(p.sends), 0), ...(budget.kvWriteFailed ? { skipped: "kv_write_failed" as const } : {}) };
   } finally {
+    await recordDailyKvWrites(env, now, dailyWritesBefore, writesThisRun);
     await releaseRunLease(env, budget);
   }
 }
