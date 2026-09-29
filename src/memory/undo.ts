@@ -264,6 +264,16 @@ export async function revertEntry(
   /** Optional: the trash row the caller saw. Given, undo only restores that exact row, never reverts a live one. */
   trashNonce?: string,
   ctx?: ExecutionContext,
+  /**
+   * Round 4 re-review MAJOR (undo-group): the group's own classifyFromRows already found this
+   * member's newest version's seq at classification time -- given, this is checked fresh here,
+   * before any read-then-act work below (re-embedding included) rather than only at the write
+   * itself, since only the undo-group path's toVersion can already be stale by the time its own
+   * page reaches this member. A mismatch reports "stale" (the group maps it to changed_since) and
+   * touches nothing. Every other caller (the single-entry /undo route and MCP tool) has no prior
+   * classification to compare against, so this is always undefined for them.
+   */
+  expectedTipSeq?: number,
 ): Promise<UndoResult> {
   const row = await getReadableEntry(env, identity, id, ENTRY_COLUMNS) as EntryRow | null;
   if (row && trashNonce !== undefined) return { status: "not_found" };
@@ -319,6 +329,11 @@ export async function revertEntry(
   if (!chain.rows.length) return { status: "nothing_to_undo" };
 
   const newest = chain.rows[0];
+  // Round 4 re-review MAJOR: checked before any further work (re-embedding included) -- a third
+  // party's edit landing between classification and this call already moved this row's own tip,
+  // and toVersion (computed back at classification time) would otherwise still land, silently
+  // overwriting that edit.
+  if (expectedTipSeq !== undefined && newest.seq !== expectedTipSeq) return { status: "stale" };
 
   // 5.6: undo on a currently-held row releases it, whether or not the hold is the newest version.
   // The common case (hold IS newest) needs no dedicated path: falling through to the ordinary
@@ -778,7 +793,15 @@ interface ChainRow {
 }
 
 type MemberVerdict =
-  | { kind: "pending"; toVersion: number; workspaceId: string }
+  | {
+      kind: "pending"; toVersion: number; workspaceId: string;
+      /** Round 4 re-review MAJOR: this member's own newest version's seq, AT CLASSIFICATION TIME
+       * -- carried through to revertEntry as its own fresh compare-and-set, so a third party's
+       * edit landing in the gap between this classification and that later call (another page's
+       * worth of reverts, each with its own re-embed, can take real time) is caught before
+       * anything is written, not silently overwritten by a now-stale toVersion. */
+      tipSeq: number;
+    }
   | { kind: "done" }
   | { kind: "changed_since" }
   | { kind: "not_found" };
@@ -826,7 +849,7 @@ function classifyFromRows(rows: readonly ChainRow[] | undefined, ownEventIds: Re
 
   const tip = rows.length - 1;
   const atTip = walkOwn(rows, tip, ownEventIds);
-  if (atTip.ok) return { kind: "pending", toVersion: rows[atTip.firstIdx].seq, workspaceId: rows[atTip.firstIdx].workspace_id };
+  if (atTip.ok) return { kind: "pending", toVersion: rows[atTip.firstIdx].seq, workspaceId: rows[atTip.firstIdx].workspace_id, tipSeq: rows[tip].seq };
 
   // Not pending at the tip -- maybe it is already done: the newest version is a revert whose own
   // target_seq matches exactly what this same walk computes over everything before it, the group's
@@ -899,8 +922,11 @@ async function resolveVersionGroup(
     const verdict = verdicts.get(ids[i])!;
     if (verdict.kind === "done") continue;
     if (verdict.kind === "not_found" || verdict.kind === "changed_since") { results.push({ id: ids[i], result: verdict.kind }); continue; }
-    const outcome = await revertEntry(env, identity, ids[i], change, config, verdict.toVersion, verdict.workspaceId, undefined, ctx);
-    results.push({ id: ids[i], result: resultForStatus(outcome.status) });
+    const outcome = await revertEntry(env, identity, ids[i], change, config, verdict.toVersion, verdict.workspaceId, undefined, ctx, verdict.tipSeq);
+    // Round 4 re-review MAJOR: revertEntry's own "stale" (its fresh tip no longer matches
+    // verdict.tipSeq, or the ordinary CAS below it lost) reads as changed_since here -- from the
+    // group's own perspective the two mean the same thing, something moved since this was read.
+    results.push({ id: ids[i], result: outcome.status === "stale" ? "changed_since" : resultForStatus(outcome.status) });
     acted++;
   }
   // Everything from i onward is still unexamined and stays actionable for the next call.

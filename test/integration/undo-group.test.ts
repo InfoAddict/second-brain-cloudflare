@@ -399,6 +399,93 @@ describe("undoGroup() (S3)", () => {
     expect(result!.capped).toBe(true);
   });
 
+  it("3 real MCP update calls on canonical rows form a group, and undoGroup reverts all 3 (round 4 re-review MAJOR: canonical edits were dead for undo-group)", async () => {
+    const ids = ["c0", "c1", "c2"];
+    for (const id of ids) await seedEntry(id, ["work", "status:canonical"]);
+
+    const server = buildMcpServer(env, { waitUntil: () => {} } as unknown as ExecutionContext, identity);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "group-review", version: "1" });
+    await Promise.all([client.connect(ct), server.connect(st)]);
+    try {
+      for (const id of ids) {
+        await client.callTool({ name: "update", arguments: { id, content: `${id} edited` } });
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+
+    const changes = await getChanges(env, identity, undefined, CFG);
+    const group = changes.items.find((i): i is ChangeGroup => i.kind === "group" && i.family === "canonical_edit");
+    expect(group, `no canonical_edit group formed — items: ${JSON.stringify(changes.items)}`).toBeDefined();
+
+    const result = await undoGroup(env, identity, group!.group, { actorId: "u1", channel: "mcp" }, CFG);
+    expect(result!.results.slice().sort((a, b) => a.id.localeCompare(b.id))).toEqual(
+      ids.map(id => ({ id, result: "reverted" })).sort((a, b) => a.id.localeCompare(b.id)),
+    );
+    expect(result!.done).toBe(true);
+    for (const id of ids) {
+      const row = await sqlite.db.prepare(`SELECT content FROM entries WHERE id = ?`).bind(id).first() as { content: string };
+      expect(row!.content).toBe(`Memory ${id}`);
+    }
+  });
+
+  it("a teammate's edit lands on c2 while c0's own revert is re-embedding: c2 comes back changed_since, with the teammate's edit intact, not wiped (round 4 re-review MAJOR)", async () => {
+    const ids = ["c0", "c1", "c2"];
+    for (const id of ids) await seedEntry(id, ["work", "status:canonical"]);
+
+    const server = buildMcpServer(env, { waitUntil: () => {} } as unknown as ExecutionContext, identity);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "group-review", version: "1" });
+    await Promise.all([client.connect(ct), server.connect(st)]);
+    try {
+      // Distinct, strictly ascending timestamps, all at or before `now` (getChanges' own window
+      // is created_at <= its read of Date.now()) -- the group's own membership order is
+      // oldest-first, so this pins c0 as the loop's first revert and c2 as its last, matching the
+      // reviewer's own repro precisely rather than leaving it to however SQLite happens to break
+      // a tie among 3 identical timestamps.
+      for (const [i, id] of ids.entries()) {
+        vi.spyOn(Date, "now").mockReturnValue(now - (ids.length - 1 - i) * 1000);
+        await client.callTool({ name: "update", arguments: { id, content: `${id} edited` } });
+      }
+      vi.spyOn(Date, "now").mockReturnValue(now);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+
+    const changes = await getChanges(env, identity, undefined, CFG);
+    const group = changes.items.find((i): i is ChangeGroup => i.kind === "group" && i.family === "canonical_edit");
+    expect(group, `no canonical_edit group formed — items: ${JSON.stringify(changes.items)}`).toBeDefined();
+
+    // The race: undoGroup classifies every member up front, then reverts them one at a time in
+    // the SAME call, each with its own re-embed. A teammate's edit to c2 landing during c0's own
+    // re-embed (the reviewer's own repro) falls in the gap between c2's classification and c2's
+    // own turn in that same loop.
+    let fired = false;
+    const realRun = env.AI.run.bind(env.AI);
+    (env.AI as unknown as { run: (...args: unknown[]) => unknown }).run = vi.fn(async (...args: unknown[]) => {
+      if (!fired) {
+        fired = true;
+        const newest = await sqlite.db.prepare(`SELECT MAX(seq) as m FROM entry_versions WHERE entry_id = 'c2'`).first() as { m: number };
+        await insertVersion({ entryId: "c2", seq: newest!.m + 1, tags: ["work", "status:canonical"], actorId: "u2", channel: "mcp", reason: "update", createdAt: Date.now() });
+        await sqlite.db.prepare(`UPDATE entries SET content = ? WHERE id = 'c2'`).bind("c2 teammate edit").run();
+      }
+      return (realRun as (...a: unknown[]) => unknown)(...args);
+    });
+
+    const result = await undoGroup(env, identity, group!.group, { actorId: "u1", channel: "mcp" }, CFG);
+    expect(fired).toBe(true);
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId.c0).toBe("reverted");
+    expect(byId.c1).toBe("reverted");
+    expect(byId.c2).toBe("changed_since");
+
+    const row = await sqlite.db.prepare(`SELECT content FROM entries WHERE id = 'c2'`).first() as { content: string };
+    expect(row!.content).toBe("c2 teammate edit");
+  });
+
   it("MCP undo(group) replies with progress and never accepts an id list", async () => {
     const ids = Array.from({ length: 12 }, (_, i) => `e${i}`);
     await seedStatusBurst(ids, now - HOUR);

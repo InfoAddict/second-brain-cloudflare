@@ -113,7 +113,18 @@ type Snapshot = {
  */
 function normalize(snapshot: Snapshot): Snapshot {
   // The caller's channel, the clock and the row id are the only fields that may differ between REST and MCP.
-  const versions = snapshot.versions.map(({ id: _id, channel: _channel, created_at: _created, valid_from: _valid, ...rest }) => rest);
+  const versions = snapshot.versions.map(({ id: _id, channel: _channel, created_at: _created, valid_from: _valid, meta, ...rest }) => {
+    // event_id (round 4 re-review MAJOR) is minted fresh per call -- legitimately different
+    // between the REST and MCP writes this test compares, same reasoning as updated_at below.
+    let metaRest: unknown = meta;
+    if (typeof meta === "string") {
+      try {
+        const { event_id: _e, ...m } = JSON.parse(meta) as Record<string, unknown>;
+        metaRest = JSON.stringify(m);
+      } catch { /* not JSON: leave as-is */ }
+    }
+    return { ...rest, meta: metaRest };
+  });
   if (!snapshot.row) return { ...snapshot, versions };
   const row = { ...snapshot.row };
   if (typeof row.updated_at === "number") row.updated_at = "<written>";

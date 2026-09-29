@@ -52,7 +52,7 @@ const ACCOUNTED_FOR: { file: string; line: number; why: string }[] = [
     why: "upsertEntryVectors' OWN upsert loop — the gate that refuses held tags sits at the top of this same function, before any chunking or embedding runs.",
   },
   {
-    file: "src/capture/store.ts", line: 814,
+    file: "src/capture/store.ts", line: 832,
     why: "appendToEntry's short branch: gated inline by `!heldTags && !alreadyHeld && !chunk` immediately above — a newly-held or already-held row never reaches this call. A retry that discovers the row became held after an earlier attempt's chunk landed here retires and forgets that chunk before re-checking the gate (Codex recheck, T-0089.4.2).",
   },
   {
