@@ -322,6 +322,10 @@ async function changeEventRows(
   // when the window is genuinely dominated by another tenant's own activity: the scan must walk
   // every non-matching row to confirm there is nothing left to match, since a match is no longer
   // guaranteed within the first RAW_EVENT_SCAN_LIMIT rows read in date order.
+  // scope-checked: both branches carry their own workspace_id IN (json_each(?3)) clause, bound to
+  // the reader's own scoped workspace list -- assembled here as a fragment and interpolated into
+  // the two statements below, which check-scope.mjs's static scan cannot follow through the
+  // ${inScope} template interpolation.
   const inScope = `entry_id IN (
          SELECT id FROM entries WHERE workspace_id IN (SELECT value FROM json_each(?3))
          UNION ALL
