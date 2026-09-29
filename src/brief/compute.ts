@@ -19,6 +19,10 @@ import { D1_MAX_BOUND_PARAMS } from "../constants";
 import { DUE_WITHIN_MS, dueSql } from "../when/input";
 import { parseTags } from "../insight/candidates";
 import { STORED_DATA_NOTICE, storedLine } from "../lib/stored-data";
+// Codex cross-vendor review, T-0102, director follow-up MINOR (round 2 re-review): already used
+// throughout this file; line 544 (below) was the one hand-rolled quarantine:-prefix LIKE holdout,
+// now the same one-line swap to this shared exact-match helper. This file belongs to the FX1 lane
+// (230d0afe) -- flagged in the FX2 report for merge order.
 import { NOT_HELD_SQL } from "../quarantine/tags";
 import {
   excludedIds, readResurfaceState, withShown, writeResurfaceState,
@@ -541,7 +545,7 @@ async function standingBriefItems(
   const { results } = await env.DB.prepare(
     `SELECT id, content, created_at FROM entries
       WHERE id IN (SELECT value FROM json_each(?)) AND ${scope.clause}
-        AND tags LIKE '%"standing:active"%' AND tags NOT LIKE '%"status:deprecated"%' AND tags NOT LIKE '%"quarantine:%'`,
+        AND tags LIKE '%"standing:active"%' AND tags NOT LIKE '%"status:deprecated"%' AND ${NOT_HELD_SQL}`,
   ).bind(JSON.stringify(ids), ...scope.bindings).all();
   return (results as { id: string; content: string; created_at: number }[])
     .sort((a, b) => a.created_at - b.created_at)

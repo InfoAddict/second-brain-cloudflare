@@ -3,8 +3,12 @@ import { initializeDatabase } from "../db/init";
 import type { Identity } from "../lib/identity";
 import { readTeamParam, scopeWhereForRead, type ScopeClause } from "../lib/scope";
 import { STATUS_PREFIX } from "../memory/status";
-// NOT_HELD_SQL's instr() twin: this query carries no LIKE pattern (see the 64-character project id test).
-import { QUARANTINE_TAG_PREFIX } from "../quarantine/tags";
+// Codex cross-vendor review, T-0102, director follow-up MINOR (round 2 re-review): this used to
+// hand-roll its own quarantine:-prefix instr() check (a bare prefix match, the same class of bug
+// finding 1 fixed elsewhere) instead of the shared exact-match notHeldInstrSql -- this file's own
+// query must avoid LIKE entirely (see the 64-character project id test), so it uses the instr()
+// twin of NOT_HELD_SQL, not NOT_HELD_SQL itself.
+import { notHeldInstrSql } from "../quarantine/tags";
 import { readCachedPromptCapsule, writeCachedPromptCapsule } from "./cache";
 import { sha256Hex, strongEtag } from "./etag";
 import { selectPromptCapsuleEntries } from "./select";
@@ -220,7 +224,7 @@ async function buildPromptCapsuleFromD1(
         AND instr(lower(tags), '"capsule:') > 0
         AND instr(lower(tags), ?) > 0
         AND instr(lower(tags), ?) > 0
-        AND instr(lower(tags), '"${QUARANTINE_TAG_PREFIX}') = 0
+        AND ${notHeldInstrSql("lower(tags)")}
         AND (valid_until IS NULL OR valid_until > ${now})
       ORDER BY id ASC
       LIMIT ?`,

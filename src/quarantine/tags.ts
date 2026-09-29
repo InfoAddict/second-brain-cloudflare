@@ -42,6 +42,18 @@ export function notHeldSqlFor(alias: string): string {
     r => `${alias}.tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${likeLiteral(r)}"%' ESCAPE '\\'`,
   ).join(" AND ");
 }
+
+/**
+ * `NOT_HELD_SQL`'s `instr()` twin (Codex cross-vendor review, T-0102, director follow-up MINOR,
+ * round 2 re-review): for a query that must avoid LIKE entirely (prompt-capsule/build.ts's own
+ * pinned test: D1's LIKE and a caller-bound, up-to-64-character project id do not mix cleanly).
+ * `instr()` is a plain substring search with no wildcard semantics at all, so unlike LIKE it needs
+ * no ESCAPE for `too_long`'s literal underscore. `tagsExpr` is the SQL expression to search (a
+ * bare column, or an already-wrapped one like `lower(tags)` — the caller's own case convention).
+ */
+export function notHeldInstrSql(tagsExpr: string): string {
+  return HOLD_REASONS.map(r => `instr(${tagsExpr}, '"${QUARANTINE_TAG_PREFIX}${r}"') = 0`).join(" AND ");
+}
 const EDITED_CANONICAL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function isTagString(t: unknown): t is string {
