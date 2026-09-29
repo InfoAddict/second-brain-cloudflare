@@ -258,13 +258,10 @@ export const journeys: Journey[] = [
       const opened = await ctx.page.evaluate(() => {
         const fn = (window as unknown as { openLoopsSheet?: () => unknown }).openLoopsSheet;
         if (typeof fn !== "function") return false;
-        fn();
-        return true;
+        return Promise.resolve(fn()).then(() => true);
       });
       if (!opened) throw new NotBuilt("UX-A.3: Loops sheet", "no window.openLoopsSheet() function (loops.js not loaded)");
-      const loopsList = await ctx.page.waitForSelector("#loops-list", { timeout: 3000 }).catch(() => null);
-      if (!loopsList) throw new NotBuilt("UX-A.3: Loops sheet", "openLoopsSheet() did not populate #loops-list");
-      const doneBtn = await ctx.page.$('#loops-list button[onclick*="resolveLoop"]');
+      const doneBtn = await ctx.page.waitForSelector('#loop-row-w9-mem button[onclick*="resolveLoop"]', { timeout: 5000 }).catch(() => null);
       if (!doneBtn) throw new NotBuilt("UX-A.3: Undo toasts on loops actions", "no resolveLoop action button in #loops-list for the seeded task");
       await ctx.shot("before", "the loops sheet before resolving an item");
       await doneBtn.click();
@@ -337,12 +334,11 @@ export const journeys: Journey[] = [
       const opened = await ctx.page.evaluate(() => {
         const fn = (window as unknown as { openLedgerSheet?: () => unknown }).openLedgerSheet;
         if (typeof fn !== "function") return false;
-        fn();
-        return true;
+        return Promise.resolve(fn()).then(() => true);
       });
       if (!opened) throw new NotBuilt("Track 7 (UX-G): decision log", "no window.openLedgerSheet() function (ledger.js not loaded)");
-      const ledgerList = await ctx.page.waitForSelector("#ledger-list", { timeout: 3000 }).catch(() => null);
-      if (!ledgerList) throw new NotBuilt("Track 7 (UX-G): decision log", "openLedgerSheet() did not populate #ledger-list");
+      const decisionRow = await ctx.page.waitForSelector("#ledger-row-w13-decision", { timeout: 5000 }).catch(() => null);
+      if (!decisionRow) throw new NotBuilt("Track 7 (UX-G): decision log", "openLedgerSheet() did not populate the seeded decision row");
       await ctx.shot("ledger", "the decision log sheet");
     },
   },
