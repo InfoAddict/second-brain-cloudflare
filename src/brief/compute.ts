@@ -272,7 +272,13 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
     resurfaceRow = await pickResurface(env, scope, resurfaceBefore, topics, excluded, today, now) ?? null;
     if (resurfaceRow) nextState = withShown(priorState, resurfaceRow.id, today);
   }
-  if (!preview && nextState !== priorState) {
+  // T-0102 MINOR fix (finding 8): the persisted state is keyed by workspace only, never by
+  // project, so a project-scoped pick (from a narrower `scope`) would overwrite the same slot the
+  // unscoped brief's own same-day stability reads from -- on every ?project= call whose scope
+  // does not already match whatever the last write left there, not just once. Treated like
+  // `preview`: a project-scoped pick is read fine (same-day stability still applies if the prior
+  // pick happens to fall inside this project's scope), but never written back.
+  if (!preview && !projectRows?.length && nextState !== priorState) {
     await writeResurfaceState(env, workspaceKey, nextState);
   }
 

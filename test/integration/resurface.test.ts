@@ -18,6 +18,7 @@ import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { setDbReady } from "../../src/runtime/state";
 import { resurfaceStateKey } from "../../src/runtime/resurface-state";
+import { createProject } from "../../src/projects/registry";
 import type { Env } from "../../src/env";
 
 const ctx = { waitUntil: (_: Promise<unknown>) => {} } as any;
@@ -142,6 +143,31 @@ describe("GET /brief — same-day stability and rotation", () => {
     const second = await (await worker.fetch(req("GET", "/brief"), env, ctx)).json() as any;
     expect(second.resurface).toBeNull();
     expect(JSON.stringify(second)).not.toContain("secret plan");
+  });
+
+  // Cross-vendor review MINOR (T-0102), finding 8: the persisted resurface state is keyed by
+  // workspace only, never by project, so a project-scoped pick (a narrower `scope`) would
+  // overwrite the same slot the UNSCOPED brief's own same-day stability reads from.
+  it("never persists a project-scoped pick, so it cannot corrupt the unscoped brief's own same-day pick", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "proj1", content: "a project memory", createdAt: now - OLD, importanceScore: 5, tags: ["project:site"] });
+    const env = envWithKv(sq);
+    const { ownerPersonalWorkspaceId } = await ensureTenantBootstrap(env);
+    await createProject(env.DB, ownerPersonalWorkspaceId, { id: "site", name: "Site", aliases: [] });
+
+    const scoped1 = await (await worker.fetch(req("GET", "/brief?project=site"), env, ctx)).json() as any;
+    expect(scoped1.resurface?.id).toBe("proj1");
+    expect(await env.OAUTH_KV.get(resurfaceStateKey(ownerPersonalWorkspaceId))).toBeNull();
+
+    const scoped2 = await (await worker.fetch(req("GET", "/brief?project=site"), env, ctx)).json() as any;
+    expect(scoped2.resurface?.id).toBe("proj1");
+    expect(await env.OAUTH_KV.get(resurfaceStateKey(ownerPersonalWorkspaceId))).toBeNull();
+
+    // The unscoped brief still persists normally, unaffected by the project-scoped calls above.
+    const unscoped = await (await worker.fetch(req("GET", "/brief"), env, ctx)).json() as any;
+    expect(unscoped.resurface?.id).toBe("proj1");
+    expect(await env.OAUTH_KV.get(resurfaceStateKey(ownerPersonalWorkspaceId))).not.toBeNull();
   });
 
   it("does not repeat a pick shown within the last 30 days", async () => {
