@@ -1209,13 +1209,19 @@
         flex-shrink: 0;
       }
 
-      /* T-0101.6.1: Replaced and Ended are a past-tense fact about the row,
-         not a problem - the same calm accent-ink treatment as standing and
-         shared. Check means "look at this one", the held chip's --warn. */
-      .validity-chip--replaced,
-      .validity-chip--ended {
+      /* T-0101.6.1: Replaced and Ended are both a past-tense fact about the row, not a
+         problem, so neither gets the held chip's --warn - but a UI review found them reading
+         as the same chip at a glance, so they get distinct tints of that calm register:
+         Replaced (something else says this now) keeps the brand accent; Ended (nothing
+         replaced it) reads neutral, since there is no other memory to point to. */
+      .validity-chip--replaced {
         color: var(--accent-ink);
         border-color: var(--accent-ink);
+      }
+
+      .validity-chip--ended {
+        color: var(--text-secondary);
+        border-color: var(--border-soft);
       }
 
       .validity-chip--check {
