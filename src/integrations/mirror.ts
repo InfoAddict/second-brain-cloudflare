@@ -90,21 +90,35 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       // model, and this function once resolved config for the embed while
       // classifying with the shipped default.
       const cfg = await config();
-      try {
-        const c = await classifyEntry(content, env, cfg);
-        importance = c.importance;
-        if (c.kind) finalTags = withKind(finalTags, c.kind);
-        if (c.canonical) finalTags = withStatus(finalTags, "canonical");
-      } catch (e) {
-        console.error("Mirror classify failed (non-fatal):", e);
-      }
-      // Track 4 (16-t3-t4-trust-spec.md 5.1, 5.4 W-d): mirror writes are scored strictest —
-      // channel system:mirror, x1.25, no meta-discussion damping — because an email or a
-      // calendar invite sets its own `source` and can never declare itself `direct`.
+
+      // Codex review, T-0102 C: scored BEFORE classify, not after -- classifyEntry is a model
+      // call, and a held row's content must never reach a model prompt (the class E rule this
+      // whole gate exists to enforce), classification included. Track 4 (16-t3-t4-trust-spec.md
+      // 5.1, 5.4 W-d): mirror writes are scored strictest -- channel system:mirror, x1.25, no
+      // meta-discussion damping -- because an email or a calendar invite sets its own `source`
+      // and can never declare itself `direct`. Scored on the tags as sync offered them: classify
+      // only ever adds kind:/status:canonical, neither of which a hold signal depends on, so
+      // scoring first changes no verdict, only the order content reaches the model in.
       const change = { actorId: writeCtx.actorId, channel: "system:mirror" as const };
       const score = scoreWrite({ content, tags: finalTags, source, channel: "system:mirror", kind: "create" }, cfg);
       // Codex review class D (T-0089.4.2): a `partial` score holds too, reason too_long.
       const decision = holdDecision(score);
+
+      // Classify like a normal capture so mirror entries (email, calendar, Notion) get a
+      // kind/importance and don't sit in the "not classified" bucket. Non-fatal — a failure just
+      // leaves it for the backfill to pick up. Skipped entirely when held: nothing classifies
+      // content a model may not see, and the backfill picks it up once released, the same as any
+      // other held row's classification.
+      if (!decision.hold) {
+        try {
+          const c = await classifyEntry(content, env, cfg);
+          importance = c.importance;
+          if (c.kind) finalTags = withKind(finalTags, c.kind);
+          if (c.canonical) finalTags = withStatus(finalTags, "canonical");
+        } catch (e) {
+          console.error("Mirror classify failed (non-fatal):", e);
+        }
+      }
 
       // versioning: exempt: creation — a new row has no prior state to keep
       const insertStatement = env.DB.prepare(
