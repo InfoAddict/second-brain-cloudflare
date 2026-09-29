@@ -2,7 +2,7 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
-## [Unreleased]
+## [4.0.0] — TBD
 
 **Session hooks**
 
