@@ -319,22 +319,8 @@ async function changeEventRows(
   // payload.trash false; everything at or before the latest such event belongs to the row that's
   // now gone. rowid, not created_at -- insertion order, immune to a backdated or future timestamp.
   //
-  // R23 (budget auditor MAJOR): this used to be a correlated subquery inside baseFilter, so it ran
-  // once per RAW row examined by all 4 capped scans (the count probe and the 3 UNION branches) --
-  // ~4,000 extra rows read per brief. It now runs once per row in the outer query, after the cap
-  // and the scope join have already cut that set down to at most a few hundred, and it is dropped
-  // from the count probe entirely (an approximate "at least this many" count, same as before this
-  // filter existed, never promised exact).
-  //
-  // round 8 re-review MINOR (upgrade safety): idx_entry_events_life_end's own predicate is
-  // `event IN ('purged', 'deleted')`, no json_extract at all (a CREATE INDEX or an ordinary INSERT
-  // must never throw on a row whose payload happens not to be valid JSON). `g.event IN ('purged',
-  // 'deleted') AND (g.event = 'purged' OR json_extract(...) = 0)` is the same condition as
-  // `g.event = 'purged' OR (g.event = 'deleted' AND json_extract(...) = 0)` (distributing the OR
-  // over the AND), but written so its first conjunct is syntactically identical to the index's own
-  // WHERE -- SQLite's partial-index matching does not reliably prove the two are equivalent from
-  // the original OR/AND-nested form alone (confirmed with EXPLAIN QUERY PLAN: the original form
-  // fell back to a full index scan here and a bare table scan in admin.ts).
+  // Runs once in the outer query, after the cap and scope join narrow the set, not once per raw
+  // row (R23); the index-matching first conjunct keeps CREATE INDEX/INSERT safe from non-JSON payloads.
   const lifeFilter = `e.event_rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = e.entry_id
              AND g.event IN ('purged', 'deleted') AND (g.event = 'purged' OR json_extract(g.payload, '$.trash') = 0)), 0)`;
   // R22 (budget auditor MAJOR, on top of T-0102 finding 7): the workspace scope is checked per
@@ -372,7 +358,7 @@ async function changeEventRows(
   // scope-checked: entry_workspace_id, COALESCEd by the join below, is filtered against the
   // reader's scope in the outer query's WHERE (json_each(?3)) -- deliberately not here, so each
   // inner branch's LIMIT bounds RAW rows examined, not rows matching that filter. event_rowid rides
-  // along the same way, for lifeFilter to apply once in that same outer WHERE (R23).
+  // along the same way for lifeFilter's own outer WHERE.
   const scopedEvents = `
          SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id, e.event_rowid,
                 COALESCE(en.actor_id, t.actor_id) AS author_id,
@@ -414,12 +400,8 @@ async function changeEventRows(
          WHERE ${baseFilter} LIMIT ${RAW_EVENT_SCAN_LIMIT + 1}
        )`,
     ).bind(since, until),
-    // scope-checked: inScope's COALESCE(...) IN (json_each(?3)) below, filtering the already-capped
-    // and already-joined rows from scopedEvents above. lifeFilter (R23) wraps this as a separate
-    // outer SELECT rather than another ANDed term in the same WHERE: SQLite does not reliably defer
-    // an unindexed correlated subquery to run only after the cheap workspace/channel/actor terms
-    // have already cut the row count down -- in the same WHERE it can run once per row of the
-    // (still up to ~3,000-row) union, not once per row actually surviving to the LIMIT 200 output.
+    // scope-checked: inScope's COALESCE(...) IN (json_each(?3)) below. lifeFilter is a separate
+    // outer SELECT, not another ANDed term, so it runs once per surviving row, not per unioned row.
     env.DB.prepare(
       `SELECT * FROM (
          SELECT *, COUNT(*) OVER () AS inner_count FROM (
@@ -440,13 +422,10 @@ async function changeEventRows(
   ]);
   const rawCount = ((countResult.results as { raw_count: number }[] | undefined)?.[0]?.raw_count) ?? 0;
   const rows = (mainResult.results ?? []) as unknown as (RawRow & { inner_count: number })[];
-  // round 8 re-review MINOR: inner_count is computed over the inner, pre-lifeFilter 200-row cap
-  // (a window function evaluated before the outer WHERE strips old-life rows), so a surviving row
-  // still carries the READ's own true size even after the filter drops some of them -- unlike
-  // results.length, which only counts what's left, and would silently read "not truncated" if the
-  // life filter's own noise happened to be what got cut off the true 200-row cap.
-  const innerCount = rows[0]?.inner_count ?? rows.length;
-  return { rows, innerCapped: innerCount === READ_LIMIT, rawCapped: rawCount > RAW_EVENT_SCAN_LIMIT };
+  // No surviving row to read inner_count from if the life filter drops all of them: fall back to
+  // the raw probe rather than under-report truncation.
+  const innerCapped = rows.length ? rows[0].inner_count === READ_LIMIT : rawCount >= READ_LIMIT;
+  return { rows, innerCapped, rawCapped: rawCount > RAW_EVENT_SCAN_LIMIT };
 }
 
 /**
@@ -473,11 +452,8 @@ export async function getChanges(
     windowHours,
     count: classified.length,
     held,
-    // Honest either way (R21 review): the read hit its own 200-row inner cap (innerCapped, round 8
-    // re-review MINOR: taken from the inner, pre-lifeFilter row count, not results.length -- the
-    // life filter can drop some of those 200 rows as another id's earlier life, which must not
-    // read as "the window fit entirely"), or the raw pre-filter scan hit RAW_EVENT_SCAN_LIMIT
-    // before it could see the whole window.
+    // Honest either way: the inner 200-row cap was hit (before the life filter drops any rows), or
+    // the raw pre-filter scan hit RAW_EVENT_SCAN_LIMIT before it could see the whole window.
     truncated: innerCapped || rawCapped,
     items: group(classified, cfg).slice(0, OUTPUT_LIMIT),
   };

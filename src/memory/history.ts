@@ -46,11 +46,8 @@ export async function readEntryTimeline(
   // either event, so comparing them was never sound (T-0102, director follow-up, this round
   // supersedes the entryCreatedAt floor it replaces — no caller needs its own row read for this
   // anymore, and no schema change: rowid is every SQLite table's own, always).
-  // round 8 re-review MINOR (upgrade safety): the first conjunct matches idx_entry_events_life_end's
-  // own WHERE (`event IN ('purged', 'deleted')`, no json_extract -- a CREATE INDEX or an ordinary
-  // INSERT must never throw on a non-JSON payload) syntactically, so SQLite's partial-index matching
-  // recognizes it; see src/brief/changes.ts's lifeFilter for the full reasoning and EXPLAIN QUERY
-  // PLAN confirmation.
+  // First conjunct matches idx_entry_events_life_end's own WHERE syntactically (no json_extract in
+  // the index) -- see src/brief/changes.ts's lifeFilter for the full reasoning.
   const LIFE_START = `COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = ev.entry_id
        AND g.event IN ('purged', 'deleted') AND (g.event = 'purged' OR json_extract(g.payload, '$.trash') = 0)), 0)`;
   const query = inlineLabels

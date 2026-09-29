@@ -213,15 +213,8 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // to maintain, and gives `WHERE event = 'held' ORDER BY created_at DESC LIMIT n` a direct,
   // index-only seek regardless of how much non-held noise shares the same window.
   idx_entry_events_held: `CREATE INDEX IF NOT EXISTS idx_entry_events_held ON entry_events(created_at DESC) WHERE event = 'held'`,
-  // Every event reader's correlated "latest life-end event for this entry_id" subquery (R23,
-  // budget auditor BLOCK): without an index matching its WHERE, it re-scans every one of the same
-  // id's own events on each evaluation -- quadratic in edits per memory. entry_id alone, not
-  // (entry_id, rowid): SQLite rejects rowid/_rowid_ as an explicit indexed column on a table with
-  // its own TEXT PRIMARY KEY (rowid is already the implicit trailing component of every index's
-  // leaf entries -- confirmed with EXPLAIN QUERY PLAN). event IN ('purged', 'deleted'), not the
-  // readers' own exact trash=0 predicate (round 8 re-review MINOR, upgrade safety): json_extract
-  // throws on any row whose payload is not valid JSON, both at CREATE INDEX time and on every later
-  // insert of a 'deleted' event -- the readers' own WHERE still checks trash=0 on top of this.
+  // The event readers' life-end subquery (quadratic in edits per memory without this index). No
+  // json_extract in the WHERE -- must never throw on a non-JSON payload; readers check trash=0 on top.
   idx_entry_events_life_end: `CREATE INDEX IF NOT EXISTS idx_entry_events_life_end ON entry_events(entry_id) WHERE event IN ('purged', 'deleted')`,
   // Immutable administration audit trail. Same contract as entry_events:
   // application code only ever INSERTs here. Consumed by Phase 4.2.
