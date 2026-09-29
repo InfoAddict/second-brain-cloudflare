@@ -562,7 +562,11 @@ function renderViewBrain(entry) {
   if (kind) {
     rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.kind'))}</span><strong>${escHtml(viewKindLabel(kind))}</strong></div>`)
   }
-  if (status) {
+  // T-0101.6.1: skipped whenever the status caption already tells the validity story
+  // (renderViewStatus/validityStatusCaptionHtml) - otherwise this plain row said "Trusted"
+  // right above a caption reading "No longer true since...", the same bare-Trusted spec 13
+  // was fixed to remove flagged again on a real screenshot (sheet-ended, sheet-retracted-source).
+  if (status && !(status !== 'deprecated' && validityStatusCaptionHtml(entry))) {
     rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(viewStatusLabel(status))}</strong></div>`)
   }
   const volPair = volatility ? viewVolatility(volatility) : null
