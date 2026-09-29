@@ -257,7 +257,12 @@ export async function handleAdminRoutes(
       const result = await removeMember(env, auth.userId, body.id.trim());
       // History remains: nothing is audited or deleted from the index yet. The dashboard calls
       // again, and the nightly run resumes it if nobody does.
-      if (!result.done) return json({ ok: true, done: false, id: body.id.trim(), remaining: result.remaining }, 202);
+      // FX3 finding 7: keeps the 3.7 removedEntries/removedVectors fields on the 202 too, rather
+      // than omitting them — both are genuinely 0 at this stage, since removeMember touches
+      // neither D1 rows nor vectors until the history cleanup finishes and done flips true.
+      if (!result.done) {
+        return json({ ok: true, done: false, id: body.id.trim(), remaining: result.remaining, removedEntries: 0, removedVectors: 0 }, 202);
+      }
       // Audited before the Vectorize delete, not after: the D1 rows are already
       // gone by here, so a Vectorize failure must not also cost the record of the
       // destruction. The counts, never the content, this is the one

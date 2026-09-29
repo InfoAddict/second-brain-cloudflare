@@ -75,7 +75,9 @@ describe("member removal keeps history consistent", () => {
 
     const first = await remove(m.userId);
     expect(first.status).toBe(202);
-    expect(await first.json()).toMatchObject({ ok: true, done: false });
+    // FX3 finding 7: the 202 keeps the 3.7 removedEntries/removedVectors fields, with partial
+    // (here: zero, since nothing is deleted until done:true) counts, rather than omitting them.
+    expect(await first.json()).toMatchObject({ ok: true, done: false, removedEntries: 0, removedVectors: 0 });
     // Bottom-up: the oldest 10,000 went, the newest 500 remain contiguous, and the entry still exists.
     const seqs = await versionSeqs("big");
     expect(seqs[0]).toBe(MEMBER_HISTORY_CHUNK * MEMBER_HISTORY_MAX_CHUNKS + 1);
