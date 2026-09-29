@@ -128,7 +128,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/memory/validity.ts', line: 622, kind: 'snapshot', standing: 'touch' },
   { file: 'src/memory/validity.ts', line: 640, kind: 'snapshot', standing: 'exempt: the propagate UPDATE moves a REPLACED row\'s own valid_until; a standing row is never itself in a supersede chain, and if it were, the primary row\'s own touch above plus the 24h revalidation (2.4) covers it' },
   { file: 'src/quarantine/hold.ts', line: 113, kind: 'snapshot', standing: 'exempt: Track 4\'s own quarantine hold/release wiring (spec 15 2.13, Task 16), not lane D' },
-  { file: 'src/recall/search.ts', line: 1423, kind: 'exempt', standing: 'exempt: recall_count bookkeeping only, no tags column' },
+  { file: 'src/recall/search.ts', line: 1425, kind: 'exempt', standing: 'exempt: recall_count bookkeeping only, no tags column' },
   { file: 'src/routes/admin.ts', line: 1570, kind: 'exempt', standing: 'exempt: same hygiene classify write as capture/classify.ts:78 (withKind/withStatus only), never touches standing:active' },
   { file: 'src/staleness/pass.ts', line: 91, kind: 'exempt', standing: 'exempt: a staleness marker addition, never removes standing:active, and hydration re-checks validity independently (2.4/2.6) regardless' },
   { file: 'src/staleness/pass.ts', line: 101, kind: 'exempt', standing: 'exempt: staleness_checked_at only, no tags column' },

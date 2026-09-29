@@ -118,7 +118,7 @@ function asOfMarkers(m: RecallMatch, timezone: string): string {
 export function renderRecallText(
   matches: RecallMatch[],
   insight: string,
-  opts: { full?: boolean; queryTokens?: string[]; config?: Readonly<Config>; compoundStale?: CompoundStaleSignal; asOf?: { at: number; notRecordedBefore: number | null }; standing?: readonly StandingFire[] } = {},
+  opts: { full?: boolean; queryTokens?: string[]; config?: Readonly<Config>; compoundStale?: CompoundStaleSignal; asOf?: { at: number; notRecordedBefore: number | null }; standing?: readonly StandingFire[]; receipt?: string } = {},
 ): string {
   const cfg = opts.config ?? DEFAULTS;
   const beliefs = opts.asOf ? matches.filter(m => m.retractedBelief) : [];
@@ -200,7 +200,8 @@ export function renderRecallText(
     text += `\n\nBelieved then, later retracted:\n${unattachedBeliefs.map(b => beliefLine(b, cfg.TIMEZONE)).join("\n")}`;
   }
   const body = insight ? `**Insight:** ${insight}\n\n---\n\n${text}` : text;
-  return standing + (prefix ? prefix + body : body);
+  const receiptLine = opts.receipt ? `\n\nreceipt: ${opts.receipt}` : "";
+  return standing + (prefix ? prefix + body : body) + receiptLine;
 }
 
 // A term is "rare" once its idf clears this (about one note in twenty holds it).

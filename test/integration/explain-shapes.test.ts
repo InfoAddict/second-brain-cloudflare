@@ -11,22 +11,33 @@ import { SHAPES, runShape } from "../helpers/explain-shapes";
 
 const names = Object.keys(SHAPES);
 const stripWhy = (body: any) => body.results ? { ...body, results: body.results.map(({ why: _w, ...r }: any) => r) } : body;
+// Part C (05-proof.md, T-0089.5.3): receipt is a new, deliberate field on every recall
+// response, predating neither this golden (captured before it existed) nor the explain
+// feature this file actually tests. Stripped here the same way `why` is, so this file keeps
+// testing what it is for — that explain adds only why data — without re-litigating receipt.
+const stripReceipt = (body: any) => { const { receipt: _r, ...rest } = body; return rest; };
+const stripExtras = (body: any) => stripReceipt(stripWhy(body));
 
 describe.each(names)("explain shape: %s", (name) => {
   const want = (golden as any)[name];
 
-  it("off: REST JSON and MCP text are byte-identical to release/v4", async () => {
+  it("off: REST JSON and MCP text are byte-identical to release/v4, receipt aside", async () => {
     const off = await runShape(name, false);
-    expect(JSON.stringify(off.rest)).toBe(JSON.stringify(want.rest));
-    expect(off.mcp).toBe(want.mcp);
+    expect(JSON.stringify(stripReceipt(off.rest))).toBe(JSON.stringify(want.rest));
+    expect(off.mcp.replace(/\n\nreceipt: \S+$/, "")).toBe(want.mcp);
+    expect(typeof off.rest.receipt).toBe("string");
+    expect(off.mcp).toMatch(/receipt: \S+$/);
   });
 
   it("on: same results, order and text; one why line per MCP result; a why object per REST result", async () => {
     const on = await runShape(name, true);
-    expect(JSON.stringify(stripWhy(on.rest))).toBe(JSON.stringify(want.rest));
+    expect(JSON.stringify(stripExtras(on.rest))).toBe(JSON.stringify(want.rest));
+    expect(typeof on.rest.receipt).toBe("string");
     const results = on.rest.results ?? [];
     for (const r of results) expect(Object.keys(r.why).sort()).toEqual(["age_known", "dense_rank", "graph", "keyword_terms", "multipliers", "rerank_move", "rerank_percentile", "slot"]);
-    const lines = on.mcp.split("\n");
+    expect(on.mcp).toMatch(/\n\nreceipt: \S+$/);
+    const mcpWithoutReceipt = on.mcp.replace(/\n\nreceipt: \S+$/, "");
+    const lines = mcpWithoutReceipt.split("\n");
     const ids = lines.filter(l => l.startsWith("ID: ")).length;
     expect(lines.filter(l => l.startsWith("why: ")).length).toBe(ids);
     expect(ids).toBe(results.length);

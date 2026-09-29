@@ -1176,7 +1176,7 @@ export function buildMcpServer(
         if (typeof parsed !== "number") return { content: [{ type: "text", text: parsed.error }] };
         asOf = parsed;
       }
-      const { matches, insight, semanticUnavailable, queryTokens, compoundStale, asOf: asOfHeader, standing } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain, channel: "mcp" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId, asOf });
+      const { matches, insight, semanticUnavailable, queryTokens, compoundStale, asOf: asOfHeader, standing, receipt } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain, channel: "mcp" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId, asOf });
 
       const notice = semanticUnavailable
         ? `Note: semantic search was unavailable or incomplete for this query, so these results may be keyword matches only. ${SEMANTIC_UNAVAILABLE_DETAIL}\n\n`
@@ -1185,10 +1185,10 @@ export function buildMcpServer(
       if (!matches.length) {
         // A standing instruction can fire above zero results (spec 15 2.8 step 5): it still renders.
         const standingText = standing?.length ? standingSection(standing) : "";
-        return { content: [{ type: "text", text: notice + standingText + "Nothing found matching that query." }] };
+        return { content: [{ type: "text", text: notice + standingText + `Nothing found matching that query.\n\nreceipt: ${receipt}` }] };
       }
 
-      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg, compoundStale, asOf: asOfHeader, standing }) }] };
+      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg, compoundStale, asOf: asOfHeader, standing, receipt }) }] };
     }
   );
 

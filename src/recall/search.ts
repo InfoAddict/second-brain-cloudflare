@@ -49,7 +49,7 @@ import { applyOccupancyCap, CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates,
 import { enrichWithAsOf, asOfPredicateSql, asOfPredicateBindings } from "./as-of";
 import { getVersionsSince } from "../memory/versions";
 import { currentValidityAt, supersededBySql } from "../memory/validity";
-import { maybeLogRecall, type RecallLogChannel } from "./log";
+import { maybeLogRecall, receiptHash, type RecallLogChannel } from "./log";
 import { readStandingCaches } from "../standing/cache";
 import { selectStandingFires } from "../standing/fire";
 
@@ -595,7 +595,9 @@ export async function recallEntries(
   /** No hydration will run on this path: the standing arm, if any candidate survives, is the only extra statement (spec 15 2.8 step 5). */
   async function noResultsWithStanding(): Promise<RecallSearchResult> {
     const standing = await fetchStandingFires();
-    return { matches: [], insight: "", semanticUnavailable, ...(standing.length ? { standing } : {}) };
+    // No recall_log row is written on this path (maybeLogRecall never runs here), so the
+    // receipt is always the hash, whatever RECALL_LOG is set to (Part C, 05-proof.md).
+    return { matches: [], insight: "", semanticUnavailable, receipt: receiptHash(query, now), ...(standing.length ? { standing } : {}) };
   }
 
   let keywordRows: KeywordRow[] = [];
@@ -1429,7 +1431,13 @@ export async function recallEntries(
   // T-0089.5.2 Part A: opt-in (RECALL_LOG, off by default everywhere) and sampled — a
   // no-op below cfg.RECALL_LOG === "on", so this costs nothing on every brain that never
   // turns it on. Never touches `matches`, so ranking is unaffected either way.
+  // Part C (05-proof.md, T-0089.5.3): pre-generated here so the response's receipt matches
+  // the row this write might land, with no read-back. The write itself stays fire-and-forget
+  // (ctx.waitUntil), so a call that loses the daily-cap race still returns this receipt, just
+  // with no row behind it — the same "sampled" honesty the log itself already has.
+  const receipt = cfg.RECALL_LOG === "on" ? crypto.randomUUID() : receiptHash(query, now);
   ctx.waitUntil(maybeLogRecall(env, cfg, {
+    id: receipt,
     workspaceId: identity?.personalWorkspaceId ?? "",
     channel: params.channel ?? "rest",
     query,
@@ -1475,5 +1483,5 @@ export async function recallEntries(
     internal.diagnostics.stageMs.total = performance.now() - totalStartedAt;
   }
 
-  return { matches, insight, semanticUnavailable, queryUsed: lexicalQuery, queryTokens: tokens, compoundStale, ...(asOfHeader ? { asOf: asOfHeader } : {}), ...(standing.length ? { standing } : {}) };
+  return { matches, insight, semanticUnavailable, queryUsed: lexicalQuery, queryTokens: tokens, compoundStale, receipt, ...(asOfHeader ? { asOf: asOfHeader } : {}), ...(standing.length ? { standing } : {}) };
 }

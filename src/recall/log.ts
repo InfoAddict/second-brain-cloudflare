@@ -20,7 +20,7 @@
 import type { Env } from "../env";
 import type { Config } from "../config";
 import { resolveConfig } from "../config";
-import { RECALL_LOG_FOLLOW_WINDOW_MS, RECALL_LOG_PER_DAY, RECALL_LOG_PURGE_BATCH, RECALL_LOG_RETENTION_DAYS } from "../constants";
+import { RECALL_LOG_FOLLOW_WINDOW_MS, RECALL_LOG_PER_DAY, RECALL_LOG_PURGE_BATCH, RECALL_LOG_RETENTION_DAYS, RECEIPT_TIME_BUCKET_MS } from "../constants";
 
 export type RecallLogChannel = "mcp" | "rest";
 
@@ -33,6 +33,9 @@ export interface RecallLogInput {
   params: unknown;
   returnedIds: readonly string[];
   now: number;
+  /** Part C (05-proof.md): the caller's own pre-generated id, so the recall response's
+   * `receipt` matches this row without reading it back. Falls back to a generated one. */
+  id?: string;
 }
 
 function dayNumber(now: number): number {
@@ -60,7 +63,7 @@ export async function maybeLogRecall(env: Env, cfg: Config, input: RecallLogInpu
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE (SELECT COUNT(*) FROM recall_log WHERE workspace_id = ? AND created_at >= ?) < ?`,
       ).bind(
-        crypto.randomUUID(),
+        input.id ?? crypto.randomUUID(),
         input.workspaceId,
         input.now,
         input.channel,
@@ -141,4 +144,31 @@ export async function maybeMarkFollowedMany(env: Env, workspaceId: string, entry
 
 export async function maybeMarkFollowed(env: Env, workspaceId: string, entryId: string, now: number, cfg?: Config): Promise<void> {
   return maybeMarkFollowedMany(env, workspaceId, [entryId], now, cfg);
+}
+
+/** FNV-1a, 32 bits. Not a security hash — a receipt is a citation, not a credential — so a
+ * synchronous one is the right choice: it never introduces a new await into recall's own
+ * timing, which would otherwise shift when its OTHER fire-and-forget writes (recall_count,
+ * the log itself) actually land relative to the response (see recall-variant-arms.test.ts's
+ * exact D1-write-count snapshots, which a stray extra microtask broke during development). */
+function fnv1a(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Part C (05-proof.md, T-0089.5.3): the recall response's citable `receipt` when the log did
+ * not keep a row for this call, either because RECALL_LOG is off or the daily cap was already
+ * spent. Pure and synchronous: no env, no D1, no KV, no await — a caller on a brain that has
+ * never turned the log on pays nothing beyond this one hash for every recall. `now` is
+ * bucketed so the same query cited a few seconds later still hashes the same way, without
+ * holding the query text itself in the receipt the way a real log row does.
+ */
+export function receiptHash(query: string, now: number): string {
+  const bucket = Math.floor(now / RECEIPT_TIME_BUCKET_MS);
+  return fnv1a(`${query}\0${bucket}`).toString(16).padStart(8, "0");
 }

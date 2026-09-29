@@ -202,7 +202,7 @@ export async function handleRecallRoutes(
       if (typeof parsed !== "number") return json({ ok: false, error: parsed.error }, 400);
       asOf = parsed;
     }
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale, asOf: asOfHeader, standing } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize, channel: "rest" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team, asOf });
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale, asOf: asOfHeader, standing, receipt } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize, channel: "rest" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team, asOf });
 
     if (!matches.length) {
       return json({
@@ -210,6 +210,7 @@ export async function handleRecallRoutes(
         results: [],
         query_used: queryUsed,
         semantic_unavailable: semanticUnavailable,
+        receipt,
         ...(asOfHeader ? { as_of: { at: asOfHeader.at, not_recorded_before: asOfHeader.notRecordedBefore } } : {}),
         // A standing instruction can fire above zero results (spec 15 2.8 step 5).
         ...(standing?.length ? { standing: standing.map(standingJson) } : {}),
@@ -223,6 +224,7 @@ export async function handleRecallRoutes(
       ok: true,
       query_used: queryUsed,
       compound_stale: compoundStale ?? null,
+      receipt,
       ...(asOfHeader ? { as_of: { at: asOfHeader.at, not_recorded_before: asOfHeader.notRecordedBefore } } : {}),
       ...(standing?.length ? { standing: standing.map(standingJson) } : {}),
       results: matches.map((m, i) => {

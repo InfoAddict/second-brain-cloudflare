@@ -301,6 +301,9 @@ export const RECALL_LOG_PURGE_BATCH = 20;
 // Part B: a get/append/update/link on an id within this long of a recall that returned it
 // counts as implicit feedback on that recall (feeds the golden set only, D5.4).
 export const RECALL_LOG_FOLLOW_WINDOW_MS = 30 * 60 * 1000;
+// Part C (05-proof.md, T-0089.5.3): the receipt's fallback hash buckets `now` to this width,
+// so the same query cited moments apart still hashes to the same short receipt.
+export const RECEIPT_TIME_BUCKET_MS = 60 * 1000;
 
 // ── Content versions and trash (4.0, Track 1) ──
 /** KV key holding when entry_versions came into being; history before it does not exist. Read through getVersionsSince. */
