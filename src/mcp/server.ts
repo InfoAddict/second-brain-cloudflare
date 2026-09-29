@@ -507,7 +507,10 @@ export function buildMcpServer(
       const result = await resolveEntryAction(env, ctx, identity, id, action, until, { ...mcpChange, client });
       if (!result.ok) return { content: [{ type: "text", text: result.error }] };
       if (action === "received") {
-        return { content: [{ type: "text", text: `Marked as received: ${result.content}. Undo is available.` }] };
+        // T-0102 MINOR fix: actions.ts already blinds result.content when the row is held; this
+        // swaps the subject for a generic phrase rather than printing an empty one.
+        const subject = result.held ? "it" : result.content;
+        return { content: [{ type: "text", text: `Marked as received: ${subject}. Undo is available.` }] };
       }
       if (action === "stop_standing") {
         return { content: [{ type: "text", text: `Stopped standing instruction ${id}. It is kept as an ordinary memory. Undo is available.` }] };
