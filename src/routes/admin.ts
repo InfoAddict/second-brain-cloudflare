@@ -1,11 +1,11 @@
 import { hasCapsuleTag } from "../tags/system";
-import { deleteEntryVectors } from "../vectorize/batch";
+import { deleteEntryVectors, persistPendingVectorDeletes } from "../vectorize/batch";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from "../compression/eligibility";
 import { intParam, json } from "../lib/http";
-import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../constants";
+import { D1_MAX_BOUND_PARAMS, VECTORIZE_DELETE_MAX_IDS_PER_CALL, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
 import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere, scopeWhereForIdRead } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
@@ -257,7 +257,12 @@ export async function handleAdminRoutes(
       const result = await removeMember(env, auth.userId, body.id.trim());
       // History remains: nothing is audited or deleted from the index yet. The dashboard calls
       // again, and the nightly run resumes it if nobody does.
-      if (!result.done) return json({ ok: true, done: false, id: body.id.trim(), remaining: result.remaining }, 202);
+      // FX3 finding 7: keeps the 3.7 removedEntries/removedVectors fields on the 202 too, rather
+      // than omitting them — both are genuinely 0 at this stage, since removeMember touches
+      // neither D1 rows nor vectors until the history cleanup finishes and done flips true.
+      if (!result.done) {
+        return json({ ok: true, done: false, id: body.id.trim(), remaining: result.remaining, removedEntries: 0, removedVectors: 0 }, 202);
+      }
       // Audited before the Vectorize delete, not after: the D1 rows are already
       // gone by here, so a Vectorize failure must not also cost the record of the
       // destruction. The counts, never the content, this is the one
@@ -269,9 +274,19 @@ export async function handleAdminRoutes(
         event: "member_removed",
         payload: { removedEntries: result.removedEntries, removedVectors: result.vectorIds.length },
       });
+      // Capped (FX3 finding 2): a removed member's vectors can run into the tens of thousands, and
+      // an uncapped delete can exceed the platform's subrequest ceiling before anything is deleted.
+      // removedVectors defaults to the full intended count (unchanged on success or on a Vectorize
+      // failure, matching the existing "report the truth about the D1-side removal" contract below)
+      // and is trimmed only when the cap left something for the nightly drain to queue and finish.
+      let removedVectors = result.vectorIds.length;
       if (result.vectorIds.length) {
         try {
-          await deleteEntryVectors(env, result.ownedVectors);
+          const deletion = await deleteEntryVectors(env, result.ownedVectors, { maxIds: VECTORIZE_DELETE_MAX_IDS_PER_CALL });
+          if (!deletion.done) {
+            removedVectors -= deletion.remaining.reduce((n, o) => n + o.vectorIds.length, 0);
+            await persistPendingVectorDeletes(env, deletion.remaining);
+          }
         } catch (e) {
           // The D1 rows and the audit row are already committed: the removal
           // succeeded. A failed index delete only leaves dead vectors behind,
@@ -280,7 +295,7 @@ export async function handleAdminRoutes(
           console.error("Vectorize deleteByIds failed during member removal (non-fatal):", e);
         }
       }
-      return json({ ok: true, done: true, id: body.id.trim(), removedEntries: result.removedEntries, removedVectors: result.vectorIds.length });
+      return json({ ok: true, done: true, id: body.id.trim(), removedEntries: result.removedEntries, removedVectors });
     } catch (e) {
       if (e instanceof TeamAdminError) return json({ ok: false, error: e.message }, e.status);
       throw e;

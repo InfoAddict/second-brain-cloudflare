@@ -9,7 +9,7 @@ import { withFtsWriteGuard } from "./db/fts-write-guard";
 import { runNightlyCompression } from "./compression/nightly";
 import { runGraphPass } from "./graph/pass";
 import { INTEGRATION_SYNC_CRON, runScheduledIntegrationSync } from "./integrations/mirror";
-import { pushDueItemsAllWorkspaces } from "./push/send";
+import { MAX_PUSH_FETCHES_PER_RUN, newPushBudget, pushDueItemsAllWorkspaces, PLATFORM_EXTERNAL_FETCH_BUDGET_PER_RUN } from "./push/send";
 import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
 import { runFtsMaintenance } from "./db/fts-backfill";
@@ -110,17 +110,30 @@ export default {
         // Read once for the whole run: the sync's writes and the push pass over every workspace take it,
         // instead of each resolving its own (a KV read apiece).
         const cfg = await resolveConfig(env);
+        // FX3 finding 3: the sync and push are the only two fetchers this invocation ever runs,
+        // and they share the platform's real 50-external-fetch ceiling, not one each. Counting
+        // real fetch() calls made during the sync (rather than trusting any budget it tracks
+        // itself) works regardless of which provider ran or how it accounts for its own calls.
+        let syncFetches = 0;
+        const realFetch = globalThis.fetch;
+        globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+          syncFetches++;
+          return realFetch(...args);
+        }) as typeof fetch;
         try {
           await runScheduledIntegrationSync(env, cfg);
         } catch (e) {
           console.error("integration sync failed (non-fatal):", e);
+        } finally {
+          globalThis.fetch = realFetch;
         }
         // Own try/catch, run after the sync regardless of whether it
         // succeeded: due items reaching a subscribed device must not depend
         // on the mirror sync's health, and a slow or failing sync must not
         // delay notifications past the hour they were due.
         try {
-          await pushDueItemsAllWorkspaces(env, cfg);
+          const pushBudget = newPushBudget(Math.max(0, Math.min(MAX_PUSH_FETCHES_PER_RUN, PLATFORM_EXTERNAL_FETCH_BUDGET_PER_RUN - syncFetches)));
+          await pushDueItemsAllWorkspaces(env, cfg, pushBudget);
         } catch (e) {
           console.error("push due items failed (non-fatal):", e);
         }

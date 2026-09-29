@@ -4,9 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { makeTrashEnv, type TrashEnv } from "../helpers/trash-env";
 import { importExportPayload } from "../../src/entries/import";
 import { forgetEntry } from "../../src/capture/lifecycle";
-import { deleteEntryVectors } from "../../src/vectorize/batch";
+import { deleteEntryVectors, drainPendingVectorDeletes, persistPendingVectorDeletes } from "../../src/vectorize/batch";
 import { MAX_ENTRY_ID_BYTES, newVectorIds } from "../../src/vectorize/ids";
 import { DEFAULTS } from "../../src/config";
+import { VECTORIZE_DELETE_MAX_IDS_PER_CALL, VECTORIZE_GET_BY_IDS_BATCH } from "../../src/constants";
 
 // T-0089.1.1 close-out, final round. (1) Every id an entry can be created with leaves room for the
 // per-upload vector suffix inside Vectorize's 64-byte id limit. (2) No path deletes a vector unless
@@ -92,6 +93,83 @@ describe("a vector is deleted only by the entry its parentId names", () => {
     const store = vectorStore(t, ids.map((id) => ({ id, parentId: "z" })));
     await deleteEntryVectors(t.env, [{ entryId: "z", vectorIds: ids }]);
     expect(store.size).toBe(0);
+  });
+
+  it("FX3 finding 2: a call with no cap still deletes everything and reports done", async () => {
+    t = await makeTrashEnv();
+    const store = vectorStore(t, [{ id: "x", parentId: "x" }, { id: "y", parentId: "y" }]);
+    const result = await deleteEntryVectors(t.env, [
+      { entryId: "x", vectorIds: ["x"] },
+      { entryId: "y", vectorIds: ["y"] },
+    ]);
+    expect(store.size).toBe(0);
+    expect(result).toEqual({ done: true, remaining: [] });
+  });
+
+  it("FX3 finding 2: a capped call processes only maxIds ids and reports the rest as remaining, grouped by owner", async () => {
+    t = await makeTrashEnv();
+    const xIds = Array.from({ length: 3 }, (_, i) => `x:${i}`);
+    const yIds = Array.from({ length: 3 }, (_, i) => `y:${i}`);
+    const store = vectorStore(t, [...xIds, ...yIds].map((id) => ({ id, parentId: id.startsWith("x") ? "x" : "y" })));
+    const result = await deleteEntryVectors(
+      t.env,
+      [{ entryId: "x", vectorIds: xIds }, { entryId: "y", vectorIds: yIds }],
+      { maxIds: 4 },
+    );
+    // Only the first 4 of the 6 ids (claim order: x:0, x:1, x:2, y:0) were checked and deleted.
+    expect(store.size).toBe(2);
+    expect([...store.keys()].sort()).toEqual(["y:1", "y:2"]);
+    expect(result.done).toBe(false);
+    expect(result.remaining).toEqual([{ entryId: "y", vectorIds: ["y:1", "y:2"] }]);
+  });
+
+  it("FX3 finding 2: a member-removal-sized delete (~20k vectors) stays far under the platform's 1,000-subrequest ceiling when capped", async () => {
+    t = await makeTrashEnv();
+    const ids = Array.from({ length: 20_000 }, (_, i) => `m:${i}`);
+    const store = vectorStore(t, ids.map((id) => ({ id, parentId: "m" })));
+    let getByIdsCalls = 0;
+    const realGetByIds = (t.env.VECTORIZE as any).getByIds.bind(t.env.VECTORIZE);
+    (t.env.VECTORIZE as any).getByIds = async (batch: string[]) => { getByIdsCalls++; return realGetByIds(batch); };
+
+    const result = await deleteEntryVectors(t.env, [{ entryId: "m", vectorIds: ids }], { maxIds: VECTORIZE_DELETE_MAX_IDS_PER_CALL });
+
+    const expectedCalls = Math.ceil(VECTORIZE_DELETE_MAX_IDS_PER_CALL / VECTORIZE_GET_BY_IDS_BATCH);
+    expect(getByIdsCalls).toBe(expectedCalls);
+    expect(getByIdsCalls + 1).toBeLessThan(100); // +1 for the single deleteByIds call; nowhere near the 1,000 ceiling
+    expect(result.done).toBe(false);
+    expect(store.size).toBe(20_000 - VECTORIZE_DELETE_MAX_IDS_PER_CALL);
+  });
+
+  it("FX3 finding 2: leftover ids from a capped call survive a persist/drain round trip", async () => {
+    t = await makeTrashEnv();
+    const ids = Array.from({ length: 10 }, (_, i) => `m:${i}`);
+    const store = vectorStore(t, ids.map((id) => ({ id, parentId: "m" })));
+
+    const first = await deleteEntryVectors(t.env, [{ entryId: "m", vectorIds: ids }], { maxIds: 4 });
+    expect(first.done).toBe(false);
+    await persistPendingVectorDeletes(t.env, first.remaining);
+    // The 4 checked ids are gone; the other 6 are untouched and still pending.
+    expect(store.size).toBe(6);
+
+    // Draining with a cap big enough to finish clears the KV entry and the rest of the vectors.
+    await drainPendingVectorDeletes(t.env, 6);
+    expect(store.size).toBe(0);
+
+    // A second drain with nothing pending is a no-op, not an error.
+    await drainPendingVectorDeletes(t.env, 6);
+    expect(store.size).toBe(0);
+  });
+
+  it("FX3 finding 2: a drain that is itself capped short writes back only what is still left", async () => {
+    t = await makeTrashEnv();
+    const ids = Array.from({ length: 10 }, (_, i) => `m:${i}`);
+    vectorStore(t, ids.map((id) => ({ id, parentId: "m" })));
+    await persistPendingVectorDeletes(t.env, [{ entryId: "m", vectorIds: ids }]);
+
+    await drainPendingVectorDeletes(t.env, 4);
+    const raw = await t.env.OAUTH_KV.get("vectorize:pending-deletes");
+    const stored = JSON.parse(raw!) as { entryId: string; vectorIds: string[] }[];
+    expect(stored).toEqual([{ entryId: "m", vectorIds: ids.slice(4) }]);
   });
 
   it("forgetting a legacy row whose listed chunk id is another entry's own vector leaves that vector alone", async () => {

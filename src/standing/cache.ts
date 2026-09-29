@@ -131,7 +131,13 @@ async function buildStandingCacheNow(
   // was running. Any valid computation is as good as any other (P7.4), so skipping a redundant identical write
   // loses nothing.
   const justWritten = parseStandingCache(await env.OAUTH_KV.get(key, "json"), { model: cfg.EMBEDDING_MODEL, dim: cfg.EMBEDDING_DIM });
-  if (!sameContent(cache, justWritten)) {
+  // FX3 finding 5: sameContent ignores builtAt by design (a redundant write of identical content
+  // is pointless), but skipping unconditionally left the STORED builtAt never advancing once
+  // content stabilized — readStandingCaches saw it as permanently stale past STANDING_CACHE_MAX_AGE_MS
+  // and rescheduled a rebuild on every read forever, at most 60 seconds apart. Once the stored
+  // value has actually gone stale, write anyway, purely to refresh builtAt and reset that clock.
+  const storedIsStale = !justWritten || now - justWritten.builtAt > STANDING_CACHE_MAX_AGE_MS;
+  if (!sameContent(cache, justWritten) || storedIsStale) {
     const value = JSON.stringify(cache);
     try {
       await env.OAUTH_KV.put(key, value);
