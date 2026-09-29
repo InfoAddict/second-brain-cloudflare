@@ -32,22 +32,40 @@ const JOINS_ENTRIES = /\bJOIN entries\b/;
  * `FROM entries` read, validity-reader-inventory.test.ts), neither trash nor versions has another
  * guard covering a plain, unjoined read -- so both count here whether or not a JOIN is involved.
  */
-const TRASH_TABLE = /\b(?:FROM|JOIN)\s+entries_trash\b(?:\s+(\w+))?/;
-const VERSIONS_TABLE = /\b(?:FROM|JOIN)\s+entry_versions\b(?:\s+(\w+))?/;
+const TRASH_TABLE = /\b(?:FROM|JOIN)\s+entries_trash\b(?:\s+(\w+))?/g;
+const VERSIONS_TABLE = /\b(?:FROM|JOIN)\s+entry_versions\b(?:\s+(\w+))?/g;
 /** Words that can legally follow a bare, alias-less table name -- never mistaken for an alias. */
 const NOT_ALIAS = new Set(["WHERE", "ON", "SET", "ORDER", "GROUP", "LIMIT", "AND", "OR", "JOIN", "INNER", "LEFT", "CROSS", "UNION", "AS"]);
-function tableAlias(sql: string, pattern: RegExp): string | undefined {
-  const cand = pattern.exec(sql)?.[1];
+function aliasOf(cand: string | undefined): string | undefined {
   return cand && !NOT_ALIAS.has(cand.toUpperCase()) ? cand : undefined;
 }
 /**
- * Projects entries' own text to the caller: a content column (however aliased — `content AS text`,
- * `substr(content, ...) AS snippet`), or a preview substr of one. A bare substring match, not
- * anchored to a word boundary: a boundary-anchored pattern misses a rename that butts another
- * identifier straight against "content" with no separator. Over-matching is the safe direction —
- * it earns another pinned exemption, not a silent miss.
+ * Every occurrence of `pattern` in `sql`, not just the first (cloud re-review MINOR, on top of
+ * 0b970baa: a statement that joins the SAME table twice -- once filtered, once not -- read as
+ * fully guarded when only the first occurrence's alias was ever checked, because content pulled
+ * through the SECOND, unfiltered join was never examined at all).
  */
-export const PROJECTS_CONTENT = /content|preview/;
+function allMatches(sql: string, pattern: RegExp): RegExpExecArray[] {
+  pattern.lastIndex = 0;
+  const out: RegExpExecArray[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(sql))) {
+    out.push(m);
+    if (m.index === pattern.lastIndex) pattern.lastIndex++; // zero-width guard
+  }
+  return out;
+}
+/**
+ * Projects entries' own text to the caller: a content column (however aliased — `content AS text`,
+ * `substr(content, ...) AS snippet`), a preview substr of one, or entries_trash's own row_json
+ * (cloud re-review MINOR: row_json IS the trashed row's content and tags, JSON-packed -- reading
+ * it bare is exactly as much a leak as reading `content` directly, and the old pattern never
+ * matched the word "row_json" at all). A bare substring match, not anchored to a word boundary: a
+ * boundary-anchored pattern misses a rename that butts another identifier straight against
+ * "content" with no separator. Over-matching is the safe direction — it earns another pinned
+ * exemption, not a silent miss.
+ */
+export const PROJECTS_CONTENT = /content|preview|row_json/;
 /**
  * The column list actually feeding the SELECT that reaches this FROM/JOIN match, not the whole
  * span: a whole-span PROJECTS_CONTENT test flagged `EXISTS (SELECT 1 FROM entry_versions v ...)`
@@ -76,6 +94,14 @@ const HOLD_FILTER = /\$\{NOT_HELD_SQL\}|\$\{notHeldSql\(|NOT LIKE '%"quarantine:
  * read unheld even when its text was held). For those two tables the filter must be qualified to
  * the SAME alias the content was read through -- no alias to qualify to (the probe's bare
  * `FROM entries_trash` with no filter at all) always needs a pinned exemption instead.
+ *
+ * No `[^)]*` gap between the alias and `NOT LIKE` (cloud re-review MINOR, round 2): the old,
+ * permissive span let `v.tags = e.tags AND (e.tags NOT LIKE '%"quarantine:...')` read as "v is
+ * filtered" -- the wildcard crossed straight over an unrelated alias's own filter, through an OPEN
+ * paren, to reach a NOT LIKE that has nothing to do with v.tags at all. notHeldSql/NOT_HELD_SQL's
+ * own generated shape is always `alias.tags NOT LIKE '...' AND alias.tags NOT LIKE '...' ...` --
+ * direct adjacency, so requiring the first occurrence to sit immediately after the alias (only
+ * whitespace between) loses nothing real and closes the gap.
  */
 function heldFilterAppliesTo(sql: string, alias: string | undefined): boolean {
   if (!alias) return false;
@@ -83,25 +109,53 @@ function heldFilterAppliesTo(sql: string, alias: string | undefined): boolean {
   // read -- trash-list.ts's own pattern) so there is no inline SQL shape to recognize for it here;
   // a trash hit always needs a pinned exemption. entry_versions DOES have a real `tags` column, so
   // an alias-qualified check on it is a genuine, recognizable inline filter.
-  const qualified = new RegExp(`\\b${alias}\\.tags\\b[^)]*NOT LIKE '%"quarantine:|notHeldSql\\(\\s*['"\`]${alias}['"\`]`);
+  const qualified = new RegExp(`\\b${alias}\\.tags\\s+NOT LIKE '%"quarantine:|notHeldSql\\(\\s*['"\`]${alias}['"\`]`);
   return qualified.test(sql);
 }
 
 interface Hit { file: string; line: number; sql: string; table: "entries" | "entries_trash" | "entry_versions" }
 
-/** The pure predicate, over one already-extracted SQL span: every hit this span produces. Split
- * out from the file-walking scan() so the reviewer's own probe strings can be asserted on
- * directly, with no fixture file needed (see the "structural probes" describe block below). */
-export function hitsIn(sql: string): Pick<Hit, "sql" | "table">[] {
+/**
+ * Resolves `${CONST_NAME}` interpolations against `consts`, a name -> template-literal-text map
+ * (cloud re-review MINOR, round 2: `SELECT ${HISTORY_COLUMNS} FROM entry_versions`, versions.ts,
+ * never matched PROJECTS_CONTENT at all -- the literal span text is just the placeholder
+ * "${HISTORY_COLUMNS}", not HISTORY_COLUMNS' own "...content..." value, since check-scope.mjs's
+ * templateSpans (reused here) extracts spans without resolving interpolations between them). One
+ * pass: every constant this guard has needed to resolve so far is itself interpolation-free.
+ */
+function resolveInterpolations(sql: string, consts: Readonly<Record<string, string>>): string {
+  return sql.replace(/\$\{(\w+)\}/g, (whole, name: string) => consts[name] ?? whole);
+}
+
+/** The pure predicate, over one already-extracted SQL span: every hit this span produces. `consts`
+ * resolves file-level `${NAME}` interpolations (see resolveInterpolations); split out from the
+ * file-walking scan() so the reviewer's own probe strings can be asserted on directly, with no
+ * fixture file needed (see the "structural probes" describe block below). */
+export function hitsIn(sql: string, consts: Readonly<Record<string, string>> = {}): Pick<Hit, "sql" | "table">[] {
+  const resolved = resolveInterpolations(sql, consts);
   const hits: Pick<Hit, "sql" | "table">[] = [];
-  if (JOINS_ENTRIES.test(sql) && PROJECTS_CONTENT.test(sql) && !HOLD_FILTER.test(sql)) hits.push({ sql, table: "entries" });
-  const trashMatch = TRASH_TABLE.exec(sql);
-  if (trashMatch && PROJECTS_CONTENT.test(selectListBefore(sql, trashMatch.index))
-    && !heldFilterAppliesTo(sql, tableAlias(sql, TRASH_TABLE))) hits.push({ sql, table: "entries_trash" });
-  const versionsMatch = VERSIONS_TABLE.exec(sql);
-  if (versionsMatch && PROJECTS_CONTENT.test(selectListBefore(sql, versionsMatch.index))
-    && !heldFilterAppliesTo(sql, tableAlias(sql, VERSIONS_TABLE))) hits.push({ sql, table: "entry_versions" });
+  if (JOINS_ENTRIES.test(resolved) && PROJECTS_CONTENT.test(resolved) && !HOLD_FILTER.test(resolved)) hits.push({ sql, table: "entries" });
+  const trashUnguarded = allMatches(resolved, TRASH_TABLE).some(m =>
+    PROJECTS_CONTENT.test(selectListBefore(resolved, m.index)) && !heldFilterAppliesTo(resolved, aliasOf(m[1])));
+  if (trashUnguarded) hits.push({ sql, table: "entries_trash" });
+  const versionsUnguarded = allMatches(resolved, VERSIONS_TABLE).some(m =>
+    PROJECTS_CONTENT.test(selectListBefore(resolved, m.index)) && !heldFilterAppliesTo(resolved, aliasOf(m[1])));
+  if (versionsUnguarded) hits.push({ sql, table: "entry_versions" });
   return hits;
+}
+
+/** Every `const NAME = \`...\`;` template-literal declaration in `text` (no nested `${...}` of its
+ * own -- see resolveInterpolations), keyed by name, so a SQL span elsewhere in the SAME file that
+ * interpolates `${NAME}` can be resolved before this guard scans it. */
+function fileConsts(text: string, spans: { start: number; end: number }[]): Record<string, string> {
+  const consts: Record<string, string> = {};
+  const DECL = /const\s+(\w+)\s*=\s*$/;
+  for (const span of spans) {
+    const before = text.slice(Math.max(0, span.start - 80), span.start);
+    const name = DECL.exec(before)?.[1];
+    if (name) consts[name] = text.slice(span.start + 1, span.end);
+  }
+  return consts;
 }
 
 function scan(): Hit[] {
@@ -110,10 +164,12 @@ function scan(): Hit[] {
     const text = readFileSync(path, "utf8");
     const spans = templateSpans(text) as unknown as { start: number; end: number; balanced: boolean } & { balanced: boolean };
     if (!(spans as unknown as { balanced: boolean }).balanced) continue;
-    for (const span of spans as unknown as { start: number; end: number }[]) {
+    const spanList = spans as unknown as { start: number; end: number }[];
+    const consts = fileConsts(text, spanList);
+    for (const span of spanList) {
       const sql = text.slice(span.start + 1, span.end);
       const line = text.slice(0, span.start).split("\n").length;
-      for (const h of hitsIn(sql)) hits.push({ file: relative(ROOT, path), line, sql: h.sql.replace(/\s+/g, " ").trim(), table: h.table });
+      for (const h of hitsIn(sql, consts)) hits.push({ file: relative(ROOT, path), line, sql: h.sql.replace(/\s+/g, " ").trim(), table: h.table });
     }
   }
   return hits;
@@ -127,11 +183,13 @@ function scan(): Hit[] {
  */
 const EXEMPT: { file: string; has: string; why: string }[] = [
   { file: "src/brief/changes.ts", has: "LEFT JOIN entries en ON en.id = e.entry_id", why: "the recent-changes feed deliberately lists 'held' events, with a preview, to the brain's own owner: surfacing a hold IS the point, not a bypass of it" },
+  { file: "src/brief/changes.ts", has: "FROM (${scopedEvents}) e", why: "the same recent-changes feed, now visible here too since this guard resolves the ${scopedEvents} interpolation -- classify() (this same file) masks heldNow downstream in JS before a preview reaches the caller, the same reasoning as the entry above" },
   { file: "src/routes/admin.ts", has: "FROM admin_events ae", why: "the admin activity trail: a human admin's own audit log, not a model prompt or an agent-facing recall result" },
   { file: "src/routes/admin.ts", has: "FROM edges e LEFT JOIN entries m ON m.id = e.target_id", why: "insight review's source preview for a human admin reviewer; a held source renders as unreadable the same as a deleted one (see the comment above this query), never as ordinary content" },
   { file: "src/memory/trash-list.ts", has: "FROM entries_trash t", why: "T-0102 finding 4 fix: preview is masked in JS via isHeld(trashRowTags(tags_json)) before the item ever leaves listTrash, using the SAME tags_json this query reads" },
   { file: "src/memory/trash.ts", has: "SELECT t.id,", why: "restoreEntry's by-id restore (scope-exempt: by-id, the caller's own authorized trash row, pinned by nonce): copies the trashed row's stored state, tags included, back into entries unchanged -- not a content-projecting read to a caller or model" },
   { file: "src/recall/as-of.ts", has: "FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(?))", why: "resolveAtT (T-0102 MAJOR fix) redacts every rebuilt version's content to \"\" via textHeldAt (isHeld OR isHoldVersion) before it reaches a match, a synthesis prompt, or a reply -- the one choke point every consumer of these rows flows through" },
+  { file: "src/memory/versions.ts", has: "FROM entry_versions WHERE entry_id = ? ORDER BY seq DESC LIMIT ?", why: "loadHistory's every consumer (revertEntry in undo.ts, buildEntryHistory/readEntryVersion in history-view.ts) applies its own held/textHeldAt check (now wasReleasedContent-aware too) before a version's content reaches a caller -- newly visible now that this guard resolves the ${HISTORY_COLUMNS} interpolation" },
 ];
 
 describe("PROJECTS_CONTENT (review NIT)", () => {
@@ -189,5 +247,40 @@ describe("structural probes the reviewer found unguarded (held-reader-class tigh
   it("accepts a version read whose filter is qualified to the version's own alias", () => {
     const sql = "SELECT v.content FROM entry_versions v WHERE v.tags NOT LIKE '%\"quarantine:instruction\"%'";
     expect(hitsIn(sql).some(h => h.table === "entry_versions")).toBe(false);
+  });
+});
+
+// Director round 2: four more probes the guard still let through.
+describe("structural probes, round 2 (guard gaps)", () => {
+  it("rejects a bare entries_trash row_json read -- row_json IS the trashed row's content, JSON-packed", () => {
+    const hits = hitsIn("SELECT t.row_json FROM entries_trash t;");
+    expect(hits.some(h => h.table === "entries_trash")).toBe(true);
+  });
+
+  it("rejects a second, unfiltered entry_versions reference when only the first was ever checked", () => {
+    const sql = "SELECT v2.content FROM entry_versions v1 JOIN entry_versions v2 ON v2.entry_id = v1.entry_id "
+      + "WHERE v1.tags NOT LIKE '%\"quarantine:instruction\"%'";
+    // v1 IS genuinely guarded; v2, the SECOND reference, is not filtered at all, and its own
+    // .content is what actually leaves the statement -- checking only the first regex match's
+    // alias (v1) missed this entirely.
+    expect(hitsIn(sql).some(h => h.table === "entry_versions")).toBe(true);
+  });
+
+  it("rejects a filter span that crosses into another table's own tags through an open paren", () => {
+    const sql = "SELECT v.content FROM entry_versions v, entries e "
+      + "WHERE v.tags = e.tags AND (e.tags NOT LIKE '%\"quarantine:instruction\"%')";
+    // The NOT LIKE clause filters e.tags, not v.tags -- a `[^)]*` gap between "v.tags" and
+    // "NOT LIKE" used to cross straight over that unrelated filter (no `)` sits between them,
+    // only an OPEN paren) and read v as guarded when it is not.
+    expect(hitsIn(sql).some(h => h.table === "entry_versions")).toBe(true);
+  });
+
+  it("resolves a template-interpolated column list before checking for content (versions.ts:489's own shape)", () => {
+    const sql = "SELECT ${HISTORY_COLUMNS} FROM entry_versions WHERE entry_id = ?1 ORDER BY seq DESC LIMIT ?2";
+    // Unresolved, this span contains only the literal text "${HISTORY_COLUMNS}" -- no "content" or
+    // "preview" substring at all, so PROJECTS_CONTENT never matched it, guard or no guard.
+    expect(hitsIn(sql).some(h => h.table === "entry_versions")).toBe(false);
+    const withConsts = hitsIn(sql, { HISTORY_COLUMNS: "seq, workspace_id, content, prior_length, tags, state" });
+    expect(withConsts.some(h => h.table === "entry_versions")).toBe(true);
   });
 });
