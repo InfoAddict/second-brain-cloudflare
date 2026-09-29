@@ -15,7 +15,7 @@ import type { Env } from "../../../src/env";
 import { ensureTenantBootstrap } from "../../../src/lib/tenancy";
 import { resolveIdentityByUserId } from "../../../src/lib/identity";
 import { forgetEntry } from "../../../src/capture/lifecycle";
-import { resolveConfig, DEFAULTS } from "../../../src/config";
+import { resolveConfig, DEFAULTS, CONFIG_KEY } from "../../../src/config";
 import { updateEntryContent } from "../../../src/capture/store";
 import { createMember } from "../../../src/lib/team-admin";
 import { moveEntry } from "../../../src/capture/share";
@@ -24,6 +24,9 @@ import { withHold, withEditedCanonical } from "../../../src/quarantine/tags";
 import { memoryHeader } from "../../../src/recall/render";
 import { STANDING_TAG } from "../../../src/tags/t7";
 import { NotBuilt, type Journey } from "./types";
+
+/** w8's own teammate token, stashed between setup() and run() (journeys run one at a time). */
+let w8PriyaToken = "";
 
 async function ownerCtx(env: Env) {
   const roots = await ensureTenantBootstrap(env);
@@ -240,10 +243,30 @@ export const journeys: Journey[] = [
         `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w8-mem', 'Shared with the team.', '[]', 'api', ?, '[]', ?, ?)`,
       ).bind(Date.now() - 86_400_000, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
       await moveEntry("w8-mem", "company", env, ctx.owner, ctx.change);
-      await createMember(env, { name: "Priya", role: "member" });
+      const { token } = await createMember(env, { name: "Priya", role: "member" });
+      w8PriyaToken = token;
     },
     async run(ctx) {
+      // history.ts's own D-SH rule: the author sees every event; the shared-cut footer only
+      // shows for a non-author viewer, so this must actually view as Priya, not the owner.
+      // Registered after browser.ts's own newPage() hook, so it overrides sb_token on the very
+      // next navigation (evaluateOnNewDocument scripts run in registration order).
+      await ctx.page.evaluateOnNewDocument(t => localStorage.setItem("sb_token", t), w8PriyaToken);
       await gotoMemory(ctx.page, ctx.baseUrl, "w8-mem");
+      // Registering evaluateOnNewDocument right before the one navigation gotoMemory makes was
+      // observed to occasionally lose the race against browser.ts's own hook when run back-to-back
+      // with other journeys (never when run alone) -- verify the token actually took, and force one
+      // reload if not, rather than report a false PENDING for a real, if flaky, harness timing gap.
+      const active = await ctx.page.evaluate(() => localStorage.getItem("sb_token"));
+      if (active !== w8PriyaToken) {
+        await ctx.page.evaluate(t => localStorage.setItem("sb_token", t), w8PriyaToken);
+        await ctx.page.reload({ waitUntil: "networkidle0" });
+        await ctx.page.evaluate(() => (window as unknown as { switchTab(tab: string): void }).switchTab("memories"));
+        await ctx.page.waitForSelector(`.memory-card[data-id="w8-mem"] .card-content`, { timeout: 5000 });
+        await ctx.page.click(`.memory-card[data-id="w8-mem"] .card-content`);
+        await ctx.page.waitForSelector("#view-sheet.open", { timeout: 3000 }).catch(() => {});
+      }
+      await ctx.page.waitForSelector(".history-footer[data-footer='shared-cut'], [data-belongs-to]", { timeout: 5000 }).catch(() => {});
       const belongsLine = await ctx.page.$(".history-footer[data-footer='shared-cut'], [data-belongs-to]");
       if (!belongsLine) throw new NotBuilt("UX-A.2 / D-SH: the belongs-to line and share-start history cut", "no .history-footer[data-footer='shared-cut'] on the memory sheet for a teammate viewer");
       await ctx.shot("belongs-line", "the D-SH belongs-to / shared-cut footer");
@@ -273,8 +296,41 @@ export const journeys: Journey[] = [
   {
     id: "w10",
     title: "MCP burst (20 status changes), then the home board",
-    async setup() { throw new NotBuilt("S4: 'AI tools changed' dashboard line", "public/js/ai-changes.js does not exist on the merged tree yet (S4 lands after SH/TR per 16-t3-t4-trust-spec.md 5's merge order)"); },
-    async run() {},
+    // Touches quarantine holds / undo groups / the brief's changes list (src/brief/changes.ts) --
+    // director, 2026-09-29: re-run after FX2 merges, since that lane changes this exact code path.
+    async setup(env) {
+      const ctx = await ownerCtx(env);
+      const now = Date.now();
+      for (let i = 0; i < 20; i++) {
+        const id = `w10-mem-${i}`;
+        await env.DB.prepare(
+          `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, '["work"]', 'api', ?, '[]', ?, ?)`,
+        ).bind(id, `Memory ${i}`, now - 3_600_000, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+        await env.DB.prepare(
+          `INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, tags, state, actor_id, channel, reason, meta, valid_from, created_at) VALUES (?, ?, 1, ?, NULL, '["work"]', '{}', ?, 'mcp', 'status', '{"client":"Cursor"}', NULL, ?)`,
+        ).bind(id, ctx.roots.ownerPersonalWorkspaceId, `Memory ${i}`, ctx.owner.userId, now - 3_600_000 + i * 1000).run();
+        await env.DB.prepare(
+          `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, 'status_changed', '{"channel":"mcp","status":"canonical","client":"Cursor"}', ?)`,
+        ).bind(`w10-ev-${i}`, id, ctx.owner.userId, now - 3_600_000 + i * 1000).run();
+      }
+    },
+    async run(ctx) {
+      await gotoHome(ctx.page, ctx.baseUrl);
+      const summary = await ctx.page.waitForSelector(".ai-changes-summary", { timeout: 5000 }).catch(() => null);
+      if (!summary) throw new NotBuilt("S4: 'AI tools changed' dashboard line", "no .ai-changes-summary panel on the home board");
+      await ctx.shot("summary", "the home board's AI-changes summary line");
+      const reviewBtn = await ctx.page.$("#ai-changes-review");
+      if (!reviewBtn) throw new NotBuilt("S4: AI-changes review toggle", "no #ai-changes-review button");
+      await reviewBtn.click();
+      const groupRow = await ctx.page.waitForSelector(".ai-change-row.ai-change-group", { timeout: 3000 }).catch(() => null);
+      if (!groupRow) throw new NotBuilt("S4/S3: burst grouping in the AI-changes panel", "no .ai-change-row.ai-change-group after expanding -- the 20-row burst did not group");
+      await ctx.shot("expanded", "the AI-changes panel expanded, showing the grouped burst");
+      const undoAllBtn = await ctx.page.$(".ai-change-row.ai-change-group .ai-change-btn");
+      if (!undoAllBtn) throw new NotBuilt("S4/S3: Undo all on a burst group", "no .ai-change-btn (Undo all) on the grouped row");
+      await ctx.page.evaluate(el => (el as HTMLElement).click(), undoAllBtn);
+      await acceptConfirm(ctx.page);
+      await ctx.shot("undone", "the home board after Undo all on the burst group");
+    },
   },
   {
     id: "w11",
@@ -351,9 +407,13 @@ export const journeys: Journey[] = [
       for (let i = 1; i <= 7; i++) {
         await updateEntryContent(env, "w14-mem", `v${i}`, { ...DEFAULTS, VERSION_KEEP: 5 }, undefined, undefined, ctx.writeCtx, ctx.change, ctx.roots.ownerPersonalWorkspaceId);
       }
+      // The "pruned" footer compares chain.rows.length against config.VERSION_KEEP read fresh at
+      // render time (history-view.ts) -- the override above only reached the write path.
+      await env.OAUTH_KV.put(CONFIG_KEY, JSON.stringify({ VERSION_KEEP: 5 }));
     },
     async run(ctx) {
       await gotoMemory(ctx.page, ctx.baseUrl, "w14-mem");
+      await ctx.page.waitForSelector("#view-timeline .history-item[data-seq]", { timeout: 3000 }).catch(() => {});
       const prunedFooter = await ctx.page.$(".history-footer[data-footer='pruned']");
       if (!prunedFooter) throw new NotBuilt("UX-A.2: pruned footer", "no .history-footer[data-footer='pruned'] on the timeline");
       await ctx.shot("pruned", "the pruned-history footer");
