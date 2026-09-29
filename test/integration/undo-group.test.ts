@@ -134,6 +134,32 @@ describe("undoGroup() (S3)", () => {
     }
   });
 
+  it("a member written twice inside the group reverts to before its FIRST change, not its second (Codex cross-vendor review, round 2 re-review MAJOR)", async () => {
+    // e0 was edited twice inside the burst window, both by u1/mcp/Cursor: seq 1's own pre-image
+    // is ["work"] (before either edit), seq 2's is ["work","status:canonical"] (after the first
+    // edit, before the second). Reverting the group must land on seq 1's pre-image -- "before the
+    // group's first change" -- not seq 2's, which would only undo the second of the two edits.
+    // e1/e2 are the burst's other two members (QUARANTINE_STATUS_BURST needs 3 to form a group).
+    const ids = ["e0", "e1", "e2"];
+    const windowStart = now - HOUR;
+    await seedStatusBurst(ids, windowStart);
+    await sqlite.db.prepare(`UPDATE entries SET tags = ? WHERE id = 'e0'`).bind(JSON.stringify(["v2", "work", "status:canonical"])).run();
+    await insertVersion({ entryId: "e0", seq: 2, tags: ["work", "status:canonical"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: windowStart + 30_000 });
+
+    const group = await discoverGroup();
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId.e0).toBe("reverted");
+    expect(byId.e1).toBe("reverted");
+    expect(byId.e2).toBe("reverted");
+    expect(result!.done).toBe(true);
+    const tags = await tagsOf("e0");
+    expect(tags).not.toContain("status:canonical");
+    expect(tags).not.toContain("v2");
+    expect(tags).toContain("work");
+  });
+
   it("a member changed since by someone else is skipped as changed_since and untouched", async () => {
     const ids = ["e0", "e1", "e2"];
     const windowStart = now - HOUR;

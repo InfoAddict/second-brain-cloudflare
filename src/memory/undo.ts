@@ -784,6 +784,14 @@ type MemberVerdict =
  * MAJOR, R21 follow-up: the qualifying version's own actor must equal the group's own actor, or a
  * same-window edit by someone else using the same client label could be reverted).
  */
+function parseVersionMeta(r: ChainRow): Record<string, unknown> {
+  try { return JSON.parse(r.meta || "{}"); } catch { return {}; }
+}
+
+function matchesGroup(r: ChainRow, decoded: DecodedGroup, cfg: Readonly<Config>): boolean {
+  return r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(parseVersionMeta(r).client, cfg) === decoded.client;
+}
+
 function classifyFromRows(rows: readonly ChainRow[] | undefined, decoded: DecodedGroup, cfg: Readonly<Config>): MemberVerdict {
   if (!rows?.length) return { kind: "not_found" };
   // Codex review, T-0102, director follow-up (cloud re-review, the E1 slack fix was not enough):
@@ -794,30 +802,41 @@ function classifyFromRows(rows: readonly ChainRow[] | undefined, decoded: Decode
   // outside the window it is actually in. decoded.end has no such problem: every version this
   // group could ever be about was necessarily written before the group's own LATEST event was
   // audited, so scanning for the LATEST matching version at or before decoded.end -- rows arrive
-  // seq/time ascending, so this is the last one seen, not the first -- finds the right one without
+  // seq/time ascending -- finds this member's own last group-attributed edit (the anchor) without
   // depending on how close decoded.start sits to the version's own clock.
-  let toVersion: number | undefined;
-  let toVersionWorkspace: string | undefined;
-  for (const r of rows) {
-    if (r.created_at > decoded.end) break; // ascending order: nothing later can qualify either
-    let meta: Record<string, unknown> = {};
-    try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no client / no target_seq */ }
-    if (r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
-      toVersion = r.seq;
-      toVersionWorkspace = r.workspace_id;
-    }
+  let anchorIdx = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].created_at > decoded.end) break; // ascending order: nothing later can qualify either
+    if (matchesGroup(rows[i], decoded, cfg)) anchorIdx = i;
   }
-  if (toVersion === undefined) return { kind: "not_found" };
+  if (anchorIdx === -1) return { kind: "not_found" };
+
+  // Codex cross-vendor review, round 2 re-review MAJOR: a member written twice inside the group
+  // (two matching edits) used to revert to just before its SECOND edit, undoing only half of what
+  // the group actually did to it -- the spec says "reverts each member to before the group's
+  // first change". Walking back from the anchor through CONSECUTIVE matching edits (seq order, no
+  // gap) finds that first one: a non-matching version anywhere in between -- a third party's edit
+  // sandwiched inside what would otherwise be a run of the group's own edits -- stops the walk
+  // there instead of reaching further back, so it is never folded into this member's own revert.
+  let firstIdx = anchorIdx;
+  while (firstIdx > 0 && matchesGroup(rows[firstIdx - 1], decoded, cfg)) firstIdx--;
+  const toVersion = rows[firstIdx].seq;
+  const toVersionWorkspace = rows[firstIdx].workspace_id;
+  const anchorSeq = rows[anchorIdx].seq;
+
   let consumed = false;
   for (const r of rows) {
     if (r.seq <= toVersion) continue;
-    let meta: Record<string, unknown> = {};
-    try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no target_seq */ }
-    if (r.reason === "revert" && meta.target_seq === toVersion) { consumed = true; break; }
+    if (r.reason === "revert" && parseVersionMeta(r).target_seq === toVersion) { consumed = true; break; }
   }
   if (consumed) return { kind: "done" };
+  // Codex cross-vendor review, round 2 re-review MAJOR: "never report done on a half-undo" --
+  // pending/changed_since is decided against the group's own LAST matching edit (anchorSeq), not
+  // toVersion (the FIRST one): with two in-group edits those differ, and comparing against
+  // toVersion instead would read the row as changed_since the moment there is more than one
+  // group-attributed version to revert, even with nothing from outside the group in the way.
   const newest = rows[rows.length - 1];
-  return newest.seq === toVersion ? { kind: "pending", toVersion, workspaceId: toVersionWorkspace! } : { kind: "changed_since" };
+  return newest.seq === anchorSeq ? { kind: "pending", toVersion, workspaceId: toVersionWorkspace } : { kind: "changed_since" };
 }
 
 /**
