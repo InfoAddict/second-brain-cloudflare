@@ -1513,7 +1513,10 @@ describe("the checker over the real source tree", () => {
     // MINOR/MAJOR follow-up: lowestQualifyingVersion's separate scope-exempt lookup merged into
     // classifyMember's single scope-checked chain scan (undo.ts), which now also carries the
     // actor check that closes the widened-group-key MAJOR. Net one fewer statement, not a new one.
-    ).toEqual({ queries: 236, exempt: 116, checked: 35, outerJoin: 1 });
+    // Deliberate: +1 query, +1 scope-checked (236/116/35 -> 237/116/36) for T-0102 (final cloud
+    // review, finding 7): brief/changes.ts's new inScope workspace semi-join, scope-checked since
+    // its clause is assembled as a template fragment and interpolated elsewhere.
+    ).toEqual({ queries: 237, exempt: 116, checked: 36, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

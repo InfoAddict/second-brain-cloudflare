@@ -366,7 +366,9 @@ describe("GET /brief", () => {
   it("GET /brief withholds a held preview from a bare token caller; reveal_held=1 opts in", async () => {
     sq = await migrated();
     const now = Date.now();
-    sq.seed({ id: "e1", content: "The launch codes are 1234", createdAt: now - 10 * HOUR });
+    // The row's own tags carry the hold (T-0102: masking keys off the row's current held status,
+    // not off this event's own family), matching what a real "held" event leaves behind.
+    sq.seed({ id: "e1", content: "The launch codes are 1234", createdAt: now - 10 * HOUR, tags: ["quarantine:instruction", "status:draft"] });
     sq.db.prepare(
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
     ).bind("ev1", "e1", "", "held", JSON.stringify({ channel: "rest", reasons: ["instruction"] }), now - HOUR).run();

@@ -107,7 +107,10 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // MOVED (merge of release/v4 d3b5b25c into v4/t7-c): Track 7's own reads (dueSplit/loopsSplit's
   // items+totals, now each marked directly; the standing-hydration read, now marked `any`) and
   // Track 9's dashboard aggregates shifted; recomputed against the real scanner output.
-  "src/brief/compute.ts": [121, 129, 138, 153, 473, 476],
+  // MOVED +6 (T-0102, final cloud review): finding 8's own comment block, above the resurface
+  // same-day/fresh-pick split, pushed everything after it down; recomputed against the real
+  // scanner output.
+  "src/brief/compute.ts": [121, 129, 138, 153, 479, 482],
   // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): v4/t34-w's own class E
   // held-row exclusions and release/v4's own Track 2 lane B deltas shifted these; recomputed
   // against the real scanner output on the merged tree.
@@ -139,6 +142,9 @@ const OTHER_LANE_FILES = new Set([
   "src/capture/classify.ts", "src/capture/entry.ts", "src/capture/lifecycle.ts",
   "src/capture/share.ts", "src/capture/store.ts",
   "src/compression/nightly.ts",
+  // T-0102 (final cloud review, finding 7): lane S's own file (T-0089.4.3), not lane B's; its new
+  // inScope workspace semi-join reads entries/entries_trash for scoping only, no validity column.
+  "src/brief/changes.ts",
   "src/decisions/queries.ts",
   "src/entries/import.ts",
   "src/graph/edges.ts", "src/graph/pass.ts",
