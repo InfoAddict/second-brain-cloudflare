@@ -6,7 +6,7 @@ import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus, withStatus } from "./status";
 import { withUserEditMarker } from "../tags/system";
-import { isHeld, QUARANTINE_TAG_PREFIX } from "../quarantine/tags";
+import { isHeld, isRecognizedHoldTag } from "../quarantine/tags";
 import { deleteEntryVectors } from "../vectorize/batch";
 import { discardUpload, upsertEntryVectors, type StoredEntry } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
@@ -148,7 +148,9 @@ async function releaseHeldAfterEdit(
 ): Promise<UndoResult> {
   const holdVersion = chain.rows.find(isHoldVersion);
   const priorStatus = holdVersion ? getStatus(JSON.parse(holdVersion.tags)) : null;
-  const strippedCurrent = currentTags.filter(t => typeof t === "string" && !t.trim().toLowerCase().startsWith(QUARANTINE_TAG_PREFIX));
+  // Codex review, T-0102, director follow-up: strips only a recognized hold tag, never a 3.7 tag
+  // that merely shares the quarantine: prefix (isRecognizedHoldTag matches heldReason exactly).
+  const strippedCurrent = currentTags.filter(t => !isRecognizedHoldTag(t));
   const releasedTags = (getStatus(currentTags) === "draft" && priorStatus)
     ? withStatus(strippedCurrent, priorStatus)
     : strippedCurrent;

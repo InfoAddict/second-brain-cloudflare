@@ -1,7 +1,7 @@
 // Track 4 (self-protecting) shared contract: the quarantine tag namespace,
 // the canonical-edit label, and the caller-tag guard for both. A change to
 // this file is a spec revision, not a lane decision (16-t3-t4-trust-spec.md 6.1).
-import { getStatus, withStatus } from "../memory/status";
+import { withStatus } from "../memory/status";
 
 export const QUARANTINE_TAG_PREFIX = "quarantine:";
 export const EDITED_CANONICAL_TAG_PREFIX = "edited-canonical:";
@@ -16,37 +16,31 @@ function likeLiteral(s: string): string {
 }
 
 /**
- * Excludes a row when EITHER of two things is true (Codex review, T-0102):
- *
- * 1. It carries a `quarantine:<reason>` tag matching one of the five exact reasons this Worker
- *    ever writes, whatever its other tags — a recognized reason is never coincidental (see
- *    `heldReason`), so it holds a row unconditionally, the same as `isInsightEligible`'s "held
- *    whatever its other tags" contract.
- * 2. It carries ANY `quarantine:`-prefixed tag paired with `status:draft` in the same row — the
- *    exact shape `withHold` always writes together. Broader than (1) on purpose: a row shaped
- *    like this Worker's own hold but carrying a reason this build doesn't recognize (a newer
- *    version's sixth reason, or a forged tag) still holds out of caution, matching the
- *    agent-facing reader's `heldReason(tags) ?? "unrecognized"` fallback (src/mcp/server.ts).
- *
- * A 3.7 brain's own `quarantine:2020` or `quarantine:review` tag matches neither: "2020" and
- * "review" are not recognized reasons, and pre-4.0 writers never paired either with status:draft.
- * That tag stays an ordinary user tag.
+ * Excludes a row only for the five hold tags this Worker itself writes (Codex review, T-0102,
+ * director follow-up after a cloud re-review): a row is held if and only if `heldReason` would
+ * recognize it, whatever its other tags. A 3.7 brain's own `quarantine:2020` or `quarantine:review`
+ * tag — predating this namespace, never one of the five reasons — is never excluded from recall or
+ * re-indexing, whether or not it happens to sit beside a `status:draft` tag written for an
+ * unrelated reason (a capsule-defining row, for one). The only wildcards are the leading and
+ * trailing `%` around each literal reason, which match the JSON array's neighbours; every reason is
+ * run through `likeLiteral` first (matters for `too_long`, whose `_` would otherwise be a LIKE
+ * single-character wildcard, not a literal one).
  *
  * Starts with the bare column name `tags`, like the single-condition form this replaces, so every
  * existing call site's `${NOT_HELD_SQL}` (unqualified, one `entries`-shaped table in scope) still
  * reads correctly. A query that joins two tag-bearing tables under aliases cannot safely splice
  * this in more than once with only the first `tags` qualified — use `notHeldSqlFor(alias)` there.
  */
-export const NOT_HELD_SQL = `${HOLD_REASONS.map(
+export const NOT_HELD_SQL = HOLD_REASONS.map(
   r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${likeLiteral(r)}"%' ESCAPE '\\'`,
-).join(" AND ")} AND (tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%' OR tags NOT LIKE '%"status:draft"%')`;
+).join(" AND ");
 
 /** `NOT_HELD_SQL`, with every `tags` reference qualified by `alias` — for a query where more than
  * one tag-bearing table is in scope (a self-join) and a bare `tags` would be ambiguous. */
 export function notHeldSqlFor(alias: string): string {
-  return `${HOLD_REASONS.map(
+  return HOLD_REASONS.map(
     r => `${alias}.tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${likeLiteral(r)}"%' ESCAPE '\\'`,
-  ).join(" AND ")} AND (${alias}.tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%' OR ${alias}.tags NOT LIKE '%"status:draft"%')`;
+  ).join(" AND ");
 }
 const EDITED_CANONICAL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -65,15 +59,11 @@ export function isEditedCanonicalDateValue(value: string): boolean {
 }
 
 /**
- * True when a row is held out of recall: `heldReason` recognizes its reason (unconditional — see
- * `NOT_HELD_SQL`'s own comment for why), or it carries some `quarantine:`-prefixed tag paired with
- * `status:draft` in the same row (defense in depth for an unrecognized reason). A 3.7 brain's own
- * `quarantine:2020` or `quarantine:review` tag matches neither and is never held.
+ * True when a row is held out of recall: exactly when `heldReason` recognizes its reason. A 3.7
+ * brain's own `quarantine:2020` or `quarantine:review` tag is never held, whatever its other tags.
  */
 export function isHeld(tags: readonly string[]): boolean {
-  if (heldReason(tags) !== null) return true;
-  if (getStatus(tags) !== "draft") return false;
-  return tags.some(t => isTagString(t) && t.trim().toLowerCase().startsWith(QUARANTINE_TAG_PREFIX));
+  return heldReason(tags) !== null;
 }
 
 /**
@@ -101,9 +91,20 @@ export function heldReason(tags: readonly string[]): HoldReason | null {
   return null;
 }
 
-/** Replaces any existing hold tag with the given reason, and sets status:draft (5.4). */
+/** True when `t` is one of the five exact `quarantine:<reason>` tags this Worker itself writes —
+ * not merely `quarantine:`-prefixed. A 3.7 tag like `quarantine:2020` or `quarantine:review` is
+ * an ordinary user tag and must never be stripped alongside a genuine hold tag. */
+export function isRecognizedHoldTag(t: unknown): boolean {
+  if (!isTagString(t)) return false;
+  const s = t.trim().toLowerCase();
+  return s.startsWith(QUARANTINE_TAG_PREFIX) && isHoldReasonValue(s.slice(QUARANTINE_TAG_PREFIX.length));
+}
+
+/** Replaces any existing recognized hold tag with the given reason, and sets status:draft (5.4).
+ * Leaves an ordinary quarantine:-prefixed tag (a 3.7 tag that merely shares the namespace, Codex
+ * review T-0102) untouched — only a tag `heldReason` would itself recognize is ever removed here. */
 export function withHold(tags: readonly string[], reason: HoldReason): string[] {
-  const withoutHold = tags.filter(t => !(isTagString(t) && t.trim().toLowerCase().startsWith(QUARANTINE_TAG_PREFIX)));
+  const withoutHold = tags.filter(t => !isRecognizedHoldTag(t));
   return withStatus([...withoutHold, `${QUARANTINE_TAG_PREFIX}${reason}`], "draft");
 }
 
@@ -126,11 +127,10 @@ export function withEditedCanonical(tags: readonly string[], now: number): strin
 }
 
 /**
- * The one plain-English phrase per hold reason, shared by every agent-facing
- * reply (5.5). A row is held by ANY `quarantine:` tag, whatever the reason —
- * `heldReason` returns null for one it does not recognize, and that row is
- * still held: pass null through here for the generic phrase rather than
- * treating an unrecognized reason as "not held".
+ * The one plain-English phrase per hold reason, shared by every agent-facing reply (5.5). `null`
+ * is exhaustive-switch defense, not a live case: `isHeld`/`heldReason` are the same check now
+ * (Codex review, T-0102, director follow-up), so a row this function is ever called for already
+ * has a recognized reason.
  */
 export function holdReasonPhrase(reason: HoldReason | null): string {
   switch (reason) {

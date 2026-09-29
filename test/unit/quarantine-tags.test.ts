@@ -69,11 +69,12 @@ describe("public/utils.js hides both prefixes", () => {
   });
 });
 
-describe("NOT_HELD_SQL excludes a row when heldReason recognizes it, or quarantine: pairs with status:draft", () => {
-  it("matches the exact literal: the five exact-reason clauses ANDed, then ANDed with the pairing OR", () => {
+describe("NOT_HELD_SQL excludes a row only for the five exact reasons this Worker writes", () => {
+  it("matches the exact literal: one exact-format NOT LIKE clause per HoldReason, ANDed, ESCAPEd", () => {
     const reasons = ["instruction", "hidden", "burst", "capsule", "too_long"];
-    const exactReasons = reasons.map(r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r.replace("_", "\\_")}"%' ESCAPE '\\'`).join(" AND ");
-    expect(NOT_HELD_SQL).toBe(`${exactReasons} AND (tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%' OR tags NOT LIKE '%"status:draft"%')`);
+    expect(NOT_HELD_SQL).toBe(
+      reasons.map(r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r.replace("_", "\\_")}"%' ESCAPE '\\'`).join(" AND "),
+    );
   });
 
   it("carries no bound placeholder", () => {
@@ -88,22 +89,28 @@ describe("NOT_HELD_SQL excludes a row when heldReason recognizes it, or quaranti
 });
 
 describe("isHeld / heldReason / withHold", () => {
-  it("isHeld is true for a recognized reason unconditionally, whatever its other tags (a recognized reason is never coincidental)", () => {
+  it("isHeld is true for a recognized reason unconditionally, whatever its other tags (a recognized reason is never coincidental, director follow-up: simplified, no status:draft pairing)", () => {
     expect(isHeld(["work", "status:canonical"])).toBe(false);
     expect(isHeld(["work", `${QUARANTINE_TAG_PREFIX}instruction`])).toBe(true);
     expect(isHeld(["work", `${QUARANTINE_TAG_PREFIX}instruction`, "status:canonical"])).toBe(true);
     expect(isHeld(["work", `${QUARANTINE_TAG_PREFIX}instruction`, "status:draft"])).toBe(true);
   });
 
-  it("isHeld is true for an unrecognized reason only when status:draft is paired -- defense in depth for a future reason or a forged tag", () => {
-    expect(isHeld([`${QUARANTINE_TAG_PREFIX}some-future-reason`, "status:draft"])).toBe(true);
+  it("isHeld is false for an unrecognized reason, status:draft alongside it or not", () => {
+    // Director follow-up: an unrecognized reason is never held, even paired with status:draft --
+    // the earlier "defense in depth" version of this rule (this suite's own prior iteration) was
+    // itself a cloud-review MAJOR: it let a 3.7 row that happened to carry BOTH a quarantine:-
+    // prefixed tag and an unrelated status:draft (a capsule-defining row, for one) become
+    // permanently held. Simpler and correct: exactly the five reasons, nothing else, ever.
+    expect(isHeld([`${QUARANTINE_TAG_PREFIX}some-future-reason`, "status:draft"])).toBe(false);
     expect(isHeld([`${QUARANTINE_TAG_PREFIX}some-future-reason`])).toBe(false);
     expect(heldReason([`${QUARANTINE_TAG_PREFIX}some-future-reason`, "status:draft"])).toBeNull();
   });
 
-  it("a 3.7 legacy tag that merely shares the quarantine: prefix, an unrecognized reason never paired with status:draft, is not held", () => {
+  it("a 3.7 legacy tag that merely shares the quarantine: prefix is not held, status:draft alongside it or not", () => {
     expect(isHeld(["quarantine:2020", "outcome:won"])).toBe(false);
     expect(isHeld(["quarantine:review"])).toBe(false);
+    expect(isHeld(["quarantine:review", "status:draft"])).toBe(false);
   });
 
   it("heldReason reads the recognized reason and is null otherwise", () => {
@@ -121,6 +128,13 @@ describe("isHeld / heldReason / withHold", () => {
     expect(next).toContain(`${QUARANTINE_TAG_PREFIX}instruction`);
     expect(next).not.toContain(`${QUARANTINE_TAG_PREFIX}hidden`);
     expect(getStatus(next)).toBe("draft");
+    expect(next).toContain("work");
+  });
+
+  it("withHold never strips a 3.7 tag that merely shares the quarantine: prefix (director follow-up)", () => {
+    const next = withHold(["quarantine:2020", "work"], "instruction");
+    expect(next).toContain(`${QUARANTINE_TAG_PREFIX}instruction`);
+    expect(next).toContain("quarantine:2020");
     expect(next).toContain("work");
   });
 });
