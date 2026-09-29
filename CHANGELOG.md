@@ -88,6 +88,16 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - A batch of new admin config keys ships with this release, for trash and history retention, staleness thresholds, quarantine sensitivity, standing instructions and decision review. Every one keeps its shipped default until you change it, so an upgrade changes nothing on its own.
 - Rolling back to 3.7 after using 4.0: 3.7 does not know the `quarantine:` or `edited-canonical:` tags. A held memory would be readable again in 3.7, but only by keyword search, since a held memory is never given search vectors.
 
+**API and MCP contract changes for 3.7 clients**
+
+- `forget` no longer deletes immediately: the memory moves to trash and stays there for 14 days by default (see "Trash and undo" above). A client that treated `forget` as final should treat it as reversible instead.
+- Permanent delete is a separate, REST-only step (`POST /forget` with `permanent: true` and `confirm` set to the id): no MCP tool exposes it. It also requires the trash row's own `nonce`, read from the trash listing, so a stale id alone no longer deletes anything.
+- Reply wording changed on several tools that report a memory could not be found or acted on (see "Trash and undo" and "Time and validity" above for the current text); a client that pattern-matches an exact reply string should match on structure or a stable prefix instead.
+- A memory over about 128 KB is now refused rather than accepted: REST returns 413, and the MCP reply says so and asks for the memory to be split (see "Saving" above).
+- More than 40 MCP writes from one identity inside a 10-minute window are held for review rather than saved outright, as part of the burst detection under "Self-protecting quarantine" above.
+- New optional fields this release adds to existing tools and routes (among them `valid_from`, `valid_until`, `volatility`, `nonce`, `permanent`, `confirm`, `to_version`) now return a 400 when given the wrong type, rather than being silently ignored.
+- Every recall reply now carries a short `receipt` suffix (see "Recall log and implicit feedback" above); existing fields are unchanged, so this is additive, not breaking.
+
 ## [3.7.0] — Search that puts the right answer first
 
 **Search**
