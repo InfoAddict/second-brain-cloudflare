@@ -745,18 +745,24 @@ export async function importExportPayload(
     parsedPage.push(parsed);
   }
 
+  const pageIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
+  const { live: existingIds, trashed: trashedIds } = await loadExistingIds(env, pageIds);
+
   // Codex review, T-0102 B3, director follow-up (MINOR): an id with any entry_events history at
   // all -- the export's own id, or boundedEntryId's own length-based mint -- is never reused; see
-  // loadEventHistoryIds for why deleting or inheriting that history are both wrong.
-  const candidateIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
-  const eventHistoryIds = await loadEventHistoryIds(env, candidateIds);
+  // loadEventHistoryIds for why deleting or inheriting that history are both wrong. Checked only
+  // for ids that will actually attempt an insert (not already live or trashed, both handled below
+  // as ordinary skips): a page that turns out to be a full rerun of an already-imported one costs
+  // nothing extra here, the same self-imposed D1 budget every other step in this file keeps to.
+  const insertCandidateIds = [...new Set(
+    parsedPage.flatMap(p => ("row" in p && !existingIds.has(p.row.id) && !trashedIds.has(p.row.id)) ? [p.row.id] : []),
+  )];
+  const eventHistoryIds = await loadEventHistoryIds(env, insertCandidateIds);
   for (const p of parsedPage) {
     if (!("row" in p) || !eventHistoryIds.has(p.row.id)) continue;
     p.row = { ...p.row, originalId: p.row.originalId ?? p.row.id, id: crypto.randomUUID() };
   }
 
-  const pageIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
-  const { live: existingIds, trashed: trashedIds } = await loadExistingIds(env, pageIds);
   let skipped_in_trash = 0;
 
   const pendingBatch: PendingInsert[] = [];
