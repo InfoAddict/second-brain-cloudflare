@@ -335,7 +335,9 @@ describe("getChanges() (S1)", () => {
     // dashboard-session concept, so a held item's own text must not leak to any token caller by
     // default -- only revealHeld: true (a future dashboard "reveal" action, S4) gets it.
     it("changesToRestJson: held preview withheld by default, shown only with revealHeld", async () => {
-      sqlite.seed({ id: "e1", content: "The secret plan is X", createdAt: now - HOUR, tags: [], source: "api" });
+      // The row's own tags carry the hold (nothing has released it since) -- matches what a real
+      // "held" event leaves behind, and is what T-0102's fix actually keys masking off of.
+      sqlite.seed({ id: "e1", content: "The secret plan is X", createdAt: now - HOUR, tags: ["quarantine:instruction", "status:draft"], source: "api" });
       sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
       await insertEvent({ id: "ev-held", entryId: "e1", event: "held", actorId: "", createdAt: now - 30 * MIN, payload: { channel: "rest", reasons: ["instruction"] } });
 
@@ -346,6 +348,32 @@ describe("getChanges() (S1)", () => {
 
       const revealed = changesToRestJson(result, true);
       expect((revealed.items as unknown[])[0]).toMatchObject({ kind: "item", event: "held", id: "e1", preview: "The secret plan is X" });
+    });
+
+    // Cross-vendor review MAJOR (T-0102), finding 6(a): masking must key off the row's CURRENT
+    // held status, not off this event's own family -- a "status_changed" event on a row that is
+    // (still, or again) held must be masked too, even though its own family is not "held".
+    it("changesToRestJson: masks a non-held-family event's preview when the row is currently held", async () => {
+      sqlite.seed({ id: "e1", content: "The secret plan is X", createdAt: now - HOUR, tags: ["quarantine:instruction", "status:draft"], source: "api" });
+      sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+      await insertEvent({ id: "ev-status", entryId: "e1", event: "status_changed", createdAt: now - 30 * MIN, payload: { channel: "mcp", status: "draft" } });
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"));
+      const byDefault = changesToRestJson(result);
+      expect((byDefault.items as unknown[])[0]).toMatchObject({ kind: "item", event: "status_changed", id: "e1", preview: null });
+      expect(JSON.stringify(byDefault)).not.toContain("secret plan");
+    });
+
+    it("changesToRestJson: masks a trashed row's preview when its row_json tags are held", async () => {
+      await insertTrashRow("e2", "ws-p", "u1", "The secret plan is X");
+      await sqlite.db.prepare(`UPDATE entries_trash SET row_json = ? WHERE id = 'e2'`)
+        .bind(JSON.stringify({ source: "api", tags: ["quarantine:instruction", "status:draft"] })).run();
+      await insertEvent({ id: "ev-trash", entryId: "e2", event: "deleted", createdAt: now - 30 * MIN, payload: { channel: "mcp", trash: true } });
+
+      const result = await getChanges(env, identityOf("u1", "ws-p"));
+      const byDefault = changesToRestJson(result);
+      expect((byDefault.items as unknown[])[0]).toMatchObject({ kind: "item", event: "deleted", id: "e2", preview: null });
+      expect(JSON.stringify(byDefault)).not.toContain("secret plan");
     });
 
     it("changesToRestJson: a group row maps can_undo_all/can_release_all to snake_case", async () => {

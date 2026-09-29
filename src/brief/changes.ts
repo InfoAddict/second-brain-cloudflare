@@ -16,6 +16,7 @@ import { readScopeWorkspaces } from "../lib/scope";
 import { resolveConfig, type Config } from "../config";
 import { scoreWrite } from "../quarantine/score";
 import { INTEGRATION_PROVIDERS } from "../integrations";
+import { isHeld } from "../quarantine/tags";
 
 /** Matches src/brief/compute.ts's RECENT_WINDOW_MS window. */
 export const BRIEF_CHANGES_WINDOW_HOURS = 48;
@@ -42,6 +43,8 @@ export interface ChangeItem {
   at: number;
   client: string | null;
   preview: string | null;
+  /** T-0102 MAJOR fix: the row's current held status, independent of `family`/`event` -- see Classified.heldNow. */
+  heldNow: boolean;
   reasons?: string[];
   source?: string | null;
   status?: string;
@@ -88,6 +91,7 @@ interface RawRow {
   author_id: string | null;
   source: string | null;
   preview: string | null;
+  tags_json: string | null;
 }
 
 /**
@@ -119,6 +123,18 @@ function parsePayload(raw: string): Record<string, unknown> {
   }
 }
 
+/** The row's current tags: `entries.tags` (live) or `entries_trash.row_json.$.tags` (trashed),
+ * COALESCEd in SQL into one `tags_json` column -- null when the row is neither (purged). */
+function parseTagsJson(tagsJson: string | null): string[] {
+  if (!tagsJson) return [];
+  try {
+    const parsed = JSON.parse(tagsJson);
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 interface Classified {
   id: string;
   event: string;
@@ -127,6 +143,11 @@ interface Classified {
   client: string | null;
   createdAt: number;
   preview: string | null;
+  /** T-0102 MAJOR fix: the row's CURRENT held status (its live entries.tags, or its
+   * entries_trash row_json tags once trashed) -- not the "held" event family, which only fires
+   * for the moment a row was quarantined and says nothing about a later change to an already
+   * (or still) held row. Preview masking keys off this, not off family. */
+  heldNow: boolean;
   reasons?: string[];
   source?: string | null;
   status?: string;
@@ -141,7 +162,7 @@ function classify(row: RawRow, cfg: Readonly<Config>): Classified | null {
   const client = safeClient(payload.client, cfg);
   const base = {
     id: row.entry_id, event: row.event, actorId: row.actor_id, client,
-    createdAt: row.created_at, preview: row.preview,
+    createdAt: row.created_at, preview: row.preview, heldNow: isHeld(parseTagsJson(row.tags_json)),
   };
 
   switch (row.event) {
@@ -229,6 +250,7 @@ function group(rows: Classified[], cfg: Readonly<Config>): ChangeRow[] {
           at: r.createdAt,
           client: r.client,
           preview: r.preview,
+          heldNow: r.heldNow,
           ...(r.reasons ? { reasons: r.reasons } : {}),
           ...(r.source !== undefined ? { source: r.source } : {}),
           ...(r.status ? { status: r.status } : {}),
@@ -278,7 +300,8 @@ async function changeEventRows(
       `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
               COALESCE(en.actor_id, t.actor_id) AS author_id,
               COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
-              substr(COALESCE(en.content, t.content), 1, 160) AS preview
+              substr(COALESCE(en.content, t.content), 1, 160) AS preview,
+              COALESCE(en.tags, json_extract(t.row_json, '$.tags')) AS tags_json
        FROM (
          SELECT id, entry_id, event, payload, created_at, actor_id FROM entry_events INDEXED BY idx_entry_events_created
          WHERE ${eventFilter}
@@ -412,7 +435,10 @@ export function changesToRestJson(result: ChangesResult, revealHeld = false): Re
         }
       : {
           kind: "item", event: row.event, family: row.family, id: row.id, at: row.at, client: row.client,
-          preview: row.family === "held" && !revealHeld ? null : row.preview,
+          // T-0102 MAJOR fix: masks on the row's CURRENT held status (heldNow), not on whether
+          // THIS event's own family happens to be "held" -- a row can be held today via an
+          // unrelated event (released-then-reheld, a status change on an already-held row, etc.).
+          preview: row.heldNow && !revealHeld ? null : row.preview,
           ...(row.reasons ? { reasons: row.reasons } : {}), ...(row.source !== undefined ? { source: row.source } : {}),
           ...(row.status ? { status: row.status } : {}), ...(row.capsuleChanged ? { capsule_changed: true } : {}),
           ...(row.canUndo ? { can_undo: true } : {}), ...(row.canRelease ? { can_release: true } : {}),

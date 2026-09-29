@@ -208,7 +208,7 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
          SELECT id, content, source, tags, created_at,
            (CASE WHEN ${OWED_TO_ME_SQL} THEN 'in' ELSE 'out' END) AS direction,
            ROW_NUMBER() OVER (PARTITION BY (CASE WHEN ${OWED_TO_ME_SQL} THEN 1 ELSE 0 END) ORDER BY created_at DESC, id DESC) AS rn
-         FROM entries WHERE ${TASK_INDEXED} AND ${openLoopSql(now)} AND ${scope.clause}
+         FROM entries WHERE ${TASK_INDEXED} AND ${openLoopSql(now)} AND ${scope.clause} AND ${NOT_HELD_SQL}
        ) WHERE rn <= 3
        ORDER BY direction, rn`,
     ).bind(...scope.bindings).all(),
@@ -263,7 +263,7 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
     // replaced since it was shown — a superseded fact is not worth re-reading).
     // validity: current: a row replaced since it was shown falls through to a fresh pick (5.5)
     ? await env.DB.prepare(
-        `SELECT id, content, source, tags, created_at FROM entries WHERE id = ? AND (valid_until IS NULL OR valid_until > ?) AND ${scope.clause}`,
+        `SELECT id, content, source, tags, created_at FROM entries WHERE id = ? AND (valid_until IS NULL OR valid_until > ?) AND ${scope.clause} AND ${NOT_HELD_SQL}`,
       ).bind(priorState.shownId, now, ...scope.bindings).first() as ResurfaceRow | null
     : null;
 

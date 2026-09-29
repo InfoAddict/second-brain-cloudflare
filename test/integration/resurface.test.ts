@@ -126,6 +126,24 @@ describe("GET /brief — same-day stability and rotation", () => {
     expect(second.resurface?.id).toBe(first.resurface?.id);
   });
 
+  // Cross-vendor review MAJOR (T-0102), finding 6(c): the same-day re-fetch had no held guard,
+  // unlike pickResurface's own fresh-pick query (resurfaceFilter already carries NOT_HELD_SQL).
+  it("never re-shows a pick that was held after it was first shown", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "only", content: "the secret plan is X", createdAt: now - OLD, importanceScore: 5 });
+    const env = envWithKv(sq);
+
+    const first = await (await worker.fetch(req("GET", "/brief"), env, ctx)).json() as any;
+    expect(first.resurface?.id).toBe("only");
+
+    sq.db.prepare(`UPDATE entries SET tags = ? WHERE id = 'only'`).bind(JSON.stringify(["quarantine:instruction", "status:draft"])).run();
+
+    const second = await (await worker.fetch(req("GET", "/brief"), env, ctx)).json() as any;
+    expect(second.resurface).toBeNull();
+    expect(JSON.stringify(second)).not.toContain("secret plan");
+  });
+
   it("does not repeat a pick shown within the last 30 days", async () => {
     sq = await migrated();
     const now = Date.now();
