@@ -30,6 +30,15 @@ export async function readEntryTimeline(
    * carries an empty actor too, but summarizes a SPECIFIC member into THEIR workspace — the
    * legacy-owner exception below must never widen for one, no matter who currently reads it. */
   entrySource = "",
+  /**
+   * Codex review, T-0102, director follow-up MAJOR: the live row's own created_at (its import
+   * time, for an imported row) — events are excluded below unless they fall at or after it, so a
+   * reused id's earlier life (an import that keeps the id instead of remapping it, entries.ts)
+   * never surfaces as this row's own history. Every caller already has this value from its own
+   * row read; optional and defaulted to 0 (no floor) only so a caller that genuinely has no such
+   * row in hand degrades to the old unfiltered read rather than failing to compile.
+   */
+  entryCreatedAt = 0,
 ): Promise<{ timeline: TimelineEvent[]; labelMap: Map<string, string>; cut: boolean }> {
   // ev.rowid breaks a created_at tie by true insertion order (D1/SQLite serializes writes, so rowid
   // assignment IS the real happens-before order), not by whatever order a tied created_at otherwise
@@ -38,12 +47,12 @@ export async function readEntryTimeline(
   const query = inlineLabels
     ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at, u.name AS user_name
        FROM entry_events ev LEFT JOIN users u ON u.id = ev.actor_id AND (u.removed_at IS NULL OR u.removed_at = 0)
-       WHERE ev.entry_id = ? ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`
+       WHERE ev.entry_id = ? AND ev.created_at >= ? ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`
     : limit === undefined
-    ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? ORDER BY ev.created_at ASC, ev.rowid ASC`
-    : `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`;
+    ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? AND ev.created_at >= ? ORDER BY ev.created_at ASC, ev.rowid ASC`
+    : `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? AND ev.created_at >= ? ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`;
   const statement = env.DB.prepare(query);
-  const { results } = await (limit === undefined && !inlineLabels ? statement.bind(id) : statement.bind(id, limit ?? 10))
+  const { results } = await (limit === undefined && !inlineLabels ? statement.bind(id, entryCreatedAt) : statement.bind(id, entryCreatedAt, limit ?? 10))
     .all<{ actor_id: string; event: string; payload: string; created_at: number; user_name?: string | null }>();
   const rowsChrono = limit === undefined && !inlineLabels ? (results ?? []) : (results ?? []).reverse();
   const parsedChrono = rowsChrono.map(e => ({
@@ -120,7 +129,7 @@ export async function readEntryHistory(env: Env, identity: Identity, id: string)
   const config = await resolveConfig(env);
   const chain = await loadHistory(env, identity, { id: historyRow.id, content: historyRow.content }, config.VERSION_KEEP);
   const [timelineResult, edgeResult] = await Promise.all([
-    readEntryTimeline(env, id, identity, historyRow.actor_id, undefined, false, historyRow.workspace_id, chain.rows.map(r => r.actor_id), String(rawEntry.source ?? "")),
+    readEntryTimeline(env, id, identity, historyRow.actor_id, undefined, false, historyRow.workspace_id, chain.rows.map(r => r.actor_id), String(rawEntry.source ?? ""), historyRow.created_at),
     env.DB.prepare(`SELECT e.source_id, e.target_id FROM edges e
       JOIN entries o ON o.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END
       WHERE e.type = 'supersedes' AND (e.source_id = ? OR e.target_id = ?) AND ${edgeScope.clause} AND ${otherScope.clause}

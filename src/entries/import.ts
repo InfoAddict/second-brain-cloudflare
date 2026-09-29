@@ -4,7 +4,7 @@ import { edgeEndpointsReadableSql, isSymmetric, isValidEdgeType } from "../graph
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
-import type { ChangeContext } from "../lib/audit";
+import { auditEventStatement, type ChangeContext } from "../lib/audit";
 // MAX_ENTRY_ID_BYTES: the one bound on a caller-chosen entry id, applied through boundedEntryId.
 import { boundedEntryId } from "../vectorize/ids";
 import { parseImportedProject, type ImportedProject } from "../projects/registry";
@@ -32,16 +32,22 @@ export const IMPORT_D1_BATCH_SIZE = 50;
 /** Edge endpoint lookups bind each id twice (source IN + target IN). */
 export const EDGE_ENDPOINT_QUERY_BATCH = Math.floor(D1_MAX_BOUND_PARAMS / 2);
 
-// Ids are unique across entries and entries_trash (T-0089.1.1): the pre-read skips ids it saw, and
-// an id that turns up in either table after that read gets a fresh one here, checked in this same
-// statement, so an import never lands on top of a live or trashed row. RETURNING says which id won.
+// Codex review, T-0102, director follow-up MAJOR: a plain INSERT, always under the id this
+// module already chose (the export's own id, or boundedEntryId's own length-based mint over
+// MAX_ENTRY_ID_BYTES -- an id is kept even when reused, round 2 re-review) and already
+// pre-checked against entries and entries_trash (loadExistingIds) -- not a CASE WHEN that lets
+// the database silently substitute a different id on a collision. A held row's hold statements
+// (holdStatements, the held event) are built against that SAME chosen id and land in the SAME
+// batch as this INSERT (flushInsertBatch): a substituted id would have left them targeting an id
+// that was never written, the exact "commits unheld" gap this fix closes. A genuine collision (a
+// true concurrent-insert race in the gap between the pre-check and this batch, not a case this
+// module's own pre-checks miss) fails this statement, and with it -- D1 batch() is one
+// transaction -- the whole row's insert and hold together, atomically; flushInsertBatch's retry
+// path resolves it from there.
 // versioning: exempt: creation — an imported row has no prior state to keep
-// scope-exempt: by-id existence probes across every workspace: an id is unique deployment-wide
 const ENTRY_INSERT_SQL_TEMPLATE =
   `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses, workspace_id, actor_id, valid_from, valid_until)
-   SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM entries WHERE id = ?1) AND NOT EXISTS (SELECT 1 FROM entries_trash WHERE id = ?1) THEN ?1 ELSE lower(hex(randomblob(16))) END,
-          ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
-   RETURNING id`;
+   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`;
 
 function parseInsertColumns(sql: string): readonly string[] {
   const match = sql.match(/INSERT INTO entries \(([^)]+)\)/i);
@@ -330,33 +336,30 @@ function orphanVersionsDelete(env: Env, ids: string[]) {
        AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id)`,
   ).bind(JSON.stringify(ids));
 }
-
-/** Codex review, T-0102 B3 (MINOR), then director follow-up: the ids among `ids` that carry ANY
- * entry_events history, whatever became of the row they belonged to -- entry_events is a
- * permanent audit trail (unlike entry_versions, which a purge itself deletes), so a purged row's
- * events outlive it forever. Deleting them to make room for a reused id (the original B3 fix)
- * destroyed that permanent record; keeping them while reusing the id (the bug B3 set out to fix
- * in the first place) let the new row inherit events it never earned. Neither is right: an id
- * with any event history at all is never reused for a NEW row -- see the caller, which mints a
- * fresh id instead of proceeding to insert under one of these. */
-async function loadEventHistoryIds(env: Env, ids: string[]): Promise<Set<string>> {
-  const found = new Set<string>();
-  for (let i = 0; i < ids.length; i += D1_MAX_BOUND_PARAMS) {
-    const batch = ids.slice(i, i + D1_MAX_BOUND_PARAMS);
-    const { results } = await env.DB.prepare(
-      // scope-exempt: by-id: existence check on the audit trail of ids this batch might insert fresh
-      `SELECT DISTINCT entry_id FROM entry_events WHERE entry_id IN (${batch.map(() => "?").join(", ")})`,
-    ).bind(...batch).all() as { results: { entry_id: string }[] };
-    for (const row of results) found.add(row.entry_id);
-  }
-  return found;
+/**
+ * Codex review, T-0102, director follow-up MAJOR: the INSERT is a plain statement now, always
+ * under the id this module already chose and pre-checked (see ENTRY_INSERT_SQL_TEMPLATE's own
+ * comment) -- no more RETURNING, no more asking the database which id won. `original_id` reports
+ * whichever earlier id this row's own id replaced -- only boundedEntryId's own length-based mint
+ * now (round 2 re-review: a reused id is kept, never remapped), tracked in row.originalId.
+ */
+function importedResult(row: PendingInsert): ImportEntryResult {
+  return row.originalId === undefined
+    ? { id: row.id, status: "imported" }
+    : { id: row.id, status: "imported", original_id: row.originalId };
 }
 
-/** The id the insert actually wrote (RETURNING); a fresh one means the export's id was taken. */
-function importedResult(row: PendingInsert, res: { results?: unknown[] } | undefined): ImportEntryResult {
-  const id = (res?.results?.[0] as { id?: string } | undefined)?.id ?? row.id;
-  const original = row.originalId ?? (id === row.id ? undefined : row.id);
-  return original === undefined ? { id, status: "imported" } : { id, status: "imported", original_id: original };
+/** A row already at this exact id with this exact content: the row this INSERT wanted to write
+ * already exists, so a failed retry (a genuine concurrent-insert race resolved in this row's
+ * favor by someone else, or this same import request itself retried by its caller) is this row's
+ * own success arriving under someone else's write, not a new failure (director follow-up MAJOR:
+ * "counts as a duplicate, not a new row"). */
+async function isDuplicateRow(env: Env, row: PendingInsert): Promise<boolean> {
+  const existing = await env.DB.prepare(
+    // scope-exempt: by-id: this batch's own chosen id, already authorized to insert under writeCtx
+    `SELECT content FROM entries WHERE id = ?`,
+  ).bind(row.id).first<{ content: string }>();
+  return existing?.content === row.content;
 }
 
 async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<string>> {
@@ -428,20 +431,25 @@ function bindInsert(env: Env, row: PendingInsert, writeCtx: WriteContext) {
 }
 
 /**
- * Director follow-up MAJOR: `holdStatements` for every row this flush inserted with a hold plan --
- * the same real hold path captureEntry and mirror.ts use, run once the INSERT's own RETURNING id
- * (a fresh one when the export's id was taken) is known. Combines every held row's statements into
- * one batch, so a page with several held rows costs one extra round trip, not one per row.
+ * Codex review, T-0102, director follow-up MAJOR: every statement one row's own write needs --
+ * the INSERT, and for a held row `holdStatements` (the same real hold path captureEntry and
+ * mirror.ts use) plus the held event -- so a caller building a batch from this can never land the
+ * insert without its hold, or the hold without its own audit trail. `auditEventStatement`
+ * (src/lib/audit.ts) is the same plain-statement form `holdStatements` already returns, not the
+ * fire-and-forget `auditEvent` capture's own route layer uses elsewhere: a dropped held event on
+ * an unattended, many-row import is not the same risk as one on a single interactive capture.
  */
-async function applyHoldPlans(
-  env: Env, held: { id: string; row: PendingInsert }[], change: ChangeContext, config: Readonly<Config>, now: number,
-): Promise<void> {
-  if (!held.length) return;
-  const stmts = held.flatMap(({ id, row }) => holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
-    entryId: id, reasons: row.holdPlan!.reasons, score: row.holdPlan!.score, signals: row.holdPlan!.signals,
-    change, heldTags: heldTagsFor(row.tags, row.holdPlan!.reasons), now,
-  }));
-  await env.DB.batch(stmts);
+function rowStatements(
+  env: Env, row: PendingInsert, writeCtx: WriteContext, change: ChangeContext, config: Readonly<Config>, now: number,
+): D1PreparedStatement[] {
+  const insert = bindInsert(env, row, writeCtx);
+  if (!row.holdPlan) return [insert];
+  const { reasons, score, signals } = row.holdPlan;
+  const hold = holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
+    entryId: row.id, reasons, score, signals, change, heldTags: heldTagsFor(row.tags, reasons), now,
+  });
+  const event = auditEventStatement(env, { entryId: row.id, actorId: change.actorId, event: "held", payload: { reasons, score, channel: "rest" } });
+  return [insert, ...hold, event];
 }
 
 async function flushInsertBatch(
@@ -458,28 +466,34 @@ async function flushInsertBatch(
   const change: ChangeContext = { actorId: writeCtx.actorId, channel: "rest" };
   const now = Date.now();
   const orphanIds = batch.map(row => row.id);
-  const stmts = [orphanVersionsDelete(env, orphanIds), ...batch.map(row => bindInsert(env, row, writeCtx))];
+  const perRow = batch.map(row => rowStatements(env, row, writeCtx, change, config, now));
+  const stmts = [orphanVersionsDelete(env, orphanIds), ...perRow.flat()];
   try {
-    const written = await env.DB.batch(stmts);
-    const held: { id: string; row: PendingInsert }[] = [];
-    batch.forEach((row, i) => {
+    await env.DB.batch(stmts);
+    // D1 batch() is one transaction (director follow-up MAJOR): every row above landed with its
+    // own hold and held event together, or none of them landed at all -- this loop only reports.
+    for (const row of batch) {
       existingIds.add(row.id);
       counters.imported++;
-      const result = importedResult(row, written[i + 1]);
-      results.push(result);
-      if (row.holdPlan) held.push({ id: result.id, row });
-    });
-    await applyHoldPlans(env, held, change, config, now);
+      results.push(importedResult(row));
+    }
   } catch {
+    // Retried one row at a time, each under its OWN id (director follow-up MAJOR: "never mint new
+    // ids on retry") -- a batch failure can be one row's genuine conflict among many others that
+    // had none, and minting a fresh id here would abandon a hold plan already scored for this
+    // row's own content.
     for (const row of batch) {
       try {
-        const written = await env.DB.batch([orphanVersionsDelete(env, [row.id]), bindInsert(env, row, writeCtx)]);
+        await env.DB.batch([orphanVersionsDelete(env, [row.id]), ...rowStatements(env, row, writeCtx, change, config, now)]);
         existingIds.add(row.id);
         counters.imported++;
-        const result = importedResult(row, written[1]);
-        results.push(result);
-        if (row.holdPlan) await applyHoldPlans(env, [{ id: result.id, row }], change, config, now);
+        results.push(importedResult(row));
       } catch (e) {
+        if (await isDuplicateRow(env, row)) {
+          existingIds.add(row.id);
+          results.push({ id: row.id, status: "skipped", reason: "already_imported" });
+          continue;
+        }
         counters.failed++;
         results.push({
           id: row.id,
@@ -745,23 +759,15 @@ export async function importExportPayload(
     parsedPage.push(parsed);
   }
 
+  // Codex review, T-0102 B3, then director follow-up MAJOR (round 2 re-review): a reused id used
+  // to mint a fresh one instead, which drops edges (endpoints are matched by id) and makes a
+  // repeated import of the same file re-insert everything under new ids on every run. Reversed:
+  // the id is always kept, and no entry_events row is ever deleted -- a purged row's audit trail
+  // is permanent, and reusing its freed id no longer inherits it, because readEntryTimeline (and
+  // every other caller of it) now filters events to the live row's own created_at forward. Edges
+  // and repeated imports work the same way 3.7 always did.
   const pageIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
   const { live: existingIds, trashed: trashedIds } = await loadExistingIds(env, pageIds);
-
-  // Codex review, T-0102 B3, director follow-up (MINOR): an id with any entry_events history at
-  // all -- the export's own id, or boundedEntryId's own length-based mint -- is never reused; see
-  // loadEventHistoryIds for why deleting or inheriting that history are both wrong. Checked only
-  // for ids that will actually attempt an insert (not already live or trashed, both handled below
-  // as ordinary skips): a page that turns out to be a full rerun of an already-imported one costs
-  // nothing extra here, the same self-imposed D1 budget every other step in this file keeps to.
-  const insertCandidateIds = [...new Set(
-    parsedPage.flatMap(p => ("row" in p && !existingIds.has(p.row.id) && !trashedIds.has(p.row.id)) ? [p.row.id] : []),
-  )];
-  const eventHistoryIds = await loadEventHistoryIds(env, insertCandidateIds);
-  for (const p of parsedPage) {
-    if (!("row" in p) || !eventHistoryIds.has(p.row.id)) continue;
-    p.row = { ...p.row, originalId: p.row.originalId ?? p.row.id, id: crypto.randomUUID() };
-  }
 
   let skipped_in_trash = 0;
 

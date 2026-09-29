@@ -160,10 +160,12 @@ describe("B1: import scores every row and keeps a real hold held", () => {
   });
 });
 
-describe("B3: an imported id that reuses a purged id's freed slot mints a fresh id instead", () => {
-  it("mints a fresh id, imports under it, and leaves the old id's audit trail untouched (director follow-up)", async () => {
-    // A purged row's audit trail, with no live or trashed row under this id -- exactly the state
-    // loadEventHistoryIds checks for.
+describe("B3: an imported id that reuses a purged id's freed slot keeps the id (round 2 re-review, MAJOR)", () => {
+  it("keeps the imported id, deletes no events, and the row inserts normally", async () => {
+    // A purged row's audit trail: no live or trashed row under this id, but its events (a
+    // permanent record) outlive it. The original B3 fix deleted them; the fix after that minted
+    // a fresh id instead (dropping edges, and remapping ids on every rerun of the same file).
+    // Both reversed now: the id is kept, and nothing here is ever deleted.
     await (sqlite.db as any).prepare(
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
     ).bind("ev1", "reused-id", "old-owner", "created", "{}", 1000).run();
@@ -172,19 +174,14 @@ describe("B3: an imported id that reuses a purged id's freed slot mints a fresh 
       entries: [{ id: "reused-id", content: "A new note that happens to reuse a freed id.", tags: [] }],
     });
     expect(summary.imported).toBe(1);
-    expect(summary.results).toHaveLength(1);
-    const result = summary.results[0] as { id: string; status: string; original_id?: string };
-    expect(result.status).toBe("imported");
-    expect(result.original_id).toBe("reused-id");
-    expect(result.id).not.toBe("reused-id");
+    expect(summary.results).toEqual([{ id: "reused-id", status: "imported" }]);
 
-    // The old id was never reused: nothing was inserted under it, and its own audit trail (and the
-    // event this test seeded) is exactly as it was.
-    const underOldId = (await (sqlite.db as any).prepare(`SELECT id FROM entries WHERE id = 'reused-id'`).first());
-    expect(underOldId).toBeNull();
+    const row = await (sqlite.db as any).prepare(`SELECT id, content FROM entries WHERE id = 'reused-id'`).first();
+    expect(row?.content).toBe("A new note that happens to reuse a freed id.");
+    // The old event is untouched, not deleted -- readEntryTimeline (src/memory/history.ts) is
+    // what keeps it from surfacing as this row's own history, not deletion.
     const events = (await (sqlite.db as any).prepare(`SELECT id FROM entry_events WHERE entry_id = 'reused-id'`).all()).results;
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ id: "ev1" });
+    expect(events).toEqual([{ id: "ev1" }]);
   });
 
   it("leaves a live row's own entry_events alone", async () => {
@@ -198,5 +195,51 @@ describe("B3: an imported id that reuses a purged id's freed slot mints a fresh 
 
     const events = (await (sqlite.db as any).prepare(`SELECT id FROM entry_events WHERE entry_id = 'live-id'`).all()).results;
     expect(events).toHaveLength(1);
+  });
+
+  it("re-running the same import file is idempotent: the second run skips every row, imports nothing new", async () => {
+    const payload = { entries: [{ id: "a", content: "A note.", tags: [] }, { id: "b", content: "Another note.", tags: [] }] };
+    const first = await importExportPayload(env, payload);
+    expect(first.imported).toBe(2);
+    const second = await importExportPayload(env, payload);
+    expect(second.imported).toBe(0);
+    expect(second.skipped).toBe(2);
+    const rows = (await (sqlite.db as any).prepare(`SELECT id FROM entries`).all()).results;
+    expect(rows.map((r: { id: string }) => r.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("dedupes a repeated id within one file: only the first occurrence is imported", async () => {
+    const summary = await importExportPayload(env, {
+      entries: [
+        { id: "dup", content: "First copy.", tags: [] },
+        { id: "dup", content: "Second copy, same id.", tags: [] },
+      ],
+    });
+    expect(summary.imported).toBe(1);
+    expect(summary.skipped).toBe(1);
+    const row = await (sqlite.db as any).prepare(`SELECT content FROM entries WHERE id = 'dup'`).first();
+    expect(row?.content).toBe("First copy.");
+  });
+
+  it("edges to a reused id resolve, since the id is never remapped", async () => {
+    await (sqlite.db as any).prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind("ev3", "reused-with-edge", "old-owner", "created", "{}", 1000).run();
+
+    const summary = await importExportPayload(env, {
+      entries: [
+        { id: "reused-with-edge", content: "Reused id, with an edge.", tags: [] },
+        { id: "other", content: "The other endpoint.", tags: [] },
+      ],
+      edges: [{ source_id: "reused-with-edge", target_id: "other", type: "relates_to" }],
+    });
+    expect(summary.imported).toBe(2);
+    expect(summary.edges_imported).toBe(1);
+    // relates_to is symmetric, so bindEdgeInsert orders endpoints lexicographically ("other" <
+    // "reused-with-edge") rather than preserving the export's own source/target order.
+    const edge = await (sqlite.db as any).prepare(
+      `SELECT source_id, target_id FROM edges WHERE source_id = 'reused-with-edge' OR target_id = 'reused-with-edge'`,
+    ).first();
+    expect(edge).toMatchObject({ source_id: "other", target_id: "reused-with-edge" });
   });
 });

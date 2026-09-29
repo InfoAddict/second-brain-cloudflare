@@ -3,6 +3,8 @@ import { makeTrashEnv, type TrashEnv } from "../helpers/trash-env";
 import { importExportPayload } from "../../src/entries/import";
 import { forgetEntry } from "../../src/capture/lifecycle";
 import { resolveConfig } from "../../src/config";
+import { readEntryTimeline } from "../../src/memory/history";
+import { resolveIdentityByUserId } from "../../src/lib/identity";
 
 let t: TrashEnv;
 afterEach(() => t?.close());
@@ -56,5 +58,37 @@ describe("import and the trash", () => {
     expect(summary.imported).toBe(2);
     expect(await versions("r1")).toEqual([]);
     expect(await versions("r2")).toEqual([]);
+  });
+});
+
+describe("import and reused ids (director follow-up, round 2 re-review MAJOR)", () => {
+  it("keeps a purged id's own events out of the reused id's own timeline", async () => {
+    t = await makeTrashEnv();
+    // A purged row's own audit trail: never deleted (a permanent record), but must not surface as
+    // the NEW row's own history now that the id is reused instead of remapped.
+    await t.sqlite.db.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind("old-ev", "reused", "old-owner", "created", "{}", 1000).run();
+
+    const now = 5000;
+    const summary = await importExportPayload(
+      t.env,
+      { entries: [{ id: "reused", content: "A new note under the reused id.", tags: [], created_at: now }] },
+      { writeCtx: { workspaceId: t.roots.ownerPersonalWorkspaceId, actorId: t.roots.ownerUserId } },
+    );
+    expect(summary.imported).toBe(1);
+    await t.sqlite.db.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind("new-ev", "reused", t.roots.ownerUserId, "updated", "{}", now + 1).run();
+
+    // The old event is still in the table (never deleted) ...
+    const allEvents = await t.all<any>(`SELECT id FROM entry_events WHERE entry_id = 'reused'`);
+    expect(allEvents.map((e: any) => e.id).sort()).toEqual(["new-ev", "old-ev"]);
+
+    // ... but readEntryTimeline, filtered to the live row's own created_at forward, shows only
+    // the new one.
+    const identity = (await resolveIdentityByUserId(t.env, t.roots.ownerUserId))!;
+    const { timeline } = await readEntryTimeline(t.env, "reused", identity, t.roots.ownerUserId, undefined, false, t.roots.ownerPersonalWorkspaceId, [], "api", now);
+    expect(timeline.map(e => e.event)).toEqual(["updated"]);
   });
 });
