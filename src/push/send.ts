@@ -30,6 +30,14 @@ const MAX_NOTIFICATIONS_PER_RUN = 3;
  */
 export const MAX_PUSH_FETCHES_PER_RUN = 40;
 /**
+ * The platform's real external-fetch ceiling per invocation (FX3 finding 3). The hourly cron
+ * runs the mirror sync and this pass in the SAME invocation (src/index.ts), so when the sync
+ * spent some of that 50 already, push must not also assume it gets the full MAX_PUSH_FETCHES_PER_RUN
+ * on top — a Notion sync alone can spend up to ~35 (src/integrations/notion.ts), which left
+ * unshared totals 75 against a limit of 50.
+ */
+export const PLATFORM_EXTERNAL_FETCH_BUDGET_PER_RUN = 50;
+/**
  * Subscribed workspaces the cron reads per run. Each costs two D1 SELECTs,
  * so the worst case is 1 + 2 x 50 + 1 = 102 D1 calls per invocation, well
  * under the 1,000 cap. The ring cursor below brings the rest in later runs.
@@ -63,9 +71,14 @@ export interface PushBudget {
 
 type LeaseResult = "held" | "busy" | "kv_write_failed";
 
-/** One per invocation; pass the same one to every workspace the invocation pushes to. */
-export function newPushBudget(): PushBudget {
-  return { fetchesLeft: MAX_PUSH_FETCHES_PER_RUN };
+/**
+ * One per invocation; pass the same one to every workspace the invocation pushes to.
+ * `fetchesLeft` defaults to push's own cap, for a caller that is the only fetcher in its
+ * invocation; a caller sharing the invocation with another fetcher (the sync cron) passes
+ * what is actually left of PLATFORM_EXTERNAL_FETCH_BUDGET_PER_RUN instead (FX3 finding 3).
+ */
+export function newPushBudget(fetchesLeft: number = MAX_PUSH_FETCHES_PER_RUN): PushBudget {
+  return { fetchesLeft };
 }
 
 /** Set while a run in this isolate holds the lease: an overlap within one isolate is refused outright. */
@@ -618,20 +631,24 @@ function interleave(pushes: WorkspacePush[]): SendTask[] {
  * The hourly cron. Reads up to MAX_PUSH_WORKSPACES_PER_RUN subscribed
  * workspaces from the persistent ring cursor and, only if something is
  * pending, takes the run lease, re-reads their delivery records, reserves
- * sends one per workspace per round under one 40-fetch budget, records them
+ * sends one per workspace per round under one fetch budget (MAX_PUSH_FETCHES_PER_RUN
+ * by default, or whatever a caller sharing its invocation with another
+ * fetcher passes instead — see newPushBudget, FX3 finding 3), records them
  * ahead, sends them, then moves the cursor: to the last workspace read when
  * everything fit, otherwise to just before the workspace the budget stopped
  * at, so the next run starts there. Together with the per-subscription
  * delivery record this reaches every workspace and subscription within a
  * bounded number of runs.
  *
- * Worst case per invocation: 102 D1 calls (1 ring scan + 2 per workspace x
+ * Worst case per invocation, alone: 102 D1 calls (1 ring scan + 2 per workspace x
  * 50 + 1 batch), 40 external fetches, 104 KV reads (cursor, 50 records, 50
  * re-reads under the lease, 2 lease reads, 1 at release) and 42 KV writes
  * (lease, at most 40 records, cursor) plus 1 lease delete. A run with
  * nothing new writes nothing.
  */
-export async function pushDueItemsAllWorkspaces(env: Env, resolved?: Readonly<Config>): Promise<{ sent: number; skipped?: PushSkip }> {
+export async function pushDueItemsAllWorkspaces(
+  env: Env, resolved?: Readonly<Config>, budget: PushBudget = newPushBudget(),
+): Promise<{ sent: number; skipped?: PushSkip }> {
   const ring = (((await env.DB.prepare(
     `SELECT DISTINCT workspace_id FROM push_subscriptions ORDER BY workspace_id`,
   ).all()).results ?? []) as { workspace_id: string }[]).map(r => r.workspace_id);
@@ -645,7 +662,6 @@ export async function pushDueItemsAllWorkspaces(env: Env, resolved?: Readonly<Co
   for (const workspaceId of selection) pushes.push(await prepareWorkspacePush(env, workspaceId, now, config.TIMEZONE));
   if (!pushes.some(p => p.tasks.length)) return { sent: 0 };
 
-  const budget = newPushBudget();
   const lease = await acquireRunLease(env, budget);
   if (lease !== "held") return { sent: 0, skipped: lease };
   try {
