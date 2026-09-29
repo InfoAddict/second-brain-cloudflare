@@ -40,7 +40,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Self-protecting quarantine**
 
-- A memory that looks like an instruction to an AI, contains hidden text, changes what your AI tools always see, arrives as part of an unusually large burst of writes, or is too long to check automatically, is held out of recall automatically. The AI tool that wrote it is told immediately, in plain language, and the user can release it with "undo" once they have read it. Nothing is ever released automatically.
+- A memory that looks like an instruction to an AI, contains hidden text, changes what your AI tools always see, arrives as part of an unusually large burst of writes, or is too long to check automatically, is held out of recall automatically. The AI tool that wrote it is told why at once, and the user can release it with "undo" once they have read it. Nothing is ever released automatically.
 
 **Standing instructions, decisions and commitments**
 
@@ -72,13 +72,13 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Standing instructions have their own list, showing whether each one is currently firing or held back, and why.
 - Decisions you logged have their own review queue, with your stated confidence next to how things actually turned out over time.
 - Commitments (something owed to you, or by you) show up alongside due items until they are marked done.
-- A held memory shows a banner explaining why in plain language, and a way to release it once you have read it. Nothing is held silently.
+- A held memory shows a banner with the reason and a Release button. Nothing is held silently.
 
 **Desktop app**
 
-- The Worker update screen now shows what changed for a major version. For 4.0: "Every edit to a memory is now kept, so any change can be undone, by you or by asking your AI. Forgotten memories wait in the trash for 14 days before they are removed for good. Edits made before this update were not recorded, so undo starts from today." Shown to the brain's owner only, and the Done screen adds a line reading the brain's actual trash retention once the update has finished.
+- The Worker update screen now shows what changed for a major version. For 4.0: "Changes to your memories are now recorded, so you can undo them in the dashboard or by asking your AI. Forgotten memories wait in the trash for 14 days before they are removed for good. Edits made before this update were not recorded, so undo starts from today." Shown to the brain's owner only, and the Done screen adds a line reading the brain's actual trash retention once the update has finished.
 - Advanced Settings has a new "History and trash" section: how long forgotten memories wait in the trash (7, 14, 30 or 90 days) and how many changes are kept per memory (10, 20 or 50). Owners and admins can change these; members see them read-only, with a line saying who can change them.
-- The app's self-update dialog now says plainly that 4.0's features depend on the brain being updated, not the app alone. English: "New in 4.0 once your Second Brain is updated: every change to a memory is now kept, so you can undo it, yourself or by asking your AI. Forgotten memories wait in the trash for 14 days by default before they're removed for good. This app update alone doesn't bring those. Ask whoever owns your Second Brain whether it's been updated yet." Italian: "Novità della versione 4.0, una volta aggiornato il tuo Second Brain: ogni modifica a un ricordo viene ora conservata, così puoi annullarla, da te o chiedendolo alla tua IA. I ricordi dimenticati restano nel cestino per 14 giorni per impostazione predefinita prima di essere eliminati per sempre. Questo aggiornamento dell'app da solo non porta queste novità. Chiedi al proprietario del tuo Second Brain se lo ha già aggiornato."
+- The app's self-update dialog now says that 4.0's features arrive once the Second Brain itself is updated. English: "Second Brain 4.0 adds undo and a history of changes for every memory. Forgotten memories now wait in a trash for 14 days, by default, before they are removed for good. You get these once your Second Brain itself is updated; this app update alone does not bring them. If you own your Second Brain, the app offers that update when it next starts (not for Second Brains on a custom domain). If someone else owns it, they update it for everyone." Italian: "Second Brain 4.0 aggiunge l'annullamento e la cronologia delle modifiche di ogni ricordo. I ricordi dimenticati ora restano nel cestino per 14 giorni, per impostazione predefinita, prima di essere eliminati definitivamente. Queste novità arrivano quando viene aggiornato il tuo Second Brain: il solo aggiornamento dell'app non basta. Se il Second Brain è tuo, l'app ti propone l'aggiornamento al prossimo avvio (non per i Second Brain su un dominio personalizzato). Altrimenti lo aggiorna il proprietario, per tutti."
 
 **Upgrading from 3.7**
 
@@ -127,7 +127,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Brief and open loops**
 
-- The resurface card is honest about what it picks now: it excludes memories that were only true in the moment (episodic) and commitments already marked done, prefers whatever shares one of today's top topics, and never repeats the same pick within 30 days. A Dismiss control retires a pick for good instead of only hiding it for the session.
+- The resurface card now excludes memories that were only true in the moment (episodic) and commitments already marked done, prefers whatever shares one of today's top topics, and never repeats the same pick within 30 days. A Dismiss control retires a pick for good instead of only hiding it for the session.
 - A new open-loops queue tracks commitments (entries tagged "task") that have no completion signal yet, with Done and Not a task actions on each one. The home board shows up to three with a "See all" sheet for the rest, and the attention count already on the brief folds loops in alongside unindexed and stale memories.
 
 **Reminders and due dates**
