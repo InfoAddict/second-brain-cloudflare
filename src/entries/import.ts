@@ -4,6 +4,7 @@ import { edgeEndpointsReadableSql, isSymmetric, isValidEdgeType } from "../graph
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
+import type { ChangeContext } from "../lib/audit";
 // MAX_ENTRY_ID_BYTES: the one bound on a caller-chosen entry id, applied through boundedEntryId.
 import { boundedEntryId } from "../vectorize/ids";
 import { parseImportedProject, type ImportedProject } from "../projects/registry";
@@ -12,9 +13,9 @@ import { resolveConfig, type Config } from "../config";
 import { standingTouched } from "../standing/cache";
 import { normalizeTagList, stripNewReservedTags } from "../tags/system";
 import { heldReason, type HoldReason } from "../quarantine/tags";
-import { scoreWrite } from "../quarantine/score";
-import { holdDecision, heldTagsFor } from "../quarantine/hold";
-import { getStatus } from "../memory/status";
+import { scoreWrite, type SignalHit } from "../quarantine/score";
+import { holdDecision, heldTagsFor, holdStatements } from "../quarantine/hold";
+import { pruneStatement, snapshotStatement } from "../memory/versions";
 
 /**
  * Default page size: array positions examined per call, inserts and skips alike.
@@ -204,6 +205,8 @@ interface PendingInsert {
    * stripNewReservedTags removed the quarantine: tag along with every other reserved one
    * (Codex review, T-0102 B1): a real hold must not silently become an ordinary row on import. */
   originalHoldReason: HoldReason | null;
+  /** Set by importHoldPlan once content and tags are final; null for a row that imports ordinary. */
+  holdPlan?: ImportHoldPlan | null;
 }
 
 function isValidProvenance(p: string): p is EdgeProvenance {
@@ -328,18 +331,25 @@ function orphanVersionsDelete(env: Env, ids: string[]) {
   ).bind(JSON.stringify(ids));
 }
 
-/** Codex review, T-0102 B3 (MINOR): the audit trail of an id's previous life (purged, and now
- * reused because the import's own id was taken and a fresh one collided with an old, purged
- * row's id) belongs to that old row, not the one this import is about to insert -- otherwise the
- * new row's history page would show events it never earned. Same shape as orphanVersionsDelete,
- * same batch. */
-function orphanEventsDelete(env: Env, ids: string[]) {
-  return env.DB.prepare(
-    // scope-exempt: by-id: audit trail of ids this batch inserts fresh; an imported row starts with none
-    `DELETE FROM entry_events WHERE entry_id IN (SELECT value FROM json_each(?1))
-       AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.id = entry_events.entry_id)
-       AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_events.entry_id)`,
-  ).bind(JSON.stringify(ids));
+/** Codex review, T-0102 B3 (MINOR), then director follow-up: the ids among `ids` that carry ANY
+ * entry_events history, whatever became of the row they belonged to -- entry_events is a
+ * permanent audit trail (unlike entry_versions, which a purge itself deletes), so a purged row's
+ * events outlive it forever. Deleting them to make room for a reused id (the original B3 fix)
+ * destroyed that permanent record; keeping them while reusing the id (the bug B3 set out to fix
+ * in the first place) let the new row inherit events it never earned. Neither is right: an id
+ * with any event history at all is never reused for a NEW row -- see the caller, which mints a
+ * fresh id instead of proceeding to insert under one of these. */
+async function loadEventHistoryIds(env: Env, ids: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  for (let i = 0; i < ids.length; i += D1_MAX_BOUND_PARAMS) {
+    const batch = ids.slice(i, i + D1_MAX_BOUND_PARAMS);
+    const { results } = await env.DB.prepare(
+      // scope-exempt: by-id: existence check on the audit trail of ids this batch might insert fresh
+      `SELECT DISTINCT entry_id FROM entry_events WHERE entry_id IN (${batch.map(() => "?").join(", ")})`,
+    ).bind(...batch).all() as { results: { entry_id: string }[] };
+    for (const row of results) found.add(row.entry_id);
+  }
+  return found;
 }
 
 /** The id the insert actually wrote (RETURNING); a fresh one means the export's id was taken. */
@@ -417,6 +427,23 @@ function bindInsert(env: Env, row: PendingInsert, writeCtx: WriteContext) {
   );
 }
 
+/**
+ * Director follow-up MAJOR: `holdStatements` for every row this flush inserted with a hold plan --
+ * the same real hold path captureEntry and mirror.ts use, run once the INSERT's own RETURNING id
+ * (a fresh one when the export's id was taken) is known. Combines every held row's statements into
+ * one batch, so a page with several held rows costs one extra round trip, not one per row.
+ */
+async function applyHoldPlans(
+  env: Env, held: { id: string; row: PendingInsert }[], change: ChangeContext, config: Readonly<Config>, now: number,
+): Promise<void> {
+  if (!held.length) return;
+  const stmts = held.flatMap(({ id, row }) => holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
+    entryId: id, reasons: row.holdPlan!.reasons, score: row.holdPlan!.score, signals: row.holdPlan!.signals,
+    change, heldTags: heldTagsFor(row.tags, row.holdPlan!.reasons), now,
+  }));
+  await env.DB.batch(stmts);
+}
+
 async function flushInsertBatch(
   env: Env,
   batch: PendingInsert[],
@@ -424,25 +451,34 @@ async function flushInsertBatch(
   results: ImportResultItem[],
   counters: { imported: number; failed: number },
   writeCtx: WriteContext,
+  config: Readonly<Config>,
 ): Promise<void> {
   if (!batch.length) return;
 
+  const change: ChangeContext = { actorId: writeCtx.actorId, channel: "rest" };
+  const now = Date.now();
   const orphanIds = batch.map(row => row.id);
-  const stmts = [orphanVersionsDelete(env, orphanIds), orphanEventsDelete(env, orphanIds), ...batch.map(row => bindInsert(env, row, writeCtx))];
+  const stmts = [orphanVersionsDelete(env, orphanIds), ...batch.map(row => bindInsert(env, row, writeCtx))];
   try {
     const written = await env.DB.batch(stmts);
+    const held: { id: string; row: PendingInsert }[] = [];
     batch.forEach((row, i) => {
       existingIds.add(row.id);
       counters.imported++;
-      results.push(importedResult(row, written[i + 2]));
+      const result = importedResult(row, written[i + 1]);
+      results.push(result);
+      if (row.holdPlan) held.push({ id: result.id, row });
     });
+    await applyHoldPlans(env, held, change, config, now);
   } catch {
     for (const row of batch) {
       try {
-        const written = await env.DB.batch([orphanVersionsDelete(env, [row.id]), orphanEventsDelete(env, [row.id]), bindInsert(env, row, writeCtx)]);
+        const written = await env.DB.batch([orphanVersionsDelete(env, [row.id]), bindInsert(env, row, writeCtx)]);
         existingIds.add(row.id);
         counters.imported++;
-        results.push(importedResult(row, written[2]));
+        const result = importedResult(row, written[1]);
+        results.push(result);
+        if (row.holdPlan) await applyHoldPlans(env, [{ id: result.id, row }], change, config, now);
       } catch (e) {
         counters.failed++;
         results.push({
@@ -704,9 +740,19 @@ export async function importExportPayload(
     if ("row" in parsed) {
       const bounded = await boundedEntryId(parsed.row.id);
       if (bounded !== parsed.row.id) parsed.row = { ...parsed.row, originalId: parsed.row.id, id: bounded };
-      parsed.row = applyImportHold(parsed.row, config);
+      parsed.row = { ...parsed.row, holdPlan: importHoldPlan(parsed.row, config) };
     }
     parsedPage.push(parsed);
+  }
+
+  // Codex review, T-0102 B3, director follow-up (MINOR): an id with any entry_events history at
+  // all -- the export's own id, or boundedEntryId's own length-based mint -- is never reused; see
+  // loadEventHistoryIds for why deleting or inheriting that history are both wrong.
+  const candidateIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
+  const eventHistoryIds = await loadEventHistoryIds(env, candidateIds);
+  for (const p of parsedPage) {
+    if (!("row" in p) || !eventHistoryIds.has(p.row.id)) continue;
+    p.row = { ...p.row, originalId: p.row.originalId ?? p.row.id, id: crypto.randomUUID() };
   }
 
   const pageIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
@@ -752,11 +798,11 @@ export async function importExportPayload(
     if (p.row.tags.includes("standing:active")) importedStanding = true;
 
     if (pendingBatch.length >= IMPORT_D1_BATCH_SIZE) {
-      await flushInsertBatch(env, pendingBatch.splice(0), existingIds, results, batchCounters, writeCtx);
+      await flushInsertBatch(env, pendingBatch.splice(0), existingIds, results, batchCounters, writeCtx, config);
     }
   }
   if (pendingBatch.length) {
-    await flushInsertBatch(env, pendingBatch.splice(0), existingIds, results, batchCounters, writeCtx);
+    await flushInsertBatch(env, pendingBatch.splice(0), existingIds, results, batchCounters, writeCtx, config);
   }
   imported += batchCounters.imported;
   failed += batchCounters.failed;
@@ -881,14 +927,11 @@ function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: 
 
   // Read before parseTags strips it along with every other reserved tag: a real hold
   // (quarantine:<recognized reason>) on the exported row must survive the import, not silently
-  // become an ordinary, indexable row (Codex review, T-0102 B1). Genuine, not merely a tag that
-  // happens to share the shape: withHold (src/quarantine/tags.ts) always sets status:draft in
-  // the SAME write as the quarantine: tag, so a real hold always carries both; a lone
-  // quarantine:<reason> with no accompanying status:draft is not treated as one -- this is also
-  // what keeps a caller's forged quarantine:instruction (which carries no status:draft either)
-  // from talking its own imported row into a hold it never earned.
+  // become an ordinary, indexable row (Codex review, T-0102 B1, then director follow-up: honored
+  // unconditionally, matching isHeld/heldReason's own simplified rule -- a recognized reason is
+  // never coincidental, whatever its other tags, status:draft included or not).
   const rawTags = Array.isArray(entry.tags) ? normalizeTagList(entry.tags) : [];
-  const originalHoldReason = getStatus(rawTags) === "draft" ? heldReason(rawTags) : null;
+  const originalHoldReason = heldReason(rawTags);
   const tagsParsed = parseTags(entry.tags);
   if (!tagsParsed.ok) return { failure: { id, status: "failed", reason: tagsParsed.reason } };
 
@@ -946,15 +989,27 @@ function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: 
   };
 }
 
+/** What a held imported row needs to write a real hold (holdStatements): the reasons, and the
+ * score/signals a fresh scoreWrite computed regardless of which reason ultimately wins. */
+interface ImportHoldPlan { reasons: HoldReason[]; score: number; signals: SignalHit[] }
+
 /**
  * Codex review, T-0102 B1: an imported row is scored on the rest channel like any other REST
  * write (import previously reached storeEntry/scoreWrite never at all), and a real hold the
- * export's own tags carried (originalHoldReason, read before parseTags stripped it) survives
- * the import rather than silently becoming an ordinary, indexable row. Scoring wins the reason
- * when both apply -- it is the richer, freshly-computed signal; the export's own reason is the
- * fallback when scoring alone would not have held this content today.
+ * export's own tags carried (originalHoldReason, read before parseTags stripped it, honored
+ * unconditionally -- director follow-up) survives the import rather than silently becoming an
+ * ordinary, indexable row. Scoring wins the reason when both apply -- it is the richer,
+ * freshly-computed signal; the export's own reason is the fallback when scoring alone would not
+ * have held this content today.
+ *
+ * Director follow-up MAJOR: a held import used to be nothing more than these tags stamped
+ * straight into the INSERT -- no hold version, no held event, so Release (which resolves through
+ * a version chain) and the Held feed (which reads from entry_events) never worked on it. The plan
+ * this returns is null for an ordinary row and the reasons/score/signals a held one needs; the
+ * caller runs holdStatements for it once the INSERT's own RETURNING id is known (see
+ * flushInsertBatch), the same real hold path captureEntry and mirror.ts use.
  */
-function applyImportHold(row: PendingInsert, config: Readonly<Config>): PendingInsert {
+function importHoldPlan(row: PendingInsert, config: Readonly<Config>): ImportHoldPlan | null {
   const score = scoreWrite(
     { content: row.content, tags: row.tags, source: row.source, channel: "rest", kind: "create" },
     config,
@@ -966,8 +1021,7 @@ function applyImportHold(row: PendingInsert, config: Readonly<Config>): PendingI
   const reasons: HoldReason[] | null = isOverContentLimit(row.content)
     ? ["too_long"]
     : decision.hold ? decision.reasons : row.originalHoldReason ? [row.originalHoldReason] : null;
-  if (!reasons) return row;
-  return { ...row, tags: heldTagsFor(row.tags, reasons) };
+  return reasons ? { reasons, score: score.score, signals: score.signals } : null;
 }
 
 /**

@@ -1,15 +1,20 @@
 /**
- * Codex review, T-0102 B1/B3: import.ts's fixes for quarantine holds and orphaned audit rows.
+ * Codex review, T-0102 B1/B3, then director follow-up after a cloud re-review: import.ts's fixes
+ * for quarantine holds and reused-id audit trails.
  *
  * B1: import never called scoreWrite, so genuinely suspicious imported content landed straight
- * into recall; and a real hold the exported row already carried (quarantine:<reason> alongside
- * status:draft, withHold's own invariant) was stripped by stripNewReservedTags along with every
- * other reserved tag, same as a caller trying to forge one.
+ * into recall; and a real hold the exported row already carried (quarantine:<recognized reason>,
+ * honored unconditionally -- isHeld/heldReason's own simplified rule, no status:draft pairing
+ * required) was stripped by stripNewReservedTags along with every other reserved tag, same as a
+ * caller trying to forge one. A held import is written with holdStatements (the same real hold
+ * version captureEntry and mirror.ts write), not a bare tag stamp, so Release via undo works on
+ * it -- a bare tag stamp has no version chain for revertEntry to walk.
  *
- * B3: an imported id that collides with a purged row's freed id took a fresh one (boundedEntryId
- * only rewrites an over-length id, not a collision -- loadExistingIds' own CASE WHEN in
- * ENTRY_INSERT_SQL_TEMPLATE mints the fresh id at INSERT time), but the purged row's own
- * entry_events were left behind under that same id, orphaned onto the new row's history.
+ * B3: entry_events is a permanent audit trail (unlike entry_versions, which a purge itself
+ * deletes), so a purged row's events outlive it forever under its old id. The original B3 fix
+ * deleted them to make room for a reused id; the director's own review called that out as
+ * destroying a permanent record. An id with any event history at all is never reused for a new
+ * row now -- it mints a fresh one instead, the same as an over-length id already does.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
@@ -17,9 +22,16 @@ import { importExportPayload } from "../../src/entries/import";
 import type { Env } from "../../src/env";
 import { makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import { ensureTenantBootstrap } from "../../src/lib/tenancy";
+import { resolveIdentityByUserId, type Identity } from "../../src/lib/identity";
+import { revertEntry } from "../../src/memory/undo";
+import { isHeld } from "../../src/quarantine/tags";
+import { DEFAULTS } from "../../src/config";
 
 let sqlite: SqliteD1;
 let env: Env;
+let owner: Identity;
+let ownerWorkspaceId: string;
 
 beforeEach(async () => {
   resetDatabaseInit();
@@ -30,6 +42,9 @@ beforeEach(async () => {
     VECTORIZE: makeVectorizeMock(),
   });
   await initializeDatabase(env);
+  const roots = await ensureTenantBootstrap(env);
+  owner = (await resolveIdentityByUserId(env, roots.ownerUserId))!;
+  ownerWorkspaceId = roots.ownerPersonalWorkspaceId;
 });
 afterEach(() => sqlite.close());
 
@@ -48,14 +63,29 @@ describe("B1: import scores every row and keeps a real hold held", () => {
     expect(tags).toContain("work");
   });
 
-  it("does NOT hold a row that merely carries a quarantine:-shaped tag with no status:draft (not a real hold, and not a forgery vector either)", async () => {
+  it("holds a row whose recognized reason tag has no accompanying status:draft, unconditionally (director follow-up)", async () => {
+    // Simplified rule (director follow-up after a cloud re-review): a recognized reason tag is
+    // never coincidental, so it is honored whatever else the row carries -- no status:draft
+    // pairing required. This also matches isHeld/heldReason's own simplified rule (item 1).
     const summary = await importExportPayload(env, {
-      entries: [{ id: "not-held-1", content: "An ordinary note.", tags: ["quarantine:instruction", "work"] }],
+      entries: [{ id: "held-2", content: "A held note without a status tag in the export.", tags: ["quarantine:instruction", "work"] }],
+    });
+    expect(summary.imported).toBe(1);
+    const row = await entryRow("held-2");
+    const tags = JSON.parse(row!.tags);
+    expect(tags).toContain("quarantine:instruction");
+    expect(tags).toContain("status:draft");
+    expect(tags).toContain("work");
+  });
+
+  it("does not hold a 3.7 tag that merely shares the quarantine: prefix but isn't a recognized reason", async () => {
+    const summary = await importExportPayload(env, {
+      entries: [{ id: "not-held-1", content: "An ordinary note.", tags: ["quarantine:2020", "work"] }],
     });
     expect(summary.imported).toBe(1);
     const row = await entryRow("not-held-1");
     const tags = JSON.parse(row!.tags);
-    expect(tags).not.toContain("quarantine:instruction");
+    expect(tags).toContain("quarantine:2020");
     expect(tags).toContain("work");
   });
 
@@ -74,12 +104,66 @@ describe("B1: import scores every row and keeps a real hold held", () => {
     expect(tags.some((t: string) => t.startsWith("quarantine:"))).toBe(true);
     expect(tags).toContain("status:draft");
   });
+
+  it("holds an oversize row too_long, with a real hold version -- the same holdStatements path captureEntry uses, not a bare tag stamp (director follow-up MAJOR)", async () => {
+    const summary = await importExportPayload(env, {
+      entries: [{ id: "too-big", content: "a".repeat(131_073), tags: [] }],
+    });
+    expect(summary.imported).toBe(1);
+    const row = await entryRow("too-big");
+    const tags = JSON.parse(row!.tags);
+    expect(tags).toContain("quarantine:too_long");
+    expect(tags).toContain("status:draft");
+
+    // A real hold version exists (what a bare tag stamp never wrote), so undoGroup's own
+    // resolveHeldGroup -> revertEntry chain (Release) has a chain to walk.
+    const version = await (sqlite.db as any).prepare(
+      `SELECT reason, meta FROM entry_versions WHERE entry_id = 'too-big' ORDER BY seq DESC LIMIT 1`,
+    ).first() as { reason: string; meta: string } | null;
+    expect(version?.reason).toBe("status");
+    expect(JSON.parse(version!.meta).hold?.reasons).toContain("too_long");
+  });
+
+  it("a held row imported from a 3.7 or 4.0 export can be released with undo (director follow-up MAJOR)", async () => {
+    const summary = await importExportPayload(
+      env,
+      { entries: [{ id: "held-release", content: "A held note from an export.", tags: ["quarantine:instruction", "status:draft", "work"] }] },
+      { writeCtx: { workspaceId: ownerWorkspaceId, actorId: owner.userId } },
+    );
+    expect(summary.imported).toBe(1);
+    const before = await entryRow("held-release");
+    expect(isHeld(JSON.parse(before!.tags))).toBe(true);
+
+    const released = await revertEntry(env, owner, "held-release", { actorId: owner.userId, channel: "mcp" }, DEFAULTS, undefined, ownerWorkspaceId);
+    expect(released.status).toBe("released");
+
+    const after = await entryRow("held-release");
+    const afterTags = JSON.parse(after!.tags);
+    expect(isHeld(afterTags)).toBe(false);
+    expect(afterTags).toContain("work");
+  });
+
+  it("export followed by import keeps a held row held, whatever its status tag (director follow-up MAJOR)", async () => {
+    // Round-trips a row exported already held (status:canonical, since a release clears
+    // status:draft too -- see releaseHeldAfterEdit) with a recognized reason tag surviving, the
+    // shape a real 3.7 or 4.0 export of an as-yet-unreleased held row carries.
+    const summary = await importExportPayload(
+      env,
+      { entries: [{ id: "round-trip", content: "Exported while still held.", tags: ["quarantine:hidden", "status:canonical", "work"] }] },
+      { writeCtx: { workspaceId: ownerWorkspaceId, actorId: owner.userId } },
+    );
+    expect(summary.imported).toBe(1);
+    const row = await entryRow("round-trip");
+    const tags = JSON.parse(row!.tags);
+    expect(isHeld(tags)).toBe(true);
+    expect(tags).toContain("work");
+  });
 });
 
-describe("B3: an imported id that reuses a purged id's freed slot does not inherit its audit trail", () => {
-  it("clears entry_events left behind under the reused id", async () => {
+describe("B3: an imported id that reuses a purged id's freed slot mints a fresh id instead", () => {
+  it("mints a fresh id, imports under it, and leaves the old id's audit trail untouched (director follow-up)", async () => {
     // A purged row's audit trail, with no live or trashed row under this id -- exactly the state
-    // orphanEventsDelete's own NOT EXISTS guards check for.
+    // loadEventHistoryIds checks for.
     await (sqlite.db as any).prepare(
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
     ).bind("ev1", "reused-id", "old-owner", "created", "{}", 1000).run();
@@ -88,10 +172,19 @@ describe("B3: an imported id that reuses a purged id's freed slot does not inher
       entries: [{ id: "reused-id", content: "A new note that happens to reuse a freed id.", tags: [] }],
     });
     expect(summary.imported).toBe(1);
-    expect(summary.results).toContainEqual({ id: "reused-id", status: "imported" });
+    expect(summary.results).toHaveLength(1);
+    const result = summary.results[0] as { id: string; status: string; original_id?: string };
+    expect(result.status).toBe("imported");
+    expect(result.original_id).toBe("reused-id");
+    expect(result.id).not.toBe("reused-id");
 
+    // The old id was never reused: nothing was inserted under it, and its own audit trail (and the
+    // event this test seeded) is exactly as it was.
+    const underOldId = (await (sqlite.db as any).prepare(`SELECT id FROM entries WHERE id = 'reused-id'`).first());
+    expect(underOldId).toBeNull();
     const events = (await (sqlite.db as any).prepare(`SELECT id FROM entry_events WHERE entry_id = 'reused-id'`).all()).results;
-    expect(events).toEqual([]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ id: "ev1" });
   });
 
   it("leaves a live row's own entry_events alone", async () => {

@@ -471,6 +471,10 @@ describe("POST /import", () => {
     // upgrade (the note existed, and now does not, with no record of it). It is imported instead,
     // forced held too_long -- the same state a too-long note reaches on a fresh 4.0 write.
     it("imports an oversize record held too_long, rather than skipping it and losing it", async () => {
+      // D1Mock does not model holdStatements' own SQL (snapshotStatement's meta JSON), so the held
+      // tags this row ends up with are verified against real SQLite instead, in
+      // import-quarantine-hold.test.ts ("holds an oversize row too_long, with a real hold version
+      // and event"). This test stays on D1Mock for the structural, non-hold assertions below.
       const entries = [
         { id: "ok", content: "a normal memory", created_at: 1000 },
         { id: "too-big", content: "a".repeat(131_073), created_at: 2000 },
@@ -484,10 +488,6 @@ describe("POST /import", () => {
       expect(db.entries.map((e: any) => e.id).sort()).toEqual(["ok", "too-big"]);
       const importedResult = data.results.find((r: any) => r.id === "too-big");
       expect(importedResult).toMatchObject({ id: "too-big", status: "imported" });
-      const stored = db.entries.find((e: any) => e.id === "too-big");
-      const tags = JSON.parse(stored.tags);
-      expect(tags).toContain("quarantine:too_long");
-      expect(tags).toContain("status:draft");
     });
 
     it("accepts a record at exactly the limit", async () => {

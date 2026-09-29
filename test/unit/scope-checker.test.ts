@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (238 queries, 117 exceptions, 36 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (237 queries, 116 exceptions, 36 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1522,7 +1522,11 @@ describe("the checker over the real source tree", () => {
     // the version DELETE, the edges DELETE and the entries DELETE on the identical (id, workspace)
     // guard `retractionHook` already builds -- referencedEntryGuardSql's own EXISTS fragment is
     // the new query, scope-checked (assembled here in JS from meta.workspacePairs).
-    ).toEqual({ queries: 238, exempt: 117, checked: 36, outerJoin: 1 });
+    // MOVED (director follow-up, T-0102 MINOR): orphanEventsDelete's own fix was itself wrong
+    // (deleting a permanent audit trail); it is gone, replaced by loadEventHistoryIds
+    // (src/entries/import.ts, scope-exempt by id, same shape) -- net -1 query, -1 exception
+    // against the total just above (238/117/36 -> 237/116/36).
+    ).toEqual({ queries: 237, exempt: 116, checked: 36, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
