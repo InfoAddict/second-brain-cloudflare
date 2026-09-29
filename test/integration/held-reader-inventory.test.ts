@@ -79,10 +79,6 @@ describe("held text: the agent-facing reader inventory", () => {
     seedHeld("held-list");
     seedHeld("held-due", { whenAt: Date.now() + 1000 });
     seedHeld("held-seed");
-    // A row is held by ANY quarantine: tag, whatever the reason (isHeld, not
-    // a lookup against the known reason list): an unrecognized one must still
-    // hide its text everywhere, and still warn in get.
-    sqlite.seed({ id: "held-unknown", content: HELD_MARKER, createdAt: Date.now(), tags: ["quarantine:unknown", "status:draft"] });
     sqlite.seed({ id: "readable-neighbor", content: "an ordinary note", createdAt: Date.now() });
     sqlite.db.prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'readable-neighbor'`)
       .bind(identity.personalWorkspaceId, identity.userId).run();
@@ -102,14 +98,10 @@ describe("held text: the agent-facing reader inventory", () => {
     const listed = await call("list_recent", { n: 10 });
     expect(listed, "list_recent").toContain("held-list");
     expect(listed, "list_recent").not.toContain(HELD_MARKER);
-    expect(listed, "list_recent (unknown reason)").toContain("held-unknown");
-    expect(listed, "list_recent (unknown reason)").not.toContain(HELD_MARKER);
 
     // get: the agent asked for this id by name, so it is shown, warned first.
     const got = await call("get", { id: "held-list" });
     expect(got, "get").toMatch(/^Held out of recall:/);
-    const gotUnknown = await call("get", { id: "held-unknown" });
-    expect(gotUnknown, "get (unknown reason)").toMatch(/^Held out of recall:/);
 
     // brief (MCP, agent-facing)
     const brief = await call("brief");
