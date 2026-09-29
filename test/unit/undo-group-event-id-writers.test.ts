@@ -11,16 +11,28 @@
  * GROUP_FAMILIES can classify into a group, and that actually reaches classifyFromRows (not
  * "held" or "trash", each resolved a different way, live-state-only, that never carries a stale
  * classification to revert), has a writer file that stamps event_id somewhere in it.
+ *
+ * Round 5 re-review NIT: the family list is derived from GROUP_FAMILIES itself now, not a second,
+ * hand-maintained copy of it -- a family added there and never given here in FAMILY_WRITERS fails
+ * this file's own first test instead of silently going unchecked.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { GROUP_FAMILIES, type ChangeFamily } from "../../src/brief/changes";
 
 const ROOT = join(import.meta.dirname, "../..");
 
-/** Every ChangeFamily that resolveVersionGroup (src/memory/undo.ts) -- not resolveHeldGroup or
- * resolveTrashGroup -- can be asked to revert, mapped to the file(s) whose writer must stamp
- * meta.event_id for that family's own group to ever be revertible. */
+/** undoGroup's own dispatch (src/memory/undo.ts): these two families are resolved a different
+ * way entirely -- resolveHeldGroup and resolveTrashGroup, both live-state-only (a fresh read of
+ * "is this still held" / "is this still in the trash" right before acting), never a stale
+ * classification to revert. Every other family in GROUP_FAMILIES reaches classifyFromRows and so
+ * needs a writer that stamps meta.event_id. */
+const LIVE_STATE_ONLY_FAMILIES: ReadonlySet<ChangeFamily> = new Set(["held", "trash"]);
+
+/** Every ChangeFamily that resolveVersionGroup (src/memory/undo.ts) can be asked to revert,
+ * mapped to the file(s) whose writer must stamp meta.event_id for that family's own group to
+ * ever be revertible. */
 const FAMILY_WRITERS: Record<string, readonly string[]> = {
   status: ["src/capture/lifecycle.ts"],
   released: ["src/memory/undo.ts"],
@@ -32,19 +44,18 @@ const FAMILY_WRITERS: Record<string, readonly string[]> = {
 const EVENT_ID_STAMP = /event_id:\s*eventId|metaFor\(eventId\)/;
 
 describe("every group-able family has a writer that stamps meta.event_id", () => {
-  it("covers every family resolveVersionGroup can classify (a stale list here is its own bug)", () => {
-    // brief/changes.ts's own resolveVersionGroup dispatch: undoGroup routes "held" to
-    // resolveHeldGroup and "trash" to resolveTrashGroup: only these five ever reach
-    // classifyFromRows, and only classifyFromRows needs any of this.
-    expect(Object.keys(FAMILY_WRITERS).sort()).toEqual(
-      ["canonical_edit", "capsule_changed", "released", "revert", "status"].sort(),
-    );
+  const revertible = GROUP_FAMILIES.filter((f) => !LIVE_STATE_ONLY_FAMILIES.has(f));
+
+  it("FAMILY_WRITERS covers exactly the families GROUP_FAMILIES can classify into a group, minus the live-state-only ones (a stale list here is its own bug)", () => {
+    expect(Object.keys(FAMILY_WRITERS).sort()).toEqual([...revertible].sort());
   });
 
-  for (const [family, files] of Object.entries(FAMILY_WRITERS)) {
+  for (const family of revertible) {
     it(`"${family}" has a writer that stamps meta.event_id`, () => {
+      const files = FAMILY_WRITERS[family];
+      expect(files, `GROUP_FAMILIES names "${family}" but FAMILY_WRITERS does not`).toBeDefined();
       const hit = files.some((file) => EVENT_ID_STAMP.test(readFileSync(join(ROOT, file), "utf8")));
-      expect(hit, `none of ${files.join(", ")} stamps event_id`).toBe(true);
+      expect(hit, `none of ${(files ?? []).join(", ")} stamps event_id`).toBe(true);
     });
   }
 });

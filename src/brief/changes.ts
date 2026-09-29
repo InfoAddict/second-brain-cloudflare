@@ -348,7 +348,10 @@ export const UNDO_GROUP_PAGE = 5;
 
 export interface DecodedGroup { family: ChangeFamily; actorId: string; client: string | null; start: number; end: number }
 
-const GROUP_FAMILIES: readonly ChangeFamily[] = ["held", "released", "canonical_edit", "capsule_changed", "status", "trash", "revert"];
+// Exported (round 5 re-review NIT): the event-id-writer structural test
+// (test/unit/undo-group-event-id-writers.test.ts) derives its own family list from this one,
+// rather than keeping a second hand-maintained copy that could drift from it silently.
+export const GROUP_FAMILIES: readonly ChangeFamily[] = ["held", "released", "canonical_edit", "capsule_changed", "status", "trash", "revert"];
 
 function fromBase64Url(key: string): string {
   return atob(key.replace(/-/g, "+").replace(/_/g, "/"));
