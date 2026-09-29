@@ -572,7 +572,11 @@ export async function cleanupMemberData(
   const removedEntries = count?.entries ?? 0;
   // A final batch that would not fit the night's budget waits for a night when nothing else wrote,
   // unless it is the only thing left to do (the 3.7 route paid this cost at click time).
-  const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0);
+  // Round 5 re-review MINOR: +3 per entries row and +3 per trashed row for their own life-end
+  // marker INSERT -- roughly the same per-row weight (3) the trashed-row term already used for its
+  // own entries_trash DELETE, since an entry_events insert costs about the same as one of those.
+  const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0)
+    + 3 * removedEntries + 3 * (count?.trashed ?? 0);
   if (opts.rowsLeft !== undefined && estimate > left() && !opts.allowOversize) {
     return { done: false, removedEntries: 0, vectorIds: [], ownedVectors: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten, blockedByBudget: true };
   }

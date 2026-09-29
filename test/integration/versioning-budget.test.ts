@@ -351,6 +351,22 @@ describe("member removal: cleanupMemberData", () => {
     expect(t.sqlite.issued).toHaveLength(6);
     expect(t.sqlite.issued.filter((s) => s === "BATCH")).toHaveLength(1);
   });
+
+  it("the budget estimate counts the life-end marker rows too, ~3 per entries row and ~3 per trashed row (round 5 re-review MINOR)", async () => {
+    t = await makeTrashEnv();
+    const { member } = await createMember(t.env, { name: "Ada" });
+    t.sqlite.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('m0', 'c', '[]', 'api', 1, '[]', ?, ?)`,
+    ).bind(member.personalWorkspaceId, member.userId).run();
+    // 1 entries row, 0 trashed, 0 edges: the old estimate (10 * 1 = 10) missed the marker's own
+    // rows entirely; the new one (10 + 3 for the entry's own marker = 13) accounts for them. A
+    // budget of 11 sits strictly between the two -- too little for the real cost, comfortably
+    // more than the old, blind one.
+    const progress = await cleanupMemberData(t.env, member.userId, member.personalWorkspaceId, { rowsLeft: 11 });
+    expect(progress.blockedByBudget).toBe(true);
+    expect(progress.done).toBe(false);
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'm0'`)).not.toBeNull();
+  });
 });
 
 describe("nightly cron: ordinary and worst night", () => {
