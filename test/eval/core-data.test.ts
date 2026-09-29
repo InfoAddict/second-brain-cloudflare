@@ -362,15 +362,39 @@ describe("core golden data", () => {
     }
   });
 
-  it("passes the query audit on the whole core set, on every corpus size", () => {
-    const specs = (["core-1k", "scale-5k", "scale-20k"] as const).map(id => buildCorpus(id));
-    for (const spec of specs) {
-      const findings = auditQueries({ entries: spec.entries, edges: spec.edges, queries: spec.queries, intent: spec.intent });
-      expect(findings, `${spec.id}: ${JSON.stringify(findings.slice(0, 10), null, 1)}`).toEqual([]);
-    }
-    // a route gap tag must be earned at some discriminating scale
-    expect(staleRouteGaps(specs)).toEqual([]);
+  // Split by corpus size (was one "on every corpus size" test): auditQueries scans every
+  // entry per query, so scale-20k alone accounts for most of the combined ~40s this took
+  // measured alone, and a single 60s budget for all three was tight enough that a busy
+  // machine running many eval lanes at once regularly pushed it past 60-90s and failed the
+  // whole test, one slow scale hiding the two fast ones that had already passed. Each size
+  // now gets its own honest budget (2-3x its measured solo time) and its own pass/fail, so a
+  // slow scale-20k no longer costs the report core-1k and scale-5k's own results too.
+  it("passes the query audit on core-1k", () => {
+    const spec = buildCorpus("core-1k");
+    const findings = auditQueries({ entries: spec.entries, edges: spec.edges, queries: spec.queries, intent: spec.intent });
+    expect(findings, `${spec.id}: ${JSON.stringify(findings.slice(0, 10), null, 1)}`).toEqual([]);
+  }, 30_000);
+
+  it("passes the query audit on scale-5k", () => {
+    const spec = buildCorpus("scale-5k");
+    const findings = auditQueries({ entries: spec.entries, edges: spec.edges, queries: spec.queries, intent: spec.intent });
+    expect(findings, `${spec.id}: ${JSON.stringify(findings.slice(0, 10), null, 1)}`).toEqual([]);
   }, 60_000);
+
+  it("passes the query audit on scale-20k", () => {
+    const spec = buildCorpus("scale-20k");
+    const findings = auditQueries({ entries: spec.entries, edges: spec.edges, queries: spec.queries, intent: spec.intent });
+    expect(findings, `${spec.id}: ${JSON.stringify(findings.slice(0, 10), null, 1)}`).toEqual([]);
+  }, 120_000);
+
+  // Cross-scale, not per-size: a route gap tag only earns its keep by actually discriminating
+  // at some scale, which this checks across all three at once. Cheap either way -- buildCorpus
+  // is memoized for the whole file, so this hits the cache the three tests above already warmed
+  // when the file runs in order, and only pays a fresh build itself when run standalone.
+  it("earns every route gap tag at some discriminating scale", () => {
+    const specs = (["core-1k", "scale-5k", "scale-20k"] as const).map(id => buildCorpus(id));
+    expect(staleRouteGaps(specs)).toEqual([]);
+  }, 120_000);
 
   it("builds three corpora of the requested sizes with the needles unchanged", () => {
     // the haystack is fixed per scale (HAYSTACK_ROWS), so growing the golden set never resizes it
