@@ -357,7 +357,7 @@ export function buildMcpServer(
   clientProps?: McpClientProps,
   bearer?: string | null,
 ): McpServer {
-  const server = new McpServer({ name: "second-brain", version: "1.0.0" });
+  const server = new McpServer({ name: "second-brain", version: "4.0.0" });
 
   // Absent an Identity (direct construction in tests, or a caller that has not
   // been taught tenancy yet) every write below lands in the legacy owner space
