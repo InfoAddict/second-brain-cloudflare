@@ -85,9 +85,12 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("forget on a row with too many 
       expect(result).toEqual({ purged: 1, skipped: 0 });
       expect(await env.DB.prepare(`SELECT id FROM entries WHERE id = 'hub2'`).first()).toBeNull();
       expect(await env.DB.prepare(`SELECT id FROM entries_trash WHERE id = 'hub2'`).first()).toBeNull();
+      // Current contract: a tier-3 row's own life-end marker (trashManyStatements) is its only
+      // "deleted" event -- trashMirroredEntries skips writing a second one for a tier-3 id (round
+      // 4 re-review MINOR), so the marker's own shape is what lands here, not tooLargeForTrash.
       const event = await env.DB.prepare(`SELECT payload FROM entry_events WHERE entry_id = 'hub2' AND event = 'deleted'`).first<{ payload: string }>();
       expect(event).not.toBeNull();
-      expect(JSON.parse(event!.payload)).toMatchObject({ trash: false, tooLargeForTrash: true });
+      expect(JSON.parse(event!.payload)).toMatchObject({ trash: false, reason: "disconnect", channel: "rest" });
     } finally {
       await d1.close();
     }

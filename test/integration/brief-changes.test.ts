@@ -328,6 +328,29 @@ describe("getChanges() (S1)", () => {
     expect(result.items[0].at).toBe(now - 30 * MIN);
   });
 
+  it("truncated reflects the inner 200-row cap, not the count left after the life filter drops old-life noise (round 8 re-review MINOR)", async () => {
+    // 50 old-life events on a reused id, all more recent (by created_at) than every one of the 200
+    // real events below -- they occupy the top 50 slots of the inner ORDER BY created_at DESC
+    // LIMIT 200, displacing 50 real events from the capped read entirely. The purge marker and the
+    // new row land after them by insertion order.
+    for (let i = 0; i < 50; i++) {
+      await insertEvent({ id: `ev-old-${i}`, entryId: "e1", event: "reverted", createdAt: now - i * 1000, payload: { channel: "mcp" } });
+    }
+    await insertEvent({ id: "ev-purged", entryId: "e1", event: "purged", createdAt: now - 40 * HOUR, payload: {} });
+    sqlite.seed({ id: "e1", content: "A different memory now", createdAt: now - 30 * HOUR, tags: [], source: "api" });
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-p', actor_id = 'u1' WHERE id = 'e1'`).run();
+    for (let i = 0; i < 200; i++) {
+      await insertEvent({ id: `ev-new-${i}`, entryId: "e1", event: "reverted", createdAt: now - 24 * HOUR - i * 1000, payload: { channel: "mcp" } });
+    }
+
+    const result = await getChanges(env, identityOf("u1", "ws-p"));
+    // Only 150 of the 200 real events fit the inner cap once the 50 old-life rows take the newest
+    // 50 slots; the life filter then drops those 50, leaving count 150 -- but the read DID hit its
+    // 200-row inner cap, so more real events exist beyond what came back. truncated must say so.
+    expect(result.count).toBe(150);
+    expect(result.truncated).toBe(true);
+  });
+
   // Config threading, after the director's follow-up (T-0089.4.3): the group
   // thresholds and the client-name check now read real config keys rather
   // than local constants, so their values must come from `cfg`, not be

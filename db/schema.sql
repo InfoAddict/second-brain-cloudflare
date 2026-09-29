@@ -200,17 +200,23 @@ CREATE INDEX IF NOT EXISTS idx_entry_events_actor ON entry_events(actor_id, crea
 CREATE INDEX IF NOT EXISTS idx_entry_events_held ON entry_events(created_at DESC) WHERE event = 'held';
 -- Every event reader (brief/changes.ts, memory/history.ts, routes/admin.ts) excludes a reused id's
 -- earlier life by finding the latest "purged" or "deleted"-with-payload.trash-false event for that
--- id: a correlated MAX(rowid) subquery, scoped by entry_id. Without an index matching that WHERE
--- exactly, the subquery scans every one of the SAME entry_id's own events on each evaluation --
--- quadratic in edits per memory, not just in window size (a memory edited 1,000 times cost 2.86M
--- rows read for one brief, budget auditor). This partial index holds only the rare life-end marker
--- rows themselves (an ordinary memory has zero), so the subquery becomes a direct, bounded seek
--- regardless of how many ordinary events that same id has. entry_id alone, not (entry_id, rowid):
--- SQLite rejects rowid/_rowid_ as an explicit indexed column on a table with its own TEXT PRIMARY
--- KEY -- rowid is already the implicit trailing component of every index's leaf entries, so
--- MAX(rowid) WHERE entry_id = ? already gets a direct index seek without naming it (confirmed with
--- EXPLAIN QUERY PLAN).
-CREATE INDEX IF NOT EXISTS idx_entry_events_life_end ON entry_events(entry_id) WHERE event = 'purged' OR (event = 'deleted' AND json_extract(payload, '$.trash') = 0);
+-- id: a correlated MAX(rowid) subquery, scoped by entry_id. Without an index matching that WHERE,
+-- the subquery scans every one of the SAME entry_id's own events on each evaluation -- quadratic in
+-- edits per memory, not just in window size (a memory edited 1,000 times cost 2.86M rows read for
+-- one brief, budget auditor). entry_id alone, not (entry_id, rowid): SQLite rejects rowid/_rowid_
+-- as an explicit indexed column on a table with its own TEXT PRIMARY KEY -- rowid is already the
+-- implicit trailing component of every index's leaf entries, so MAX(rowid) WHERE entry_id = ?
+-- already gets a direct index seek without naming it (confirmed with EXPLAIN QUERY PLAN).
+--
+-- event IN ('purged', 'deleted'), not the readers' own exact trash=0 predicate (round 8 re-review
+-- MINOR, upgrade safety): json_extract throws "malformed JSON" on any row whose payload is not
+-- valid JSON, both when this index is first built (a CREATE INDEX scans every existing row against
+-- its own WHERE) and on every later INSERT of a 'deleted' event -- a failed migration, or a failed
+-- ordinary write, is worse than an index that is merely broader than it needs to be. The readers'
+-- own WHERE still checks trash=0 on top of this, so a share/unshare "deleted" (trash=true) row that
+-- also lands in the index changes nothing about which events they show -- only how many extra rows
+-- the index itself holds, still rare compared to entry_events as a whole.
+CREATE INDEX IF NOT EXISTS idx_entry_events_life_end ON entry_events(entry_id) WHERE event IN ('purged', 'deleted');
 
 -- Immutable administration audit trail. Same contract as entry_events:
 -- application code only ever INSERTs here. Consumed by Phase 4.2.

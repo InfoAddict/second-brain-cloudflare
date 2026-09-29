@@ -551,6 +551,9 @@ export async function handleAdminRoutes(
     // end event for this id belongs to whoever's row is now gone, not the live row just joined in
     // below. The extra AND clause is rowid, not created_at: insertion order is the true order this
     // Worker wrote these two events in, whatever either one's own created_at claims.
+    // round 8 re-review MINOR (upgrade safety): the first conjunct matches
+    // idx_entry_events_life_end's own WHERE syntactically, no json_extract -- see
+    // src/brief/changes.ts's lifeFilter for the full reasoning and EXPLAIN QUERY PLAN confirmation.
     const { results } = await env.DB.prepare(
       `SELECT 'admin' AS kind, ae.id AS event_id, ae.event AS event, ae.actor_id AS actor_id,
               ae.target_user_id AS subject_id, '' AS entry_id, NULL AS title,
@@ -564,7 +567,7 @@ export async function handleAdminRoutes(
          JOIN entries m ON m.id = ev.entry_id AND m.${scope.clause}
         WHERE ev.event IN ('shared', 'unshared', 'insight_confirmed', 'insight_dismissed')
           AND ev.rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = ev.entry_id
-                AND (g.event = 'purged' OR (g.event = 'deleted' AND json_extract(g.payload, '$.trash') = 0))), 0)
+                AND g.event IN ('purged', 'deleted') AND (g.event = 'purged' OR json_extract(g.payload, '$.trash') = 0)), 0)
        ORDER BY created_at DESC, event_id DESC
        LIMIT ? OFFSET ?`,
     ).bind(...scope.bindings, limit, offset).all();

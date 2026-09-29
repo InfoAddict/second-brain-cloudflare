@@ -129,7 +129,9 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // MOVED (merge of release/v4 1cbc817b into v4/gate-fx2): this lane's own round 3 "event life"
   // filter and FX3's own member-removal vector-delete cap are independently-tracked deltas from
   // the same base; recomputed against the real scanner output on the merged tree, not hand-combined.
-  "src/routes/admin.ts": [634, 647, 659, 684, 757, 782, 831, 880, 885, 1024, 1031, 1148, 1154, 1483, 1574, 1604, 1720],
+  // MOVED +3 (round 8 re-review MINOR, upgrade safety): a comment above admin.ts's own life filter
+  // grew by 3 lines.
+  "src/routes/admin.ts": [637, 650, 662, 687, 760, 785, 834, 883, 888, 1027, 1034, 1151, 1157, 1486, 1577, 1607, 1723],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };

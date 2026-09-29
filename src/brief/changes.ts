@@ -310,7 +310,7 @@ const RAW_EVENT_SCAN_LIMIT = 1000;
 async function changeEventRows(
   env: Env, identity: Identity, since: number, until: number, order: "ASC" | "DESC",
   layer?: "personal" | "company", teamId?: string,
-): Promise<{ rows: RawRow[]; rawCapped: boolean }> {
+): Promise<{ rows: RawRow[]; rawCapped: boolean; innerCapped: boolean }> {
   const workspaces = readScopeWorkspaces(identity, { layer, teamId });
   const workspacesJson = JSON.stringify(workspaces);
   const baseFilter = `created_at > ?1 AND created_at <= ?2
@@ -325,8 +325,18 @@ async function changeEventRows(
   // and the scope join have already cut that set down to at most a few hundred, and it is dropped
   // from the count probe entirely (an approximate "at least this many" count, same as before this
   // filter existed, never promised exact).
+  //
+  // round 8 re-review MINOR (upgrade safety): idx_entry_events_life_end's own predicate is
+  // `event IN ('purged', 'deleted')`, no json_extract at all (a CREATE INDEX or an ordinary INSERT
+  // must never throw on a row whose payload happens not to be valid JSON). `g.event IN ('purged',
+  // 'deleted') AND (g.event = 'purged' OR json_extract(...) = 0)` is the same condition as
+  // `g.event = 'purged' OR (g.event = 'deleted' AND json_extract(...) = 0)` (distributing the OR
+  // over the AND), but written so its first conjunct is syntactically identical to the index's own
+  // WHERE -- SQLite's partial-index matching does not reliably prove the two are equivalent from
+  // the original OR/AND-nested form alone (confirmed with EXPLAIN QUERY PLAN: the original form
+  // fell back to a full index scan here and a bare table scan in admin.ts).
   const lifeFilter = `e.event_rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = e.entry_id
-             AND (g.event = 'purged' OR (g.event = 'deleted' AND json_extract(g.payload, '$.trash') = 0))), 0)`;
+             AND g.event IN ('purged', 'deleted') AND (g.event = 'purged' OR json_extract(g.payload, '$.trash') = 0)), 0)`;
   // R22 (budget auditor MAJOR, on top of T-0102 finding 7): the workspace scope is checked per
   // event row via a JOIN, not by matching entry_id against a subquery over the reader's WHOLE id
   // list -- the earlier `entry_id IN (SELECT id FROM entries WHERE workspace_id IN (...) UNION
@@ -412,22 +422,31 @@ async function changeEventRows(
     // (still up to ~3,000-row) union, not once per row actually surviving to the LIMIT 200 output.
     env.DB.prepare(
       `SELECT * FROM (
-         SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
-                e.author_id, e.entry_workspace_id, e.source, e.preview, e.tags_json, e.event_rowid
-         FROM (${scopedEvents}) e
-         WHERE e.entry_workspace_id IN (SELECT value FROM json_each(?3))
-           AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
-           AND (e.actor_id = ?4 OR e.author_id = ?4 OR e.event = 'held')
-           AND (e.live_id IS NOT NULL OR ${trashVisible})
-         ORDER BY e.created_at ${order}
-         LIMIT 200
+         SELECT *, COUNT(*) OVER () AS inner_count FROM (
+           SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+                  e.author_id, e.entry_workspace_id, e.source, e.preview, e.tags_json, e.event_rowid
+           FROM (${scopedEvents}) e
+           WHERE e.entry_workspace_id IN (SELECT value FROM json_each(?3))
+             AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
+             AND (e.actor_id = ?4 OR e.author_id = ?4 OR e.event = 'held')
+             AND (e.live_id IS NOT NULL OR ${trashVisible})
+           ORDER BY e.created_at ${order}
+           LIMIT 200
+         ) e
        ) e
        WHERE ${lifeFilter}
        ORDER BY e.created_at ${order}`,
     ).bind(since, until, workspacesJson, identity.userId, ...trashBindings),
   ]);
   const rawCount = ((countResult.results as { raw_count: number }[] | undefined)?.[0]?.raw_count) ?? 0;
-  return { rows: (mainResult.results ?? []) as unknown as RawRow[], rawCapped: rawCount > RAW_EVENT_SCAN_LIMIT };
+  const rows = (mainResult.results ?? []) as unknown as (RawRow & { inner_count: number })[];
+  // round 8 re-review MINOR: inner_count is computed over the inner, pre-lifeFilter 200-row cap
+  // (a window function evaluated before the outer WHERE strips old-life rows), so a surviving row
+  // still carries the READ's own true size even after the filter drops some of them -- unlike
+  // results.length, which only counts what's left, and would silently read "not truncated" if the
+  // life filter's own noise happened to be what got cut off the true 200-row cap.
+  const innerCount = rows[0]?.inner_count ?? rows.length;
+  return { rows, innerCapped: innerCount === READ_LIMIT, rawCapped: rawCount > RAW_EVENT_SCAN_LIMIT };
 }
 
 /**
@@ -445,7 +464,7 @@ export async function getChanges(
   const cfg = config ?? await resolveConfig(env);
   const now = Date.now();
   const since = now - windowHours * 60 * 60 * 1000;
-  const { rows: results, rawCapped } = await changeEventRows(env, identity, since, now, "DESC", layer, teamId);
+  const { rows: results, rawCapped, innerCapped } = await changeEventRows(env, identity, since, now, "DESC", layer, teamId);
 
   const classified = results.map(row => classify(row, identity, cfg)).filter((c): c is Classified => c !== null);
   const held = classified.filter(c => c.family === "held").length;
@@ -454,9 +473,12 @@ export async function getChanges(
     windowHours,
     count: classified.length,
     held,
-    // Honest either way (R21 review): the filtered read hit its own 200-row output cap, or the
-    // raw pre-filter scan hit RAW_EVENT_SCAN_LIMIT before it could see the whole window.
-    truncated: results.length === READ_LIMIT || rawCapped,
+    // Honest either way (R21 review): the read hit its own 200-row inner cap (innerCapped, round 8
+    // re-review MINOR: taken from the inner, pre-lifeFilter row count, not results.length -- the
+    // life filter can drop some of those 200 rows as another id's earlier life, which must not
+    // read as "the window fit entirely"), or the raw pre-filter scan hit RAW_EVENT_SCAN_LIMIT
+    // before it could see the whole window.
+    truncated: innerCapped || rawCapped,
     items: group(classified, cfg).slice(0, OUTPUT_LIMIT),
   };
 }

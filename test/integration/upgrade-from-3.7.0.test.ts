@@ -104,6 +104,25 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     expect(setCount).toBe(25);
   });
 
+  it("an upgrade with a non-JSON entry_events payload succeeds (round 8 re-review MINOR, upgrade safety)", async () => {
+    // A 3.7.0 brain predates entry_events.payload's own JSON convention on some rows; a CREATE
+    // INDEX whose WHERE calls json_extract would throw "malformed JSON" evaluating this row and
+    // fail the whole migration. idx_entry_events_life_end's own predicate checks only `event`.
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'a memory', '[]', 'api', 1000, '[]')`);
+    d1.db.exec(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES ('ev1', 'e1', '', 'deleted', 'not json at all', 2000)`);
+
+    env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
+    await expect(initializeDatabase(env)).resolves.not.toThrow();
+
+    const idx = await (d1.db as any).prepare(`SELECT name FROM sqlite_master WHERE name = 'idx_entry_events_life_end'`).first();
+    expect(idx).not.toBeNull();
+
+    // A later ordinary insert of a 'deleted' event, still non-JSON, must not throw either.
+    await expect(
+      (d1.db as any).prepare(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES ('ev2', 'e1', '', 'deleted', 'still not json', 3000)`).run(),
+    ).resolves.not.toThrow();
+  });
+
   it("creates idx_entries_ledger and idx_entries_standing on a 3.7.0 upgrade, both empty", async () => {
     // A pre-4.0 brain never wrote either marker tag, so migrating it must not reinterpret
     // anything: both indexes are created and both start empty (T-0089.7.1, T-0089.7.2).

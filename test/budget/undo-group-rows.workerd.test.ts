@@ -23,10 +23,16 @@ const OUT = process.env.UG_OUT;
 const SIZES = (process.env.UG_N ?? "2000,10000").split(",").map(Number);
 const src = resolve(__dirname, "../../src/brief/changes.ts");
 const HAS_GROUP = existsSync(src) && readFileSync(src, "utf8").includes("UNDO_GROUP_PAGE");
-// release/v4's own numbers (no event-life filter at all), the "must not regress past this" floor
-// for changes.rows at N=10000: quiet (no noise, no hot memory), UG_OTHER's noise, and UG_HOT's
-// quadratic-shaped case respectively.
-const CHANGES_ROWS_BUDGET = { quiet: 302, other: 4184, hot: 6003 };
+// Round 8 re-review MINOR: `truncated` must come from the inner, pre-lifeFilter row count, not
+// results.length (a reused id's earlier life could crowd real events out of the 200-row cap
+// without the flag ever saying so). Getting that count costs real rows_read on top of release/v4's
+// own numbers (no event-life filter, no inner-count signal at all): a window function over the
+// already-capped, already-ORDER-BY'd 200-row set, measured at N=10000 with ~5% margin -- quiet
+// 453 (was 302), UG_OTHER's noise 4,335 (was 4,184), UG_HOT's quadratic-shaped case 6,604 (was
+// 6,003). A duplicate, non-windowed COUNT(*) statement in the same batch was tried and measured
+// far worse (11,005 for the hot case: it re-reads the whole 3-way UNION/JOIN a second time,
+// roughly doubling cost, instead of counting over rows already materialized once).
+const CHANGES_ROWS_BUDGET = { quiet: 500, other: 4500, hot: 6700 };
 
 function metered(db: any, t: { stmts: number; rows: number }) {
   const count = (r: any) => { t.stmts++; t.rows += r?.meta?.rows_read ?? 0; return r; };
