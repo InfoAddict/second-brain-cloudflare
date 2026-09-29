@@ -75,10 +75,10 @@ Search now finds the hard things: exact names, ticket numbers, versions, and phr
 
 | Tool | What it does |
 | --- | --- |
-| `remember` | Store ideas, decisions, preferences, and project context |
+| `remember` | Store ideas, decisions, preferences, and project context; optionally when a fact became or stopped being true |
 | `append` | Add a timestamped update to an existing memory |
-| `update` | Replace an existing memory |
-| `recall` | Find memories by meaning rather than exact wording |
+| `update` | Replace an existing memory; optionally set when it stopped being true |
+| `recall` | Find memories by meaning rather than exact wording; optionally what was true as of a past date |
 | `brief` | Show due items, open commitments, stale memories, and pending insights |
 | `resolve` | Settle one tracked task, date, insight, or stale fact |
 | `digest` | Read the latest existing automatic summary for a project or tag |
@@ -95,6 +95,8 @@ Search now finds the hard things: exact names, ticket numbers, versions, and phr
 | `unlink` | Remove a relationship between two memories |
 | `connections` | List the memories connected to a memory |
 | `share` | Move a memory between the Personal and Shared layers |
+
+A memory keeps the dates it was true for: recall with `as_of` answers what was actually true on a past date, and a fact that a newer one replaces is kept as history instead of being marked wrong.
 
 On a team brain, memory tools accept a `workspace` of `personal` or `company` when you want to choose a layer explicitly. `company` is the wire value for the Shared team layer. Without `workspace`, captures use the member and team defaults, while recall searches everything that person is allowed to see.
 

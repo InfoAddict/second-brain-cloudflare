@@ -536,6 +536,19 @@ describe("README's memory-tools table matches the server", () => {
     expect(documented.length).toBeGreaterThan(0);
     expect([...documented].sort()).toEqual([...EXPECTED_TOOLS].sort());
   });
+
+  // Track 2 D4 (T-0089.6.10, spec 14 7.5): the recall, remember and update rows name
+  // as_of/validity, and a line under the table explains what that buys the reader.
+  it("names as_of on recall and validity on remember and update, with a line on time under the table", () => {
+    const readme = readFileSync(README, "utf8");
+    const table = readme.slice(readme.indexOf("### Memory tools"), readme.indexOf("### Projects"));
+    const rowFor = (tool: string) => table.match(new RegExp(`^\\| \`${tool}\`.*$`, "m"))?.[0] ?? "";
+
+    expect(rowFor("recall")).toMatch(/as_of|past date/i);
+    expect(rowFor("remember")).toMatch(/became.*true|valid_from/i);
+    expect(rowFor("update")).toMatch(/stopped being true|valid_until/i);
+    expect(table).toMatch(/as_of/);
+  });
 });
 
 /**

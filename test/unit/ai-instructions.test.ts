@@ -143,3 +143,40 @@ describe("AI instruction files — team workspace coverage", () => {
     }
   });
 });
+
+// Track 2 D4 (T-0089.6.10, spec 14 7.5): time, as-of and retraction explained in plain words,
+// plus D5.3 (cite memory ids) and the held-memory rule against asking for an unread release.
+describe("AI instruction files — time, validity, and D5.3/held-memory rules", () => {
+  for (const label of [...FULL_PROVIDERS, "CHATGPT"] as const) {
+    describe(label, () => {
+      const text = ALL_FILES[label];
+
+      it("explains as_of, valid_from, valid_until and later-retracted results", () => {
+        expect(text).toMatch(/as_of/);
+        expect(text).toMatch(/valid_from/);
+        expect(text).toMatch(/valid_until/);
+        expect(text).toMatch(/later retracted/i);
+      });
+
+      it("tells the agent to cite the memory id it relied on", () => {
+        expect(text).toMatch(/name its id/i);
+      });
+
+      // T-0089.5.3 (05-proof.md Part C): the recall receipt, distinct from a memory id -
+      // it cites the search itself, not one result.
+      it("tells the agent it can cite the recall receipt", () => {
+        expect(text).toMatch(/receipt/i);
+      });
+
+      it("never asks the user to release a held memory they have not read", () => {
+        expect(text).toMatch(/(read what it says|read it themselves)/i);
+      });
+
+      it("documents standing instructions and decisions", () => {
+        expect(text).toMatch(/standing/i);
+        expect(text).toMatch(/decision/i);
+        expect(text).toMatch(/stop_standing/);
+      });
+    });
+  }
+});
