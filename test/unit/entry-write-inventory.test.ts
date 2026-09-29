@@ -96,6 +96,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   // releaseHeldAfterEdit/revertEntry each mint an event_id above their own snapshot call, to link
   // that version to the audit event it lands with moments later (see src/memory/undo.ts's
   // classifyFromRows). Recomputed against the real scanner output.
+  // MOVED +8 (round 3 re-review, second pass, MAJOR "event life"): the compliance feed's own
+  // reused-id filter (rowid past the latest purge) added lines above this site too.
   // MOVED (merge of release/v4 5a98da4a into v4/t7-d, lane W merged, T-0089.4.2/T-0089.7.1): lane
   // W's own class E/A/R20 deltas and lane D's Task 12 deferred call sites (captureEntry's merge
   // gate fix, the supersede-close touch, updateEntryContent and appendToEntry) are independently-
@@ -146,7 +148,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string; standing: stri
   { file: 'src/memory/validity.ts', line: 644, kind: 'snapshot', standing: 'exempt: the propagate UPDATE moves a REPLACED row\'s own valid_until; a standing row is never itself in a supersede chain, and if it were, the primary row\'s own touch above plus the 24h revalidation (2.4) covers it' },
   { file: 'src/quarantine/hold.ts', line: 121, kind: 'snapshot', standing: 'exempt: Track 4\'s own quarantine hold/release wiring (spec 15 2.13, Task 16), not lane D' },
   { file: 'src/recall/search.ts', line: 1425, kind: 'exempt', standing: 'exempt: recall_count bookkeeping only, no tags column' },
-  { file: 'src/routes/admin.ts', line: 1570, kind: 'exempt', standing: 'exempt: same hygiene classify write as capture/classify.ts:78 (withKind/withStatus only), never touches standing:active' },
+  { file: 'src/routes/admin.ts', line: 1578, kind: 'exempt', standing: 'exempt: same hygiene classify write as capture/classify.ts:78 (withKind/withStatus only), never touches standing:active' },
   { file: 'src/staleness/pass.ts', line: 91, kind: 'exempt', standing: 'exempt: a staleness marker addition, never removes standing:active, and hydration re-checks validity independently (2.4/2.6) regardless' },
   { file: 'src/staleness/pass.ts', line: 101, kind: 'exempt', standing: 'exempt: staleness_checked_at only, no tags column' },
   { file: 'src/vectorize/pending.ts', line: 168, kind: 'exempt', standing: 'exempt: vector_ids only, no tags column' },
@@ -164,7 +166,7 @@ const HYGIENE_EXEMPT = new Set([
   // MOVED (merge of release/v4 c870e5ac into v4/t34-w, T-0089.4.2): recomputed against the real
   // scanner output on the merged tree.
   "src/when/pass.ts:373",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1570", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1578", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   // MOVED 540/601 -> 589/650 -> 591/652 -> 598/659 -> 600/661 -> 604/665 (T-0089.4.2 Lane W, then

@@ -530,6 +530,12 @@ export async function handleAdminRoutes(
     // total order, arbitrary within a tie, but the SAME arbitrary order for
     // every page of the same data, which is the whole requirement. It is
     // projected only to be sorted on; the response does not carry it.
+    //
+    // Round 3 re-review MAJOR: a reused id's earlier life always ends with a "purged" event or a
+    // "deleted" event with payload.trash false (tier 3) -- everything at or before the LATEST such
+    // end event for this id belongs to whoever's row is now gone, not the live row just joined in
+    // below. The extra AND clause is rowid, not created_at: insertion order is the true order this
+    // Worker wrote these two events in, whatever either one's own created_at claims.
     const { results } = await env.DB.prepare(
       `SELECT 'admin' AS kind, ae.id AS event_id, ae.event AS event, ae.actor_id AS actor_id,
               ae.target_user_id AS subject_id, '' AS entry_id, NULL AS title,
@@ -542,6 +548,8 @@ export async function handleAdminRoutes(
          FROM entry_events ev
          JOIN entries m ON m.id = ev.entry_id AND m.${scope.clause}
         WHERE ev.event IN ('shared', 'unshared', 'insight_confirmed', 'insight_dismissed')
+          AND ev.rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = ev.entry_id
+                AND (g.event = 'purged' OR (g.event = 'deleted' AND json_extract(g.payload, '$.trash') = 0))), 0)
        ORDER BY created_at DESC, event_id DESC
        LIMIT ? OFFSET ?`,
     ).bind(...scope.bindings, limit, offset).all();

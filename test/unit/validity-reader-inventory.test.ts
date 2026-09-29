@@ -125,7 +125,9 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // held-row exclusion.
   // MOVED (T-0089.2.3): GET /stale's own `reason` computation (spec 14 5.9) added lines above it
   // and everything after; recomputed against the real scanner output.
-  "src/routes/admin.ts": [611, 624, 636, 661, 734, 759, 808, 857, 862, 1001, 1008, 1125, 1131, 1460, 1551, 1581, 1697],
+  // MOVED +8 (round 3 re-review MAJOR "event life"): the compliance feed's own reused-id filter
+  // (rowid past the latest purge) added lines above every site below it.
+  "src/routes/admin.ts": [619, 632, 644, 669, 742, 767, 816, 865, 870, 1009, 1016, 1133, 1139, 1468, 1559, 1589, 1705],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };

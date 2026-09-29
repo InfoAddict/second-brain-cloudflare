@@ -266,8 +266,16 @@ async function changeEventRows(
   layer?: "personal" | "company", teamId?: string,
 ): Promise<{ rows: RawRow[]; rawCapped: boolean }> {
   const workspaces = readScopeWorkspaces(identity, { layer, teamId });
+  // Round 3 re-review MAJOR (director follow-up: this file belongs to the FX1 lane, 230d0afe,
+  // already merged -- flagging for merge order): a reused id's earlier life always ends with a
+  // `purged` event or a `deleted` event with payload.trash false (tier 3); everything at or before
+  // the LATEST such end event for this id belongs to whoever's row is now gone, never the live or
+  // trashed row the query below joins against. rowid, not created_at -- insertion order, immune to
+  // an old export's own created_at or one a legacy client set in the future.
   const eventFilter = `created_at > ?1 AND created_at <= ?2
-       AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')`;
+       AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')
+       AND rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = entry_events.entry_id
+             AND (g.event = 'purged' OR (g.event = 'deleted' AND json_extract(g.payload, '$.trash') = 0))), 0)`;
   const [countResult, mainResult] = await env.DB.batch([
     // A cheap, bounded probe: capped at RAW_EVENT_SCAN_LIMIT + 1 so it can say "at least that
     // many raw events exist in the window" without ever reading more than that to say so.
