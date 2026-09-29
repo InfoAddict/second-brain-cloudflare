@@ -13,9 +13,9 @@ import type { Identity } from "../lib/identity";
 import { scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus, type MemoryStatus } from "../memory/status";
-import { buildChain, workspaceReadable, type VersionRow } from "../memory/versions";
+import { buildChain, workspaceReadable, textHeldAt, wasReleasedContent, type VersionRow } from "../memory/versions";
 import { currentValidityAt, EFFECTIVE_FROM } from "../memory/validity";
-import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 import type { RecallMatch, RetractedBelief } from "./types";
 
 /** Beliefs shown under/after actually-true results: at most this many, newest retraction first (spec 14 5.7 item 7). */
@@ -67,23 +67,6 @@ function parseTagsSafe(raw: string): string[] {
   }
 }
 
-/** A `reason: "status"` version whose meta records a hold (5.4): the same structural check
- * undo.ts's/history-view.ts's own `isHoldVersion` make (duplicated here rather than imported --
- * lane ownership, and each caller's own Pick<> keeps this from depending on the others' imports). */
-function isHoldVersion(v: Pick<AsOfVersionRow, "reason" | "meta">): boolean {
-  if (v.reason !== "status") return false;
-  try { return !!(JSON.parse(v.meta || "{}") as Record<string, unknown>).hold; } catch { return false; }
-}
-
-/**
- * Cross-vendor re-review MAJOR (T-0102, on top of 0b970baa): a hold-transition version's OWN tags
- * are the pre-hold (unheld) state -- a hold never changes content, only tags -- so isHeld(tags)
- * alone misses exactly the version whose reconstructed content IS the sensitive text.
- */
-function textHeldAt(v: Pick<AsOfVersionRow, "reason" | "meta" | "tags">): boolean {
-  return isHeld(parseTagsSafe(v.tags)) || isHoldVersion(v);
-}
-
 export interface AtT { content: string; tags: string[]; changedAt: number | null; statusAt: MemoryStatus | null; pruned: boolean; textHidden: boolean; heldAtT: boolean }
 
 /**
@@ -115,12 +98,14 @@ export function resolveAtT(match: RecallMatch, rowsNewestFirst: AsOfVersionRow[]
   const oldestRetired = retired[retired.length - 1];
   const tags = parseTagsSafe(oldestRetired.tags);
   const historicalText = chain.text(oldestRetired.seq);
-  // Cloud re-review NIT (T-0102, on top of 0b970baa): a hold-transition version's text, released
-  // with no edit since, reconstructs to exactly the row's own CURRENT content -- match.content,
-  // already past the outer candidate SQL's NOT_HELD_SQL filter, so already visible, reviewed, and
-  // searchable today. Hiding it here adds no protection (an ordinary, non-as-of recall of the same
-  // row shows the same text plainly); it only confuses with a blank where the text is not a secret.
-  const heldAtT = textHeldAt(oldestRetired) && historicalText !== match.content;
+  // Cloud re-review MAJOR (T-0102, on top of 0b970baa): a version whose text a LATER release (5.6)
+  // vouched for must read as approved at every as-of date, not only ones where it also happens to
+  // match the row's CURRENT content -- a further edit after the release used to flip this same
+  // text from "shown" back to "hidden" depending on which T a caller asked for, which is exactly
+  // backwards (the review moment does not depend on what changed afterward). wasReleasedContent is
+  // the one rule history-view.ts's buildEntryHistoryFromReads and readEntryVersionFromRow (the
+  // history list and get(version)) now share with this function.
+  const heldAtT = textHeldAt(oldestRetired) && !wasReleasedContent(chain, historicalText);
   return {
     content: heldAtT ? "" : historicalText,
     tags,

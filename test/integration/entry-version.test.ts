@@ -122,6 +122,26 @@ describe("readEntryVersion", () => {
     expect(v1.held).toBe(false);
   });
 
+  // Cloud re-review MAJOR (T-0102, on top of 0b970baa): the same wasReleasedContent rule
+  // buildEntryHistory and as-of.ts's resolveAtT use -- get(version) must not redact text a LATER
+  // release vouched for, even after an unrelated edit moved the row on to something else.
+  it("does not redact get(version) for a released version, even after a later, unrelated edit", async () => {
+    await seedRow("e1", "SECRET, will be released", { tags: [] });
+    await edit("e1", "SECRET, will be released", {
+      now: 1000, reason: "status", tags: ["quarantine:instruction", "status:draft"],
+      meta: { hold: { reasons: ["instruction"], score: 1, signals: [] } },
+    });
+    await edit("e1", "SECRET, will be released", { now: 1001, reason: "status", tags: [], meta: { release: { of_seq: 1 } } });
+    await edit("e1", "A totally different later fact.", { now: 1002, reason: "update", tags: [] });
+
+    const config = await resolveConfig(env);
+    const v1 = await readEntryVersion(env, owner, "e1", 1, config);
+    expect(v1.ok).toBe(true);
+    if (!v1.ok) return;
+    expect(v1.content).toBe("SECRET, will be released");
+    expect(v1.held).toBe(false);
+  });
+
   it("no_version for a seq that was never recorded", async () => {
     await seedRow("e2", "v0");
     await edit("e2", "v1", { now: 1000 });

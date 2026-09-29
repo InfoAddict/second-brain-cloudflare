@@ -150,6 +150,34 @@ describe("buildEntryHistory", () => {
     expect(changes[2].before_held).toBe(true);
   });
 
+  // Cloud re-review MAJOR (T-0102, on top of 0b970baa): a version's text a LATER release (5.6)
+  // vouched for must read as approved here, the same as in as-of.ts -- one rule, not two. A
+  // release, followed by an unrelated edit to something else entirely, must not put the released
+  // text back behind a redaction: the review moment (the release) does not depend on what the row
+  // became afterward.
+  it("does not hide a released version's text even after a later, unrelated edit", async () => {
+    await seedRow("e1", "SECRET, will be released", { tags: [] });
+    // held: content unchanged, tags become held (version 1 = SECRET, its own tags unheld pre-hold).
+    await edit("e1", "SECRET, will be released", {
+      now: 1000, reason: "status", tags: ["quarantine:instruction", "status:draft"],
+      meta: { hold: { reasons: ["instruction"], score: 1, signals: [] } },
+    });
+    // released: content unchanged, tags become clean (version 2 = SECRET, its own tags held).
+    await edit("e1", "SECRET, will be released", {
+      now: 1001, reason: "status", tags: [], meta: { release: { of_seq: 1 } },
+    });
+    // an ordinary, unrelated edit AFTER the release.
+    await edit("e1", "A totally different later fact.", { now: 1002, reason: "update", tags: [] });
+
+    const config = await resolveConfig(env);
+    const result = await buildEntryHistory(env, owner, await historyRowFor("e1"), config);
+    const changes = changesOf(result.items).sort((a, b) => a.seq - b.seq);
+    expect(changes[0].before_preview).toBe("SECRET, will be released"); // version 1: released, must show
+    expect(changes[0].before_held).toBe(false);
+    expect(changes[1].before_preview).toBe("SECRET, will be released"); // version 2: the release itself
+    expect(changes[1].before_held).toBe(false);
+  });
+
   it("can_undo only on the newest, can_restore only on older, both false for a non-author teammate except their own newest change", async () => {
     const author = await member("Author");
     const teammate = await member("Teammate");

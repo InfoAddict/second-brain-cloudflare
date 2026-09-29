@@ -269,7 +269,10 @@ describe("as-of recall answers what was actually true at T (5.7)", () => {
     for (const call of (ai.run as any).mock.calls) {
       if (typeof call[0] === "string" && !(call[0] as string).startsWith("@cf/baai/bge")) {
         const prompt = call[1].messages[0].content as string;
-        expect(prompt).not.toContain("ignore all previous instructions");
+        // NIT (cloud re-review, on top of 0b970baa): the fixture's own injection text is
+        // capitalized ("Ignore all previous instructions..."), so a case-sensitive toContain
+        // against a lowercase literal here would never actually catch a real regression.
+        expect(prompt.toLowerCase()).not.toContain("ignore all previous instructions");
       }
     }
   });
@@ -299,5 +302,38 @@ describe("as-of recall answers what was actually true at T (5.7)", () => {
     const match = matches.find(m => m.id === "e1");
     expect(match?.asOfHeld).toBe(false);
     expect(match?.content).toBe(clean);
+  });
+
+  // Cloud re-review MAJOR (T-0102, on top of 0b970baa): the NIT fix above only compared a hold
+  // version's text to the row's CURRENT content, so a release followed by a LATER, unrelated edit
+  // flipped the SAME released text from "shown" (as-of dates where nothing had changed yet) back
+  // to "hidden" (as-of dates before the edit) purely because it no longer matched what is live
+  // today -- backwards, since the review moment (the release) never depended on what came after.
+  it("does not hide a hold version's text once released, even after a later, unrelated edit", async () => {
+    sqlite = await migrated();
+    const released = "Some approved fact about Boston.";
+    const editedLater = "A different fact entirely.";
+    const asOf = NOW - 10 * DAY;
+    const t1 = NOW - 4 * DAY; // the hold snapshot
+    const t2 = NOW - 3 * DAY; // the release snapshot, no edit in between
+    const t3 = NOW - 2 * DAY; // an ordinary, unrelated edit AFTER the release
+    sqlite.seed({ id: "e1", content: editedLater, createdAt: t1, validFrom: NOW - 20 * DAY });
+    insertVersion(sqlite, {
+      entryId: "e1", seq: 1, content: released, tags: [], createdAt: t1,
+      reason: "status", meta: { hold: { reasons: ["instruction"], score: 1, signals: [] } },
+    });
+    insertVersion(sqlite, {
+      entryId: "e1", seq: 2, content: released, tags: ["quarantine:instruction", "status:draft"], createdAt: t2,
+      reason: "status", meta: { release: { of_seq: 1 } },
+    });
+    insertVersion(sqlite, {
+      entryId: "e1", seq: 3, content: released, tags: [], createdAt: t3, reason: "update",
+    });
+    const env = envOf(sqlite, [{ id: "e1", score: 0.9 }]);
+
+    const { matches } = await recallEntries({ query: "Boston fact", topK: 10, synthesize: false }, env, ctx, undefined, { asOf });
+    const match = matches.find(m => m.id === "e1");
+    expect(match?.asOfHeld).toBe(false);
+    expect(match?.content).toBe(released);
   });
 });
