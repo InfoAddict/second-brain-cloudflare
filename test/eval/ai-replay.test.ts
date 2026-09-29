@@ -80,6 +80,29 @@ describe("makeReplayAi", () => {
     expect(second.drainCalls()).toEqual([]); // drained
   });
 
+  it("a batched call over texts recorded one by one hits the cache, in order, with no live call or miss (T-0102, director follow-up)", async () => {
+    // storeEntry now always batchEmbeds (T-0102 F3), so a production embedding call can carry more
+    // than one text in one env.AI.run. The committed golden fixture was recorded one text per row
+    // (every call was single-text before batching existed); a batched call must still read those
+    // same rows, one per text, rather than missing on the batch's own joined-array key.
+    const root = tmp();
+    const dir = cacheOf(root);
+    const live = fakeLive();
+    live.run = vi.fn(async (_model: string, input: { text: string[] }) => ({ data: [[input.text[0].length, 0]] }));
+    const recorder = makeReplayAi({ store: store(root, "c.jsonl"), mode: "record", live: live as never, budget: new NeuronBudget(1000) });
+    await recorder.ai.run(MODEL as never, embedInput("first text") as never);
+    await recorder.ai.run(MODEL as never, embedInput("second text") as never);
+    expect(live.run).toHaveBeenCalledTimes(2); // recorded one text at a time, as production embedMany's pre-batching shape did
+
+    const replay = makeReplayAi({ store: new ReplayStore([join(dir, "c.jsonl")], undefined, { root }), mode: "replay" });
+    const batched = await replay.ai.run(MODEL as never, { text: ["first text", "second text"] } as never) as { data: number[][] };
+    expect(batched.data).toEqual([[10, 0], [11, 0]]); // "first text".length, "second text".length, in order
+    const calls = replay.drainCalls();
+    expect(calls).toHaveLength(2); // one per text, not one for the whole batch
+    expect(calls).toMatchObject([{ kind: "embedding", source: "replay" }, { kind: "embedding", source: "replay" }]);
+    expect(replay.drainCalls()).toEqual([]); // drained
+  });
+
   it("refuses to spend past the neuron budget, before the call", async () => {
     const live = fakeLive();
     const { ai } = makeReplayAi({ store: store(tmp(), "c.jsonl"), mode: "record", live, budget: new NeuronBudget(0.0001) });
