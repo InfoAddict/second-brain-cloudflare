@@ -140,6 +140,15 @@ async function sendRecall(retryQuery) {
         created_at: m.created_at,
         source: m.source,
         workspace: m.workspace || null,
+        // T-0101.6.1: dropped here, makeRecallCard's validity chip and True-since label read
+        // undefined for every result - the six-field validity contract GET /recall already
+        // sends (src/routes/recall.ts) has to actually survive this re-map to reach the card.
+        valid_from: m.valid_from,
+        valid_from_stated: m.valid_from_stated,
+        valid_until: m.valid_until,
+        validity_state: m.validity_state,
+        superseded_by: m.superseded_by,
+        retracted_source: m.retracted_source,
       }))
       const answerBubble = document.createElement('div')
       answerBubble.className = 'ex-a-row'

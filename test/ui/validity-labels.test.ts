@@ -552,6 +552,62 @@ describe("recall cards carry validity chips and a stated-start label", () => {
   });
 });
 
+// End-to-end regression: makeRecallCard reading the right fields is not enough on its own -
+// sendRecall builds its OWN `entries` array from GET /recall's raw response before ever
+// calling makeRecallCard, and a real screenshot caught that re-map silently dropping all six
+// validity fields (valid_from_stated, validity_state, retracted_source, ...), so every real
+// recall card rendered with none of them even though makeRecallCard itself was correct and
+// every unit test above (which calls makeRecallCard directly) kept passing regardless.
+describe("sendRecall's own entry map carries the six validity fields through to the card", () => {
+  function sse(chunks: string[]): ReadableStream {
+    return new ReadableStream({
+      start(c) {
+        for (const chunk of chunks) c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ response: chunk })}\n\n`));
+        c.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        c.close();
+      },
+    });
+  }
+
+  function load(recallBody: unknown) {
+    const ctx = baseCtx();
+    // Not provided by baseCtx's vm context (only fetch mocks needed it before now): the real
+    // stream-reading loop in sendRecall calls `new TextDecoder()` directly.
+    ctx.TextDecoder = TextDecoder;
+    ctx.TextEncoder = TextEncoder;
+    ctx.fetch = async (url: string, init: any) => {
+      ctx.__requests.push({ url, init });
+      if (url.includes("/recall?")) return { ok: true, json: async () => recallBody };
+      if (url.includes("/chat")) return { ok: true, body: sse(["Found it."]) };
+      throw new Error("unexpected fetch " + url);
+    };
+    run(ctx, ["public/utils.js", "public/js/state.js", "public/js/recent.js", "public/js/ui-chat.js", "public/js/recall.js"]);
+    return ctx;
+  }
+
+  it("a real GET /recall response (six-field shape) reaches the card as a stated-start label and a Check chip", async () => {
+    const ctx = load({
+      ok: true,
+      results: [
+        { ...CURRENT_STATED_ENTRY, score: 92, hop: 0 },
+        { ...RETRACTED_SOURCE_ENTRY, score: 40, hop: 0 },
+      ],
+    });
+    await ctx.sendRecall("Austin");
+    // sourcesToggle is a plain makeEl whose innerHTML was set once (a static string, the
+    // button plus the empty wrapper markup) and never re-synced from its real children;
+    // the actual .memory-card elements sendRecall appends live only in the querySelector
+    // stub's own .kids array (this harness's querySelector always returns the SAME cached
+    // stub for a given selector on a given element), so that is what needs inspecting, not
+    // the (unmoving) innerHTML string.
+    const toggle = ctx.__els.get("recall-messages").kids.find((k: any) => k.className === "sources-toggle");
+    const wrapper = toggle.querySelector(".brain-cards-wrapper");
+    const html = wrapper.kids.map((card: any) => card.innerHTML).join("");
+    expect(html).toContain("True since");
+    expect(html).toContain("validity-chip--check");
+  });
+});
+
 describe("stale sheet reason lines", () => {
   function load() {
     const ctx = baseCtx();
