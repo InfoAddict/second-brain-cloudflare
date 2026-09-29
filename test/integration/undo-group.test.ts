@@ -379,6 +379,27 @@ describe("undoGroup() (S3)", () => {
     expect(result!.done).toBe(true);
   });
 
+  it("every page of a 50-member group stays at 40 or fewer statements, not growing page over page (Codex review, T-0102 R23)", async () => {
+    // R23 (auditor, MINOR): E2's fix reclassifies every id from ids[0] on every call (paging is
+    // stateless), so with one classifyMember SELECT per id, each already-"done" member from a
+    // prior page still cost its own SELECT to reclassify -- growing by UNDO_GROUP_PAGE statements
+    // every page, reaching 71 by the group's tenth page against this lane's 40-statement target.
+    const ids = Array.from({ length: 50 }, (_, i) => `e${i}`);
+    await seedStatusBurst(ids, now - HOUR);
+    const group = await discoverGroup();
+    expect(group.count).toBe(50);
+
+    const reverted: string[] = [];
+    for (let page = 1; page <= 10; page++) {
+      sqlite.issued.length = 0;
+      const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+      expect(sqlite.issued.length, `page ${page}`).toBeLessThanOrEqual(40);
+      expect(result!.results).toHaveLength(UNDO_GROUP_PAGE);
+      reverted.push(...result!.results.map(r => r.id));
+    }
+    expect(new Set(reverted).size).toBe(50);
+  });
+
   it("more than UNDO_GROUP_PAGE blocked members ahead of actionable ones does not stall the group forever (Codex review, T-0102 E2)", async () => {
     const ids = Array.from({ length: 12 }, (_, i) => `e${i}`);
     const windowStart = now - HOUR;

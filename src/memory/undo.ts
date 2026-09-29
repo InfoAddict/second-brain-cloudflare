@@ -761,7 +761,7 @@ async function resolveTrashGroup(
 }
 
 interface ChainRow {
-  seq: number; meta: string; reason: string; channel: string; actor_id: string; created_at: number; workspace_id: string;
+  entry_id: string; seq: number; meta: string; reason: string; channel: string; actor_id: string; created_at: number; workspace_id: string;
 }
 
 type MemberVerdict =
@@ -771,40 +771,31 @@ type MemberVerdict =
   | { kind: "not_found" };
 
 /**
- * Whether this one memory is still owed the group's own revert, told from a stable, seq-based
- * cursor rather than a timestamp (reviewer MINOR: an undo landing in the group's own final
- * millisecond used to read as still-eligible on the next page, and paging repeated it instead of
- * advancing). `target_seq` is the "before this version" seq a plain revert always records
- * (metaCandidate above); a later version carrying `reason: "revert"` and that exact target_seq is
- * unambiguous proof this exact group-qualifying change was already undone, whatever time it
- * landed at. Nothing happening after the qualifying version at all (newest === toVersion) is
- * "pending"; anything else that happened since, and is not that proof, is a third party's edit
- * (reviewer MAJOR, R21 follow-up: the qualifying version's own actor must equal the group's own
- * actor, or a same-window edit by someone else using the same client label could be reverted).
+ * Whether one memory is still owed the group's own revert, told from a stable, seq-based cursor
+ * rather than a timestamp (reviewer MINOR: an undo landing in the group's own final millisecond
+ * used to read as still-eligible on the next page, and paging repeated it instead of advancing).
+ * `target_seq` is the "before this version" seq a plain revert always records (metaCandidate
+ * above); a later version carrying `reason: "revert"` and that exact target_seq is unambiguous
+ * proof this exact group-qualifying change was already undone, whatever time it landed at.
+ * Nothing happening after the qualifying version at all (newest === toVersion) is "pending";
+ * anything else that happened since, and is not that proof, is a third party's edit (reviewer
+ * MAJOR, R21 follow-up: the qualifying version's own actor must equal the group's own actor, or a
+ * same-window edit by someone else using the same client label could be reverted).
  */
-async function classifyMember(env: Env, id: string, decoded: DecodedGroup, cfg: Readonly<Config>, scope: string[]): Promise<MemberVerdict> {
-  const { results } = await env.DB.prepare(
-    // scope-checked: en.workspace_id IN (?2) narrows to the reader's own scope; `id` also already
-    // comes from groupCandidates's own reader-scoped derivation, so this is defense in depth.
-    `SELECT ev.seq, ev.meta, ev.reason, ev.channel, ev.actor_id, ev.created_at, en.workspace_id
-     FROM entry_versions ev JOIN entries en ON en.id = ev.entry_id
-     WHERE ev.entry_id = ?1 AND en.workspace_id IN (SELECT value FROM json_each(?2))
-     ORDER BY ev.seq ASC LIMIT 500`,
-  ).bind(id, JSON.stringify(scope)).all<ChainRow>();
-  if (!results.length) return { kind: "not_found" };
-
+function classifyFromRows(rows: readonly ChainRow[] | undefined, decoded: DecodedGroup, cfg: Readonly<Config>): MemberVerdict {
+  if (!rows?.length) return { kind: "not_found" };
   let toVersion: number | undefined;
   let consumed = false;
-  for (const r of results) {
+  for (const r of rows) {
     let meta: Record<string, unknown> = {};
     try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no client / no target_seq */ }
     if (toVersion === undefined) {
       // Codex review, T-0102 E1: decoded.start comes from the group's own audit-event timestamps
       // (brief/changes.ts), stamped at its own, slightly later Date.now() call than the version
       // row it describes -- a strict >= against the version's own created_at can then read the
-      // group's OLDEST member as older than the window it is actually in, and classifyMember
-      // never finds a toVersion for it at all (kind: "not_found", permanently excluded from the
-      // group). One millisecond of slack is enough to absorb that ordering, not a real window.
+      // group's OLDEST member as older than the window it is actually in, and this never finds a
+      // toVersion for it at all (kind: "not_found", permanently excluded from the group). One
+      // millisecond of slack is enough to absorb that ordering, not a real window.
       if (r.created_at >= decoded.start - 1 && r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
         toVersion = r.seq;
       }
@@ -814,8 +805,44 @@ async function classifyMember(env: Env, id: string, decoded: DecodedGroup, cfg: 
   }
   if (toVersion === undefined) return { kind: "not_found" };
   if (consumed) return { kind: "done" };
-  const newest = results[results.length - 1];
+  const newest = rows[rows.length - 1];
   return newest.seq === toVersion ? { kind: "pending", toVersion, workspaceId: newest.workspace_id } : { kind: "changed_since" };
+}
+
+/**
+ * `classifyFromRows`, for every id in one bulk read (Codex review, T-0102 R23, auditor MINOR): a
+ * separate SELECT per id meant each already-"done" member from a prior page's revert still cost
+ * its own statement to reclassify on every later call (paging is stateless, so every call
+ * rescans from ids[0]) -- growing by UNDO_GROUP_PAGE statements every page, 71 by the group's
+ * tenth page against this lane's 40-statement-per-page target. One query for the whole page's
+ * candidate ids keeps the read cost constant regardless of how many are already done. The window
+ * function caps each id's own chain at the same 500 rows the per-id form's LIMIT did -- SQLite
+ * has no per-group LIMIT, so it is expressed as a ROW_NUMBER filter instead.
+ */
+async function classifyMembers(
+  env: Env, ids: readonly string[], decoded: DecodedGroup, cfg: Readonly<Config>, scope: string[],
+): Promise<Map<string, MemberVerdict>> {
+  const out = new Map<string, MemberVerdict>();
+  if (!ids.length) return out;
+  const { results } = await env.DB.prepare(
+    // scope-checked: en.workspace_id IN (?2) narrows to the reader's own scope; ids also already
+    // come from groupCandidates's own reader-scoped derivation, so this is defense in depth.
+    `SELECT entry_id, seq, meta, reason, channel, actor_id, created_at, workspace_id FROM (
+       SELECT ev.entry_id AS entry_id, ev.seq AS seq, ev.meta AS meta, ev.reason AS reason,
+         ev.channel AS channel, ev.actor_id AS actor_id, ev.created_at AS created_at, en.workspace_id AS workspace_id,
+         ROW_NUMBER() OVER (PARTITION BY ev.entry_id ORDER BY ev.seq ASC) AS rn
+       FROM entry_versions ev JOIN entries en ON en.id = ev.entry_id
+       WHERE ev.entry_id IN (SELECT value FROM json_each(?1)) AND en.workspace_id IN (SELECT value FROM json_each(?2))
+     ) WHERE rn <= 500 ORDER BY entry_id ASC, seq ASC`,
+  ).bind(JSON.stringify(ids), JSON.stringify(scope)).all<ChainRow>();
+
+  const byEntry = new Map<string, ChainRow[]>();
+  for (const r of results) {
+    const rows = byEntry.get(r.entry_id);
+    if (rows) rows.push(r); else byEntry.set(r.entry_id, [r]);
+  }
+  for (const id of ids) out.set(id, classifyFromRows(byEntry.get(id), decoded, cfg));
+  return out;
 }
 
 async function resolveVersionGroup(
@@ -823,21 +850,21 @@ async function resolveVersionGroup(
   ctx: ExecutionContext | undefined, groupKeyStr: string, capped: boolean, scope: string[],
 ): Promise<UndoGroupResult> {
   const results: { id: string; result: string }[] = [];
-  let doneCount = 0;
+  const verdicts = await classifyMembers(env, ids, decoded, config, scope);
   // Codex review, T-0102 E2: only an ACTUAL revert (verdict "pending") spends this call's page
   // budget now. The old bound (results.length, which also grew for "not_found"/"changed_since")
   // stopped the scan the moment UNDO_GROUP_PAGE blocked members turned up -- and since `i` is
   // local to this call, never persisted, the next call started over at ids[0] and hit the exact
   // same blocked members again: more than UNDO_GROUP_PAGE permanently-blocked members ahead of
   // any revertable one stalled the group forever. `i` still bounds the scan (ids.length, itself
-  // capped at UNDO_GROUP_MAX = 50 members), so a call that turns out fully blocked costs at most
-  // one classifyMember read per member -- bounded, not unbounded, and never worse than getting
-  // stuck.
+  // capped at UNDO_GROUP_MAX = 50 members), and classifyMembers above already read every verdict
+  // in one statement, so a call that turns out fully blocked costs no more reads than one that
+  // doesn't.
   let acted = 0;
   let i = 0;
   for (; i < ids.length && acted < UNDO_GROUP_PAGE; i++) {
-    const verdict = await classifyMember(env, ids[i], decoded, config, scope);
-    if (verdict.kind === "done") { doneCount++; continue; }
+    const verdict = verdicts.get(ids[i])!;
+    if (verdict.kind === "done") continue;
     if (verdict.kind === "not_found" || verdict.kind === "changed_since") { results.push({ id: ids[i], result: verdict.kind }); continue; }
     const outcome = await revertEntry(env, identity, ids[i], change, config, verdict.toVersion, verdict.workspaceId, undefined, ctx);
     results.push({ id: ids[i], result: resultForStatus(outcome.status) });
