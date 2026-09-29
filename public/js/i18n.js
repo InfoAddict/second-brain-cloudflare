@@ -74,7 +74,7 @@ const I18N_EN = {
       'Your brain noticed this conflicts with an earlier memory and kept the newer one.',
     receiptDraft: 'stored as a draft',
     receiptDraftNote:
-      'This conflicts with a memory you have confirmed, so it is kept unconfirmed rather than overriding it.',
+      'This conflicts with a memory you have confirmed, so it was saved as unconfirmed. Your confirmed memory is unchanged.',
     receiptSimilar: 'stored, close to something you already had',
     receiptSimilarNote: 'Flagged as a possible duplicate so you can compare them later.',
     receiptFiledUnder: 'filed under',
@@ -620,7 +620,7 @@ const I18N_EN = {
     restoreOf: '{done} of {total}',
     restoreTryAgain: 'Try again →',
     restoreFailureTail:
-      "Your backup file is untouched, and it's safe to try again: anything already restored is skipped, not duplicated.",
+      "Your backup file is untouched, and it's safe to try again: anything already restored is skipped.",
     restoreInvalidJson: "{filename} isn't valid JSON.",
     restoreNotBackup:
       "{filename} doesn't look like a Second Brain backup, because it has no list of memories. Use a file made with \"Back up as JSON\".",
@@ -768,7 +768,7 @@ const I18N_EN = {
     },
     moveResultNeedsRepair: 'Not yet searchable',
     moveStoppedPartway:
-      "Moved {n} so far, then the move stopped. It's safe to try again: anything already moved is skipped, not duplicated.",
+      "Moved {n} so far, then the move stopped. It's safe to try again: anything already moved is skipped.",
     moveFailedFirstCall: 'Move failed before anything moved. Safe to try again.',
     // Refusals, not transient failures — retrying can never fix either, so
     // neither sentence uses the "safe to try again"/"resume" family.
@@ -1446,7 +1446,7 @@ const I18N_IT = {
       'Il cervello ha notato un conflitto con un ricordo precedente e ha tenuto quello più recente.',
     receiptDraft: 'salvato come bozza',
     receiptDraftNote:
-      'È in conflitto con un ricordo che hai confermato, quindi resta non confermato invece di sovrascriverlo.',
+      "È in conflitto con un ricordo che hai confermato, quindi è stato salvato come non confermato. Il ricordo confermato resta com'è.",
     receiptSimilar: 'salvato, vicino a qualcosa che avevi già',
     receiptSimilarNote: 'Segnato come possibile duplicato così puoi confrontarli più tardi.',
     receiptFiledUnder: 'archiviato sotto',
@@ -1969,7 +1969,7 @@ const I18N_IT = {
     restoreOf: '{done} di {total}',
     restoreTryAgain: 'Riprova →',
     restoreFailureTail:
-      'Il file di backup è intatto ed è sicuro riprovare: ciò che è già stato ripristinato viene saltato, non duplicato.',
+      'Il file di backup è intatto ed è sicuro riprovare: ciò che è già stato ripristinato viene saltato.',
     restoreInvalidJson: '{filename} non è JSON valido.',
     restoreNotBackup:
       '{filename} non sembra un backup di Second Brain, perché non contiene un elenco di ricordi. Usa un file creato con «Backup come JSON».',
@@ -2107,7 +2107,7 @@ const I18N_IT = {
     },
     moveResultNeedsRepair: 'Non ancora ricercabile',
     moveStoppedPartway:
-      'Spostati {n} finora, poi lo spostamento si è interrotto. Puoi riprovare senza rischi: quanto già spostato non verrà duplicato.',
+      'Spostati {n} finora, poi lo spostamento si è interrotto. Puoi riprovare senza rischi: quanto già spostato viene saltato.',
     moveFailedFirstCall: 'Spostamento non riuscito, niente è stato spostato. Puoi riprovare senza rischi.',
     moveRefusedOwner: 'Rifiutato. Solo il proprietario può spostare questi ricordi.',
     moveLayerChanged: 'Il livello è cambiato da quando hai confermato lo spostamento. Riconferma per continuare.',
