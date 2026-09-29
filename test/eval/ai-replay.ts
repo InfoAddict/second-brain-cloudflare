@@ -725,7 +725,11 @@ export function makeReplayAi(opts: {
       misses.set(key, { model, preview, neurons });
       const cost = price();
       record({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: "dry" });
-      if (kind === "embedding") return { data: [hashVector(text, EMBEDDING_DIMS[model] ?? 384)] };
+      // Codex review, T-0102 F3: storeEntry now always batchEmbeds (one AI call per chunk batch,
+      // not per chunk), so a dry-mode embedding call can carry more than one text; one vector per
+      // text, like every sibling mock in this eval suite (runner.test.ts, prepare.test.ts)
+      // already does, not one vector for the whole (cache-key-only) joined string.
+      if (kind === "embedding") return { data: input.text!.map(t => hashVector(t, EMBEDDING_DIMS[model] ?? 384)) };
       if (kind === "llm") return input.stream ? sseStream("") : { response: "" };
       if (opts.dryOther) return opts.dryOther(model, input);
       throw new ReplayMissError(model, key, preview);
