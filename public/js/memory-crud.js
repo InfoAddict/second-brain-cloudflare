@@ -404,6 +404,87 @@ function viewStatusLabel(status) {
   return status
 }
 
+/**
+ * SH-5/T-0101.6.1 (spec 13 section SH-5, spec 14 section 7.6): the sheet's
+ * status line — `#view-status-caption`, ALWAYS shown (renderViewStatus
+ * defaults an untagged entry to "canonical"), not view-brain's optional
+ * Status row, which only appears when an explicit `status:` tag exists. A
+ * memory with no status tag is the common case, and it is exactly there
+ * that a validity story must still replace the generic "Confirmed. Search
+ * often prefers it…" caption — otherwise most replaced memories would keep
+ * reading as a bare "Trusted" regardless of this feature. `wrong` keeps its
+ * own caption (STATUS_HELP_KEYS.deprecated): being marked wrong is a
+ * stronger statement than a validity window closing on its own.
+ */
+function validityStatusCaptionHtml(entry) {
+  const state = entry.validity_state
+  const shortDate = (ms) => formatDateUI(ms, { year: 'numeric', month: 'short', day: 'numeric' })
+  let html = null
+  if (state === 'replaced' && entry.superseded_by) {
+    const label = t('validity.trueFromUntil', { from: shortDate(entry.valid_from), until: shortDate(entry.valid_until) })
+    const link = `<a href="#" onclick="openValidityLink('${escAttr(entry.superseded_by.id)}'); return false;">${escHtml(t('validity.replacedBy', { preview: entry.superseded_by.preview }))}</a>`
+    html = `${escHtml(label)}<br>${link}`
+  } else if (state === 'ended') {
+    html = escHtml(t('validity.ended', { until: shortDate(entry.valid_until) }))
+  } else if (state === 'current' && entry.valid_from_stated) {
+    html = escHtml(t('validity.trueSince', { from: shortDate(entry.valid_from) }))
+  }
+  if (entry.retracted_source) {
+    const note = escHtml(t('validity.retractedSource'))
+    html = html ? `${html}<br>${note}` : note
+  }
+  return html
+}
+
+/**
+ * The link on a Replaced-by row: opens the replacement's own sheet.
+ * `hydrateView` cannot do this — it re-renders the sheet ALREADY open on
+ * `viewOpenId`, and a click here means jumping to a DIFFERENT memory — so
+ * this fetches the replacement fresh and opens it, the same convention as
+ * graph-canvas.js's openNodeView (down to the empty-content offline fallback:
+ * the preview text is not passed through the inline onclick attribute, since
+ * escAttr breaks that handler the moment a memory's content has a quote in
+ * it — see the escAttr/onclick warning atop stale.js's onStaleListClick).
+ */
+async function openValidityLink(id) {
+  try {
+    const res = await fetch(`${WORKER_URL}/entry?id=${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+    })
+    const data = await res.json()
+    if (data.ok && data.entry) {
+      openView(data.entry, null)
+      return
+    }
+    throw new Error('entry fetch failed')
+  } catch {
+    openView({ id, content: '', tags: [] }, null)
+  }
+}
+
+/**
+ * The Wrong toast (spec 14 section 7.6): names the one memory a retraction
+ * restored, counts several, and separately notes anything flagged for a
+ * check. `null` for an ordinary status change with no validity side effects.
+ */
+function validityRestoredToastMessage(validity) {
+  if (!validity) return null
+  const restored = validity.restored || []
+  const flagged = Number(validity.flagged) || 0
+  if (!restored.length && !flagged) return null
+  let message = null
+  if (restored.length === 1) {
+    message = t('validity.restoredToast', { preview: restored[0].preview })
+  } else if (restored.length > 1) {
+    message = t('validity.restoredToastMany', { n: restored.length })
+  }
+  if (flagged > 0) {
+    const flaggedMsg = tPlural('validity.flaggedToast', flagged)
+    message = message ? `${message} ${flaggedMsg}` : flaggedMsg
+  }
+  return message
+}
+
 /** Volatility is a promise about the future, so it is worth spelling out. */
 function viewVolatility(volatility) {
   if (volatility === 'durable') return [t('memories.volDurable'), t('memories.volDurableGloss')]
@@ -481,7 +562,11 @@ function renderViewBrain(entry) {
   if (kind) {
     rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.kind'))}</span><strong>${escHtml(viewKindLabel(kind))}</strong></div>`)
   }
-  if (status) {
+  // T-0101.6.1: skipped whenever the status caption already tells the validity story
+  // (renderViewStatus/validityStatusCaptionHtml) - otherwise this plain row said "Trusted"
+  // right above a caption reading "No longer true since...", the same bare-Trusted spec 13
+  // was fixed to remove flagged again on a real screenshot (sheet-ended, sheet-retracted-source).
+  if (status && !(status !== 'deprecated' && validityStatusCaptionHtml(entry))) {
     rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(viewStatusLabel(status))}</strong></div>`)
   }
   const volPair = volatility ? viewVolatility(volatility) : null
@@ -548,6 +633,8 @@ async function selectViewStatus(status, entry) {
     // guide), but appending a full sentence after it makes this one a "toast
     // with a consequence", which does take one.
     if (data.indexed === false) message += '. ' + t('status.keywordOnly')
+    const validityMessage = validityRestoredToastMessage(data.validity)
+    if (validityMessage) message = validityMessage
     undoToast(message, entry.id, {
       onUndone: () => {
         if (typeof hydrateView === 'function') hydrateView(entry.id)
@@ -724,8 +811,15 @@ function renderViewStatus(entry) {
     return
   }
   caption.style.display = ''
-  const editedLabel = canonicalEditLabel(entry)
-  caption.textContent = editedLabel ? t('status.editedBy', editedLabel) : t(STATUS_HELP_KEYS[status] || '')
+  // T-0101.6.1: a validity story (or a retracted-source note) outranks both the canonical-edit
+  // note and the plain status help line - it is the more specific, more current fact.
+  const validityCaption = status !== 'deprecated' ? validityStatusCaptionHtml(entry) : null
+  if (validityCaption) {
+    caption.innerHTML = validityCaption
+  } else {
+    const editedLabel = canonicalEditLabel(entry)
+    caption.textContent = editedLabel ? t('status.editedBy', editedLabel) : t(STATUS_HELP_KEYS[status] || '')
+  }
   renderViewStatusLockNote(entry)
 }
 
@@ -864,6 +958,10 @@ function timelineEventLabel(event) {
     // T3/T4 lane S5 (16-t3-t4-trust-spec.md 7.9).
     held: 'history.evHeld',
     released: 'history.evReleased',
+    // T-0101.6.1: src/lib/audit.ts's three validity event names.
+    superseded: 'validity.evSuperseded',
+    validity_changed: 'validity.evChanged',
+    flagged: 'validity.evFlagged',
   }
   return keys[event] ? t(keys[event]) : event || ''
 }

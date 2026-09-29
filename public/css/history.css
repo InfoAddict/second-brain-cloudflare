@@ -133,6 +133,20 @@
   margin-top: 8px;
 }
 
+/* T-0101.6.1: the Replaced-by link in a replaced memory's status caption. A UI review
+   measured its tap target at ~20px tall; display:inline-block plus vertical padding gives it
+   the 44px a touch target needs, without the surrounding caption text moving (the negative
+   margin gives back exactly what the padding added). */
+.status-caption a {
+  display: inline-block;
+  min-height: 44px;
+  padding: 11px 0;
+  margin: -11px 0;
+  box-sizing: border-box;
+  color: var(--accent-ink);
+  text-decoration: underline;
+}
+
 /* The reason Append, Edit, Forget and Status are disabled, next to the
    control it explains rather than at the end of History. */
 .status-lock-note {

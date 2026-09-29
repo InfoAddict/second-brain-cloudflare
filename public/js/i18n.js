@@ -329,6 +329,12 @@ const I18N_EN = {
     reasonDue: 'Date changed',
     reasonMirror: 'Updated by sync',
     reasonRevert: 'Put back to an earlier version',
+    // Draft, not in the 7.6 copy deck: history.items carries no cause/by/until
+    // for a validity-caused row (only entry.timeline does, which the SH-1
+    // history UI does not read - see validity.evChanged and
+    // test/ui/validity-labels.test.ts's "history.items gap" test), so this is
+    // a generic label rather than the per-cause validity.history* strings.
+    reasonValidity: 'Validity changed',
     byClient: 'by {actor} via {client}',
     byAgent: 'by {actor} via an AI tool',
     byDashboard: 'by {actor}',
@@ -999,6 +1005,37 @@ const I18N_EN = {
     },
     moreInsightsGeneric: 'More insights are waiting →',
   },
+  // T-0101.6.1 (Track 2 Task D3, spec 14 section 7.6): validity labels, one
+  // block, inserted directly before stale so the copy deck's own placement
+  // note stays checkable by a diff.
+  validity: {
+    trueFromUntil: 'True from {from} until {until}',
+    trueSince: 'True since {from}',
+    replacedBy: 'Replaced by: {preview}',
+    ended: 'No longer true since {until}',
+    retractedSource: 'Based on a memory later marked Wrong',
+    chipReplaced: 'Replaced',
+    chipEnded: 'No longer true',
+    chipCheck: 'Needs a check',
+    restoredToast: 'Marked as wrong. "{preview}" is current again.',
+    restoredToastMany: 'Marked as wrong. {n} older memories are current again.',
+    flaggedToast: {
+      one: '{n} memory based on it now needs a check.',
+      other: '{n} memories based on it now need a check.',
+    },
+    historyReplaced: 'Replaced by {preview} (true until {until})',
+    historyCurrentAgain: 'Current again: {preview} was marked wrong',
+    historyCurrentAgainDeleted: 'Current again: the memory that replaced it was forgotten',
+    historyReplacedAgain: 'Replaced again by {preview}',
+    historyEndSet: 'End date set to {until}',
+    historyEndMoved: 'End date moved to {until} to match {preview}',
+    // Draft, not in the 7.6 copy deck: generic event-list labels for the
+    // three validity event names src/lib/audit.ts writes, for the fallback
+    // plain-event timeline (pre-SH-1 Workers, no rich history).
+    evSuperseded: 'Replaced by a newer memory',
+    evChanged: 'Dates updated',
+    evFlagged: 'Marked to check',
+  },
   stale: {
     title: 'May be out of date',
     intro:
@@ -1006,6 +1043,12 @@ const I18N_EN = {
     empty: 'Nothing looks out of date.',
     loadFailed: 'Could not load what may be out of date.',
     lastConfirmed: 'Last confirmed {date}',
+    reasonAge: {
+      one: 'Not confirmed in {n} day',
+      other: 'Not confirmed in {n} days',
+    },
+    reasonDate: 'Its date has passed',
+    reasonRetracted: 'Based on a memory later marked Wrong',
     keep: 'Keep',
     keepFailed: 'Could not keep this memory: {message}',
     more: '{n} more',
@@ -1699,6 +1742,7 @@ const I18N_IT = {
     reasonDue: 'Data modificata',
     reasonMirror: 'Aggiornato dalla sincronizzazione',
     reasonRevert: 'Riportato a una versione precedente',
+    reasonValidity: 'Validità cambiata',
     byClient: 'da {actor} tramite {client}',
     byAgent: 'da {actor} tramite uno strumento di IA',
     byDashboard: 'da {actor}',
@@ -2327,6 +2371,31 @@ const I18N_IT = {
     },
     moreInsightsGeneric: 'Altri insight in attesa →',
   },
+  validity: {
+    trueFromUntil: 'Valido dal {from} al {until}',
+    trueSince: 'Valido dal {from}',
+    replacedBy: 'Sostituito da: «{preview}»',
+    ended: 'Non più valido dal {until}',
+    retractedSource: 'Basato su un ricordo poi segnato come Errato',
+    chipReplaced: 'Sostituito',
+    chipEnded: 'Non più valido',
+    chipCheck: 'Da verificare',
+    restoredToast: 'Segnato come errato. «{preview}» è di nuovo valido.',
+    restoredToastMany: 'Segnato come errato. {n} ricordi precedenti sono di nuovo validi.',
+    flaggedToast: {
+      one: '{n} ricordo basato su questo è ora da verificare.',
+      other: '{n} ricordi basati su questo sono ora da verificare.',
+    },
+    historyReplaced: 'Sostituito da {preview} (valido fino al {until})',
+    historyCurrentAgain: 'Di nuovo valido: {preview} è stato segnato come errato',
+    historyCurrentAgainDeleted: 'Di nuovo valido: il ricordo che lo sostituiva è stato dimenticato',
+    historyReplacedAgain: 'Sostituito di nuovo da {preview}',
+    historyEndSet: 'Data di fine impostata al {until}',
+    historyEndMoved: 'Data di fine spostata al {until} per allinearsi a {preview}',
+    evSuperseded: 'Sostituito da un ricordo più recente',
+    evChanged: 'Date aggiornate',
+    evFlagged: 'Segnato da verificare',
+  },
   stale: {
     title: 'Potrebbe non essere aggiornato',
     intro:
@@ -2334,6 +2403,12 @@ const I18N_IT = {
     empty: 'Nulla sembra non aggiornato.',
     loadFailed: 'Impossibile caricare cosa potrebbe non essere aggiornato.',
     lastConfirmed: 'Confermato il {date}',
+    reasonAge: {
+      one: 'Non confermato da {n} giorno',
+      other: 'Non confermato da {n} giorni',
+    },
+    reasonDate: 'La sua data è passata',
+    reasonRetracted: 'Basato su un ricordo poi segnato come Errato',
     keep: 'Tieni',
     keepFailed: 'Impossibile tenere questa memoria: {message}',
     more: 'Altri {n}',

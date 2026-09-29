@@ -617,13 +617,17 @@ function makeRecentCard(entry, { selectable = true } = {}) {
     held || vec === 'on'
       ? ''
       : vec === 'pending'
-        ? `<span class="tag-chip vec-chip vec-chip--pending" title="${escAttr(t('memories.vecPendingTitle'))}"><i class="ti ti-clock"></i></span>`
+        ? `<span class="tag-chip vec-chip vec-chip--pending" role="img" aria-label="${escAttr(t('memories.vecPendingTitle'))}" title="${escAttr(t('memories.vecPendingTitle'))}"><i class="ti ti-clock"></i></span>`
         : `<span class="tag-chip vec-chip vec-chip--off" title="${escAttr(t('memories.vecOffTitle'))}">${escHtml(t('memories.vecNotIndexed'))}</span>`
   // Layer badge: shared memories are the team's — say so. Personal is the
   // quiet default and system rows (digests, insights) carry no badge. Built by
   // layerChipHtml in utils.js, which the review queue also calls, so the two
   // surfaces cannot come to describe the same row differently.
   const layerChip = layerChipHtml(entry, TEAM_MODE)
+  // T-0101.6.1: validity chip. GET /list's own six-field contract
+  // (validity_state, retracted_source) names one of three cases; "wrong" and
+  // plain "current" get no chip, the same as an unheld, indexed row today.
+  const validityChip = validityChipHtml(entry)
 
   const title = titleLine(entry.content)
   const preview = previewAfterTitle(entry.content, title)
@@ -654,7 +658,7 @@ function makeRecentCard(entry, { selectable = true } = {}) {
     <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
     ${created ? `<span class="card-time" title="${escAttr(new Date(created).toLocaleString(localeTag()))}">${escHtml(relativeTime(created))}</span>` : ''}
   </div>
-  <div class="card-tags">${heldChipHtml(tags)}${standingBadgeHtml(tags)}${projectChipsHtml(tags)}${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}</div>
+  <div class="card-tags">${heldChipHtml(tags)}${standingBadgeHtml(tags)}${projectChipsHtml(tags)}${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}${validityChip}</div>
   <div class="card-actions">
     <button class="card-action-btn append-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
     <button class="card-action-btn edit-btn"><i class="ti ti-pencil"></i> ${escHtml(t('memories.edit'))}</button>

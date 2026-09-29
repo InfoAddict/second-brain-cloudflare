@@ -147,12 +147,15 @@ function load(fetchImpl?: (url: string, init?: any) => Promise<any>) {
  * change item, renders, and returns both the raw element (for innerHTML
  * content checks) and the stub rows (for wiring checks).
  */
-function renderAndWire(ctx: any, entry: any) {
+async function renderAndWire(ctx: any, entry: any) {
   const tl = ctx.document.getElementById("view-timeline");
   const changeItems = (entry.history?.items || []).filter((it: any) => it.kind === "change");
   const liStubs = changeItems.map(makeHistoryLi);
   tl.querySelectorAll = (sel: string) => (sel === ".history-item" ? liStubs : []);
-  ctx.renderHistory(entry);
+  // T-0101.6.1: renderHistory is async now (it resolves a validity-caused row's `by` preview
+  // before its first paint); none of this file's fixtures use reason:"validity", so this
+  // resolves with no network call, but the render itself still crosses a microtask.
+  await ctx.renderHistory(entry);
   return { tl, liStubs };
 }
 
@@ -214,10 +217,10 @@ describe("renderHistory — change and event rows", () => {
   // regardless of when they happened — a caller (a hand-built fixture today,
   // conceivably an edge case the server contract does not anticipate later)
   // that hands over items out of order must still render correctly.
-  it("sorts change and event rows into one timeline by timestamp, newest first", () => {
+  it("sorts change and event rows into one timeline by timestamp, newest first", async () => {
     const ctx = load();
     const middleAgedEvent = { ...EVENT_SHARED, at: 1789500000000 }; // between CHANGE_OLDER (1789000000000) and CHANGE_NEWEST (1790000000000)
-    const { tl } = renderAndWire(ctx, {
+    const { tl } = await renderAndWire(ctx, {
       id: "e1",
       // Deliberately out of chronological order: newest change last, the
       // event (which belongs in the middle) placed after everything.
@@ -232,17 +235,17 @@ describe("renderHistory — change and event rows", () => {
     expect(addedAt).toBeGreaterThan(sharedAt);
   });
 
-  it("breaks a timestamp tie by keeping the given order (stable sort)", () => {
+  it("breaks a timestamp tie by keeping the given order (stable sort)", async () => {
     const ctx = load();
     const tiedEvent = { ...EVENT_SHARED, at: CHANGE_NEWEST.at };
-    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, tiedEvent] } });
+    const { tl } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, tiedEvent] } });
     const html = tl.innerHTML as string;
     expect(html.indexOf("Edited")).toBeLessThan(html.indexOf("Shared with the team"));
   });
 
-  it("renders change rows newest first with reason, who and before preview", () => {
+  it("renders change rows newest first with reason, who and before preview", async () => {
     const ctx = load();
-    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, CHANGE_OLDER, EVENT_SHARED] } });
+    const { tl } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, CHANGE_OLDER, EVENT_SHARED] } });
     const html = tl.innerHTML as string;
     const editedAt = html.indexOf("Edited");
     const addedAt = html.indexOf("Text added");
@@ -261,9 +264,9 @@ describe("renderHistory — change and event rows", () => {
     expect(html).toContain("Uses Postgres 15");
   });
 
-  it("Undo shows only when can_undo; Restore this version only when can_restore", () => {
+  it("Undo shows only when can_undo; Restore this version only when can_restore", async () => {
     const ctx = load();
-    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, CHANGE_OLDER] } });
+    const { tl } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, CHANGE_OLDER] } });
     const html = tl.innerHTML as string;
     expect(html).toContain('data-action="undo"');
     expect(html).toContain('data-action="restore-version"');
@@ -282,26 +285,26 @@ describe("renderHistory — change and event rows", () => {
   // UI review: the lock note explaining a disabled sheet moved to the status
   // control (renderViewStatus) so it appears once, not once in History and
   // once in Status. History has nothing special to say about being locked.
-  it("never renders a lock note itself, even when the memory is locked", () => {
+  it("never renders a lock note itself, even when the memory is locked", async () => {
     const ctx = load();
-    const { tl } = renderAndWire(ctx, { id: "e1", can_edit: false, actor_name: "Bob", history: { items: [CHANGE_NEWEST] } });
+    const { tl } = await renderAndWire(ctx, { id: "e1", can_edit: false, actor_name: "Bob", history: { items: [CHANGE_NEWEST] } });
     expect(tl.innerHTML).not.toContain("Shared by Bob");
   });
 
-  it("hides history entirely when empty, locked or not", () => {
+  it("hides history entirely when empty, locked or not", async () => {
     const lockedCtx = load();
-    const { tl: lockedTl } = renderAndWire(lockedCtx, { id: "e1", can_edit: false, actor_name: "Bob", history: { items: [] } });
+    const { tl: lockedTl } = await renderAndWire(lockedCtx, { id: "e1", can_edit: false, actor_name: "Bob", history: { items: [] } });
     expect(lockedTl.style.display).toBe("none");
     const ctx = load();
-    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [] } });
+    const { tl } = await renderAndWire(ctx, { id: "e1", history: { items: [] } });
     expect(tl.style.display).toBe("none");
     expect(tl.innerHTML).toBe("");
   });
 
-  it("client name is escaped", () => {
+  it("client name is escaped", async () => {
     const ctx = load();
     const evil = { ...CHANGE_NEWEST, client: "<img src=x>" };
-    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [evil] } });
+    const { tl } = await renderAndWire(ctx, { id: "e1", history: { items: [evil] } });
     expect(tl.innerHTML).not.toContain("<img");
     expect(tl.innerHTML).toContain("&lt;img");
   });
@@ -311,52 +314,52 @@ describe("renderHistory — change and event rows", () => {
   // human-authored row is unconditionally the viewer's own. No memoryAuthors
   // lookup needed, and none is available in solo mode anyway.
   describe("solo mode (TEAM_MODE false, the load() default)", () => {
-    it('renders any human-authored row as "you", AI-assisted or not', () => {
+    it('renders any human-authored row as "you", AI-assisted or not', async () => {
       const ctx = load();
-      const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, CHANGE_OLDER] } });
+      const { tl } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, CHANGE_OLDER] } });
       expect(tl.innerHTML).toContain("by you via Claude"); // CHANGE_NEWEST: channel mcp, client Claude
       expect(tl.innerHTML).toContain("by you"); // CHANGE_OLDER: channel rest, byDashboard
       expect(tl.innerHTML).not.toContain("by Rahil");
     });
 
-    it("leaves an integration row's own phrasing untouched", () => {
+    it("leaves an integration row's own phrasing untouched", async () => {
       const ctx = load();
-      const { tl } = renderAndWire(ctx, { id: "e1", source: "notion", history: { items: [CHANGE_SYNCED] } });
+      const { tl } = await renderAndWire(ctx, { id: "e1", source: "notion", history: { items: [CHANGE_SYNCED] } });
       expect(tl.innerHTML).toContain("synced from Notion");
       expect(tl.innerHTML).not.toContain("by you");
     });
   });
 
   describe("team mode (TEAM_MODE true)", () => {
-    it('renders the viewer\'s own change as "you", via memoryAuthors', () => {
+    it('renders the viewer\'s own change as "you", via memoryAuthors', async () => {
       const ctx = load();
       ctx.TEAM_MODE = true;
       ctx.memoryAuthors = { you: "u1", members: [{ userId: "u1", name: "Rahil" }] };
-      const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+      const { tl } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
       expect(tl.innerHTML).toContain("by you via Claude");
       expect(tl.innerHTML).not.toContain("by Rahil via Claude");
     });
 
-    it("keeps the real name for a change that is not the viewer's own", () => {
+    it("keeps the real name for a change that is not the viewer's own", async () => {
       const ctx = load();
       ctx.TEAM_MODE = true;
       ctx.memoryAuthors = { you: "u2", members: [{ userId: "u1", name: "Rahil" }, { userId: "u2", name: "Ana" }] };
-      const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+      const { tl } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
       expect(tl.innerHTML).toContain("by Rahil via Claude");
     });
 
-    it("keeps the real name when memoryAuthors has not resolved yet", () => {
+    it("keeps the real name when memoryAuthors has not resolved yet", async () => {
       const ctx = load();
       ctx.TEAM_MODE = true;
-      const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+      const { tl } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
       expect(tl.innerHTML).toContain("by Rahil via Claude");
     });
   });
 
-  it("names a synced provider with its brand name, not the lowercase badge label", () => {
+  it("names a synced provider with its brand name, not the lowercase badge label", async () => {
     const ctx = load();
     const synced = { ...CHANGE_SYNCED };
-    const { tl } = renderAndWire(ctx, { id: "e1", source: "notion", history: { items: [synced] } });
+    const { tl } = await renderAndWire(ctx, { id: "e1", source: "notion", history: { items: [synced] } });
     expect(tl.innerHTML).toContain("synced from Notion");
     expect(tl.innerHTML).not.toContain("synced from notion");
   });
@@ -373,23 +376,23 @@ describe("renderHistory — change and event rows", () => {
 });
 
 describe("renderHistory — footers", () => {
-  it("each footer renders only when set", () => {
+  it("each footer renders only when set", async () => {
     const ctx = load();
-    const { tl: tlNone } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST], footer: {} } });
+    const { tl: tlNone } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST], footer: {} } });
     expect(tlNone.innerHTML).not.toContain("history-footer");
 
-    const { tl: tlPruned } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST], footer: { pruned: true, kept: 20 } } });
+    const { tl: tlPruned } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST], footer: { pruned: true, kept: 20 } } });
     expect(tlPruned.innerHTML).toContain('data-footer="pruned"');
     expect(tlPruned.innerHTML).toContain("20");
     expect(tlPruned.innerHTML).not.toContain('data-footer="not-recorded"');
 
-    const { tl: tlNotRecorded } = renderAndWire(ctx, {
+    const { tl: tlNotRecorded } = await renderAndWire(ctx, {
       id: "e1",
       history: { items: [CHANGE_NEWEST], footer: { not_recorded_before: 1700000000000 } },
     });
     expect(tlNotRecorded.innerHTML).toContain('data-footer="not-recorded"');
 
-    const { tl: tlShared } = renderAndWire(ctx, {
+    const { tl: tlShared } = await renderAndWire(ctx, {
       id: "e1",
       history: { items: [CHANGE_NEWEST], footer: { shared_cut_by: "Ana" } },
     });
@@ -405,7 +408,7 @@ describe("renderHistory — Show all", () => {
       return { json: async () => ({ ok: true, id: "e1", seq: 6, content: "The full text before change 6, much longer than the preview." }) };
     });
     const ctx = load(fetchImpl);
-    const { liStubs } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_OLDER] } });
+    const { liStubs } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_OLDER] } });
     const showBtn = liStubs[0].querySelector('[data-action="show-before"]');
     await showBtn.onclick();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -436,7 +439,7 @@ describe("renderHistory — Undo and Restore actions", () => {
     });
     const ctx = load(fetchImpl);
     ctx.viewOpenId = "e1";
-    const { liStubs } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+    const { liStubs } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
     const undoBtn = liStubs[0].querySelector('[data-action="undo"]');
     await undoBtn.onclick();
     expect(ctx.__calls.some((c: any) => c.url.includes("/undo"))).toBe(true);
@@ -456,7 +459,7 @@ describe("renderHistory — Undo and Restore actions", () => {
     });
     const ctx = load(fetchImpl);
     ctx.viewOpenId = "e1";
-    const { liStubs } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_OLDER] } });
+    const { liStubs } = await renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_OLDER] } });
     const restoreBtn = liStubs[0].querySelector('[data-action="restore-version"]');
     restoreBtn.onclick();
     expect(ctx.__els.get("confirm-title").textContent).toBe("Restore this version?");
