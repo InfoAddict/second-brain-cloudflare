@@ -562,7 +562,12 @@ export const journeys: Journey[] = [
   {
     id: "w22",
     title: "DCR client name recorded in the timeline, trash row and MCP history",
-    async setup() { throw new NotBuilt("UX-E: client-name walkthrough", "this is an MCP chat walkthrough, not a dashboard journey -- passes via npm run ux:chat (chat-walkthroughs/trust-scenarios.ts), checking MCP history and the trash row; the dashboard timeline is the one surface still unverified here"); },
+    // capture/store.ts's update path now copies change.client into entry_versions.meta too (was
+    // event-only), so the dashboard timeline (history-view.js's item.client) reads correctly, same
+    // as the MCP history tool and the trash row -- this runner still can't drive a browser to
+    // confirm the timeline directly, but npm run ux:chat's own W22 now passes all three surfaces
+    // it CAN check (trash row + MCP history), with no remaining known gap on the third.
+    async setup() { throw new NotBuilt("UX-E: client-name walkthrough", "this is an MCP chat walkthrough, not a dashboard journey -- passes via npm run ux:chat (chat-walkthroughs/trust-scenarios.ts), not run-all.ts"); },
     async run() {},
   },
   (() => {
