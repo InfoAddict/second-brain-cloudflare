@@ -2288,7 +2288,7 @@ const I18N_IT = {
   validity: {
     trueFromUntil: 'Valido dal {from} al {until}',
     trueSince: 'Valido dal {from}',
-    replacedBy: 'Sostituito da: {preview}',
+    replacedBy: 'Sostituito da: «{preview}»',
     ended: 'Non più valido dal {until}',
     retractedSource: 'Basato su un ricordo poi segnato come Errato',
     chipReplaced: 'Sostituito',
