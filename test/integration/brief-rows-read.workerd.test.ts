@@ -183,12 +183,22 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("changes rows_read against 5,00
       // brain size. This re-accepts finding 7's original crowd-out tradeoff (a window with over
       // RAW_EVENT_SCAN_LIMIT other-tenant events can still crop the reader's own older events from
       // the list; rawCapped/truncated says so honestly) in exchange for a bound that holds
-      // regardless of brain size or how adversarial the window's noise is. Measured / budget:
+      // regardless of brain size or how adversarial the window's noise is. Measured / budget
+      // (superseded by the section-35 re-budget below, kept for the R22-era baseline):
       // 2k REST 9,591/10,500 MCP 3,705/4,100 lean 3,456/3,800;
       // 10k REST 51,031/56,000 MCP 6,425/7,100 lean 5,216/5,750.
-      expect(rest.rows).toBeLessThanOrEqual(N === 2000 ? 10500 : 56000);
-      expect(mcp.rows).toBeLessThanOrEqual(N === 2000 ? 4100 : 7100);
-      expect(lean.rows).toBeLessThanOrEqual(N === 2000 ? 3800 : 5750);
+      //
+      // Budget ledger section 35 (auditor re-measurement on 7af964ea): the combined changes read
+      // (finding 4's actor/held-reserved branches, on top of R22's own scan) adds a flat ~1,000
+      // rows in a busy window, across REST, MCP and lean alike, at both N. The auditor's own two
+      // named failures -- REST 2k measured 10,595 (was budgeted 10,500), MCP 10k measured 7,429
+      // (was budgeted 7,100) -- are re-budgeted to those measured numbers plus the usual ~10%
+      // margin; re-measuring here found the same +1,000 shift had also pushed MCP 2k (4,709) and
+      // lean at both N (4,460 / 6,220) past their own old budgets, so those three are re-budgeted
+      // the same way, same section. REST 10k (52,035) still clears its existing budget.
+      expect(rest.rows).toBeLessThanOrEqual(N === 2000 ? 11700 : 56000);
+      expect(mcp.rows).toBeLessThanOrEqual(N === 2000 ? 5200 : 8200);
+      expect(lean.rows).toBeLessThanOrEqual(N === 2000 ? 4950 : 6850);
       // Still finds the reader's own genuine change, unaffected by being outnumbered 5,000 to 1.
       expect((rest.value as { changes: { count: number } }).changes.count).toBe(1);
     } finally { await d1.close(); }
