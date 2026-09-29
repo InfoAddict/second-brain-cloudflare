@@ -16,17 +16,25 @@ const fresh = async () => { f.close(); f = await makeExplainFixture(); return f.
 
 const Q = "query=atlas%20ledger&topK=5";
 const stripWhy = (body: any) => ({ ...body, results: body.results.map(({ why: _w, ...rest }: any) => rest) });
+// Part C (05-proof.md, T-0089.5.3): receipt is a new, deliberate field on every recall
+// response, predating this golden (captured before it existed). Stripped the same way `why`
+// is, so this file keeps testing what it is for — explain's own isolation — not receipt.
+const stripReceipt = (body: any) => { const { receipt: _r, ...rest } = body; return rest; };
+const noReceiptLine = (text: string) => text.replace(/\n\nreceipt: \S+$/, "");
 
 describe("explain off (the default)", () => {
-  it("REST JSON is byte-identical to the pre-feature output", async () => {
-    expect(JSON.stringify(await restRecall(await fresh(), Q))).toBe(JSON.stringify(golden.rest));
-    expect(JSON.stringify(await restRecall(await fresh(), `${Q}&hops=1`))).toBe(JSON.stringify(golden.restHops));
+  it("REST JSON is byte-identical to the pre-feature output, receipt aside", async () => {
+    const plain = await restRecall(await fresh(), Q);
+    const hop = await restRecall(await fresh(), `${Q}&hops=1`);
+    expect(JSON.stringify(stripReceipt(plain))).toBe(JSON.stringify(golden.rest));
+    expect(JSON.stringify(stripReceipt(hop))).toBe(JSON.stringify(golden.restHops));
+    expect(typeof plain.receipt).toBe("string");
   });
 
-  it("MCP text is byte-identical to the pre-feature output", async () => {
-    expect(await mcpRecall(await fresh(), { query: "atlas ledger", topK: 5 })).toBe(golden.mcp);
-    expect(await mcpRecall(await fresh(), { query: "atlas ledger", topK: 5, hops: 1 })).toBe(golden.mcpHops);
-    expect(await mcpRecall(await fresh(), { query: "atlas ledger", topK: 5, explain: false })).toBe(golden.mcp);
+  it("MCP text is byte-identical to the pre-feature output, receipt aside", async () => {
+    expect(noReceiptLine(await mcpRecall(await fresh(), { query: "atlas ledger", topK: 5 }))).toBe(golden.mcp);
+    expect(noReceiptLine(await mcpRecall(await fresh(), { query: "atlas ledger", topK: 5, hops: 1 }))).toBe(golden.mcpHops);
+    expect(noReceiptLine(await mcpRecall(await fresh(), { query: "atlas ledger", topK: 5, explain: false }))).toBe(golden.mcp);
   });
 
   it("carries no why key on any result", async () => {
@@ -38,7 +46,7 @@ describe("explain off (the default)", () => {
 describe("explain on", () => {
   it("REST: the same results in the same order and scores, plus a why object per result", async () => {
     const on = await restRecall(await fresh(), `${Q}&explain=1`);
-    expect(stripWhy(on)).toEqual(golden.rest);
+    expect(stripReceipt(stripWhy(on))).toEqual(golden.rest);
     for (const r of on.results) {
       expect(Object.keys(r.why).sort()).toEqual(["age_known", "dense_rank", "graph", "keyword_terms", "multipliers", "rerank_move", "rerank_percentile", "slot"]);
     }
@@ -66,7 +74,7 @@ describe("explain on", () => {
 
   it("REST: works with hops and a tag filter", async () => {
     const hop = await restRecall(await fresh(), `${Q}&hops=1&explain=1`);
-    expect(stripWhy(hop)).toEqual(golden.restHops);
+    expect(stripReceipt(stripWhy(hop))).toEqual(golden.restHops);
     const tagged = await restRecall(f.env, `${Q}&tag=idea&explain=1`);
     expect(tagged.results.length).toBeGreaterThan(0);
     for (const r of tagged.results) expect(r.why).toBeDefined();
@@ -74,7 +82,8 @@ describe("explain on", () => {
 
   it("MCP: one why line per result after its ID line, everything else unchanged", async () => {
     const on = await mcpRecall(await fresh(), { query: "atlas ledger", topK: 5, explain: true });
-    const lines = on.split("\n");
+    expect(on).toMatch(/\n\nreceipt: \S+$/);
+    const lines = noReceiptLine(on).split("\n");
     const whyLines = lines.filter(l => l.startsWith("why: "));
     expect(whyLines).toHaveLength(3);
     for (const [i, l] of lines.entries()) if (l.startsWith("ID: ")) expect(lines[i + 1]).toMatch(/^why: /);

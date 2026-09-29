@@ -5,8 +5,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULTS } from "../../src/config";
-import { RECALL_LOG_FOLLOW_WINDOW_MS, RECALL_LOG_PER_DAY, RECALL_LOG_RETENTION_DAYS } from "../../src/constants";
-import { maybeLogRecall, maybeMarkFollowed, maybeMarkFollowedMany } from "../../src/recall/log";
+import { RECALL_LOG_FOLLOW_WINDOW_MS, RECALL_LOG_PER_DAY, RECALL_LOG_RETENTION_DAYS, RECEIPT_TIME_BUCKET_MS } from "../../src/constants";
+import { maybeLogRecall, maybeMarkFollowed, maybeMarkFollowedMany, receiptHash } from "../../src/recall/log";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import type { Env } from "../../src/env";
@@ -155,6 +155,62 @@ describe("maybeLogRecall", () => {
       }
     }
     expect(kvCounts()).toEqual({ gets: 0, puts: 0 });
+  });
+
+  // Part C (05-proof.md, T-0089.5.3): the caller pre-generates the receipt id so the response
+  // it hands back matches the row this call writes, without a round trip to read it back.
+  it("writes the row under the caller-supplied id, not one it generates itself", async () => {
+    const { env, sqlite } = setup();
+    const cfg = { ...DEFAULTS, RECALL_LOG: "on" as const };
+    await maybeLogRecall(env, cfg, input({ id: "caller-chosen-id" }));
+    const rows = (await sqlite.db.prepare(`SELECT id FROM recall_log`).all()).results as { id: string }[];
+    expect(rows).toEqual([{ id: "caller-chosen-id" }]);
+  });
+
+  it("falls back to a generated id when the caller does not supply one", async () => {
+    const { env, sqlite } = setup();
+    const cfg = { ...DEFAULTS, RECALL_LOG: "on" as const };
+    await maybeLogRecall(env, cfg, input());
+    const rows = (await sqlite.db.prepare(`SELECT id FROM recall_log`).all()).results as { id: string }[];
+    expect(rows[0].id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("receiptHash (Part C, 05-proof.md, T-0089.5.3)", () => {
+  it("is short", async () => {
+    const hash = await receiptHash("atlas ledger", 1_000_000);
+    expect(hash.length).toBeLessThanOrEqual(16);
+    expect(hash.length).toBeGreaterThan(0);
+  });
+
+  it("is deterministic for the same query and time bucket", async () => {
+    const a = await receiptHash("atlas ledger", 1_000_000);
+    const b = await receiptHash("atlas ledger", 1_000_000);
+    expect(a).toBe(b);
+  });
+
+  it("stays the same within one time bucket", async () => {
+    const a = await receiptHash("atlas ledger", 0);
+    const b = await receiptHash("atlas ledger", RECEIPT_TIME_BUCKET_MS - 1);
+    expect(a).toBe(b);
+  });
+
+  it("differs across a time bucket boundary", async () => {
+    const a = await receiptHash("atlas ledger", 0);
+    const b = await receiptHash("atlas ledger", RECEIPT_TIME_BUCKET_MS);
+    expect(a).not.toBe(b);
+  });
+
+  it("differs for a different query in the same bucket", async () => {
+    const a = await receiptHash("atlas ledger", 1_000_000);
+    const b = await receiptHash("zebra vendor", 1_000_000);
+    expect(a).not.toBe(b);
+  });
+
+  it("never touches D1 or KV: it is a pure function of its two arguments", async () => {
+    // No env parameter at all — this is the "zero cost when the log is off" half of the
+    // contract; the caller decides whether to call this or the real log write.
+    expect(receiptHash.length).toBe(2);
   });
 });
 

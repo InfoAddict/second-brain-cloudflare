@@ -121,6 +121,10 @@ export interface RecallSearchResult {
   asOf?: { at: number; notRecordedBefore: number | null };
   /** Standing instructions that fired, capped at STANDING_MAX_FIRES, present only when non-empty (spec 15 2.8/2.9). */
   standing?: StandingFire[];
+  /** Part C (05-proof.md, T-0089.5.3): a short, citable id for this recall — the recall_log
+   * row's id when RECALL_LOG is on and this call logged, otherwise a hash of the query and
+   * the time bucket. Always present; zero D1 cost when the log is off. */
+  receipt: string;
 }
 
 export interface RecallDiagnostics {

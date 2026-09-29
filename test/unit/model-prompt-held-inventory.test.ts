@@ -84,7 +84,7 @@ const ACCOUNTED_FOR: { file: string; line: number; why: string }[] = [
     why: "judgeCommitment's prompt is built from candidateSql's own rows, which now adds NOT_HELD_SQL alongside its existing when_at/when_source/openLoopSql predicates (Codex review class E, T-0089.4.2).",
   },
   {
-    file: "src/routes/recall.ts", line: 307,
+    file: "src/routes/recall.ts", line: 309,
     why: "POST /chat's body.memories is opaque client-composed text (see the route's own comment: the shipped client serializes a prior GET /recall response into it), never a server-side row read here -- there is no candidate query at this boundary to filter. The row-read boundary this rule protects is GET /recall and get(), which already exclude/warn on held content before the client ever sees it to compose from.",
   },
 ];
