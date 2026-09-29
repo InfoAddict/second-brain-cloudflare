@@ -353,4 +353,58 @@ describe("undoGroup() (S3)", () => {
 
     for (const id of ids) expect(await maxSeqOf(id)).toBe(1);
   });
+
+  it("the oldest member's version created_at one millisecond before the group's own start is still included (Codex review, T-0102 E1)", async () => {
+    const ids = ["e0", "e1", "e2"];
+    const windowStart = now - HOUR;
+    let t = windowStart;
+    for (const id of ids) {
+      await seedEntry(id, ["work", "status:canonical"]);
+      // The oldest member's own version predates its audit event by 1ms -- the same ordering
+      // writeAuditEvents' own Date.now() call, a beat after the version snapshot's, produces in
+      // production. decoded.start is derived from the group's event timestamps (t here), so a
+      // strict >= against this version's created_at (t - 1) used to exclude it entirely.
+      const versionAt = id === ids[0] ? t - 1 : t;
+      await insertVersion({ entryId: id, seq: 1, tags: ["work"], actorId: "u1", channel: "mcp", reason: "status", meta: { client: "Cursor" }, createdAt: versionAt });
+      await insertEvent({ id: `ev-${id}`, entryId: id, event: "status_changed", actorId: "u1", createdAt: t, payload: { channel: "mcp", status: "canonical", client: "Cursor" } });
+      t += MIN;
+    }
+    const group = await discoverGroup();
+
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    expect(byId[ids[0]]).toBe("reverted");
+    expect(result!.remaining).toBe(0);
+    expect(result!.done).toBe(true);
+  });
+
+  it("more than UNDO_GROUP_PAGE blocked members ahead of actionable ones does not stall the group forever (Codex review, T-0102 E2)", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `e${i}`);
+    const windowStart = now - HOUR;
+    const windowEnd = await seedStatusBurst(ids, windowStart);
+    // The first 6 members (more than UNDO_GROUP_PAGE = 5) are each edited by someone else after
+    // the group's own window closes, so classifyMember reports them changed_since forever -- they
+    // never become "done" and are never actually reverted.
+    const blocked = ids.slice(0, 6);
+    for (const id of blocked) {
+      await insertVersion({ entryId: id, seq: 2, tags: ["work", "status:canonical"], actorId: "u2", channel: "mcp", reason: "update", createdAt: windowEnd + MIN });
+      await sqlite.db.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(["edited", "status:canonical", "work"]), id).run();
+    }
+    const group = await discoverGroup();
+    expect(group.count).toBe(12);
+
+    const result = await undoGroup(env, identity, group.group, { actorId: "u1", channel: "mcp" }, CFG);
+
+    const byId = Object.fromEntries(result!.results.map(r => [r.id, r.result]));
+    for (const id of blocked) expect(byId[id]).toBe("changed_since");
+    // The old code stopped scanning the moment 5 (UNDO_GROUP_PAGE) blocked members had been
+    // reported, having advanced no further than index 5 -- and since that scan position is never
+    // persisted between calls, every later call re-examined the exact same 5 and could never reach
+    // an actionable member at all. This call must reach past all 6 blocked members and actually
+    // revert some of the remaining 6 actionable ones.
+    const reverted = result!.results.filter(r => r.result === "reverted");
+    expect(reverted.length).toBeGreaterThan(0);
+    expect(result!.remaining).toBeLessThan(6);
+  });
 });

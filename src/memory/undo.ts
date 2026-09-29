@@ -799,7 +799,13 @@ async function classifyMember(env: Env, id: string, decoded: DecodedGroup, cfg: 
     let meta: Record<string, unknown> = {};
     try { meta = JSON.parse(r.meta || "{}"); } catch { /* treated as no client / no target_seq */ }
     if (toVersion === undefined) {
-      if (r.created_at >= decoded.start && r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
+      // Codex review, T-0102 E1: decoded.start comes from the group's own audit-event timestamps
+      // (brief/changes.ts), stamped at its own, slightly later Date.now() call than the version
+      // row it describes -- a strict >= against the version's own created_at can then read the
+      // group's OLDEST member as older than the window it is actually in, and classifyMember
+      // never finds a toVersion for it at all (kind: "not_found", permanently excluded from the
+      // group). One millisecond of slack is enough to absorb that ordering, not a real window.
+      if (r.created_at >= decoded.start - 1 && r.channel === "mcp" && r.actor_id === decoded.actorId && safeClient(meta.client, cfg) === decoded.client) {
         toVersion = r.seq;
       }
       continue;
@@ -818,16 +824,27 @@ async function resolveVersionGroup(
 ): Promise<UndoGroupResult> {
   const results: { id: string; result: string }[] = [];
   let doneCount = 0;
+  // Codex review, T-0102 E2: only an ACTUAL revert (verdict "pending") spends this call's page
+  // budget now. The old bound (results.length, which also grew for "not_found"/"changed_since")
+  // stopped the scan the moment UNDO_GROUP_PAGE blocked members turned up -- and since `i` is
+  // local to this call, never persisted, the next call started over at ids[0] and hit the exact
+  // same blocked members again: more than UNDO_GROUP_PAGE permanently-blocked members ahead of
+  // any revertable one stalled the group forever. `i` still bounds the scan (ids.length, itself
+  // capped at UNDO_GROUP_MAX = 50 members), so a call that turns out fully blocked costs at most
+  // one classifyMember read per member -- bounded, not unbounded, and never worse than getting
+  // stuck.
+  let acted = 0;
   let i = 0;
-  for (; i < ids.length && results.length < UNDO_GROUP_PAGE; i++) {
+  for (; i < ids.length && acted < UNDO_GROUP_PAGE; i++) {
     const verdict = await classifyMember(env, ids[i], decoded, config, scope);
     if (verdict.kind === "done") { doneCount++; continue; }
     if (verdict.kind === "not_found" || verdict.kind === "changed_since") { results.push({ id: ids[i], result: verdict.kind }); continue; }
     const outcome = await revertEntry(env, identity, ids[i], change, config, verdict.toVersion, verdict.workspaceId, undefined, ctx);
     results.push({ id: ids[i], result: resultForStatus(outcome.status) });
+    acted++;
   }
   // Everything from i onward is still unexamined and stays actionable for the next call.
-  const remaining = ids.length - doneCount - results.length;
+  const remaining = ids.length - i;
   return { results, done: remaining === 0, remaining, group: groupKeyStr, capped, total: ids.length, family: decoded.family };
 }
 
