@@ -142,9 +142,6 @@ const OTHER_LANE_FILES = new Set([
   "src/capture/classify.ts", "src/capture/entry.ts", "src/capture/lifecycle.ts",
   "src/capture/share.ts", "src/capture/store.ts",
   "src/compression/nightly.ts",
-  // T-0102 (final cloud review, finding 7): lane S's own file (T-0089.4.3), not lane B's; its new
-  // inScope workspace semi-join reads entries/entries_trash for scoping only, no validity column.
-  "src/brief/changes.ts",
   "src/decisions/queries.ts",
   "src/entries/import.ts",
   "src/graph/edges.ts", "src/graph/pass.ts",

@@ -176,21 +176,19 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("changes rows_read against 5,00
       const lean = await measure(() => computeLeanBrief(env, ctx, auth));
       console.log(`R21 N=${N} rows_read REST /brief=${rest.rows} MCP brief=${mcp.rows} lean brief=${lean.rows}\nREST ${rest.detail}\nchanges=${JSON.stringify((rest.value as { changes: unknown }).changes)}`);
 
-      // T-0102 finding 7 traded this bound for correctness: the raw scan's own RAW_EVENT_SCAN_LIMIT
-      // (1,000 matching rows) still holds, but a workspace-scoped match is no longer guaranteed
-      // within the first RAW_EVENT_SCAN_LIMIT rows visited in date order -- the old, unscoped cap
-      // let another tenant's own burst in the window crowd the reader's own events out of it
-      // entirely (finding 7's own repro), silently. Fixing that means the scan must walk every
-      // non-matching row to confirm nothing is left to match once genuinely almost none of the
-      // window belongs to the reader, which this fixture (5,000 another-tenant events against 1 of
-      // the reader's own, in one 48h window) is an intentionally adversarial version of -- cost now
-      // scales with min(window activity, brain size) instead of a small constant. Still bounded
-      // (this is not unbounded, and D1's free tier is 5M rows/day), just not as cheap as the R21
-      // constant used to be. Measured / budget: 2k REST 20,602/23,000 MCP 14,716/16,500 lean
-      // 14,467/16,000; 10k REST 78,042/85,000 MCP 33,436/37,000 lean 32,227/35,500.
-      expect(rest.rows).toBeLessThanOrEqual(N === 2000 ? 23000 : 85000);
-      expect(mcp.rows).toBeLessThanOrEqual(N === 2000 ? 16500 : 37000);
-      expect(lean.rows).toBeLessThanOrEqual(N === 2000 ? 16000 : 35500);
+      // R22 (budget auditor MAJOR): RAW_EVENT_SCAN_LIMIT now caps the RAW, unscoped entry_events
+      // scan itself (at most 1,000 rows examined, in date order), with the entries/entries_trash
+      // join and workspace-scope filter applied strictly after -- one key lookup per already-capped
+      // row, so cost no longer depends on how much of the window belongs to another tenant, nor on
+      // brain size. This re-accepts finding 7's original crowd-out tradeoff (a window with over
+      // RAW_EVENT_SCAN_LIMIT other-tenant events can still crop the reader's own older events from
+      // the list; rawCapped/truncated says so honestly) in exchange for a bound that holds
+      // regardless of brain size or how adversarial the window's noise is. Measured / budget:
+      // 2k REST 9,591/10,500 MCP 3,705/4,100 lean 3,456/3,800;
+      // 10k REST 51,031/56,000 MCP 6,425/7,100 lean 5,216/5,750.
+      expect(rest.rows).toBeLessThanOrEqual(N === 2000 ? 10500 : 56000);
+      expect(mcp.rows).toBeLessThanOrEqual(N === 2000 ? 4100 : 7100);
+      expect(lean.rows).toBeLessThanOrEqual(N === 2000 ? 3800 : 5750);
       // Still finds the reader's own genuine change, unaffected by being outnumbered 5,000 to 1.
       expect((rest.value as { changes: { count: number } }).changes.count).toBe(1);
     } finally { await d1.close(); }

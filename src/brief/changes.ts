@@ -311,64 +311,74 @@ async function changeEventRows(
   const workspacesJson = JSON.stringify(workspaces);
   const eventFilter = `created_at > ?1 AND created_at <= ?2
        AND event IN ('held','released','updated','appended','status_changed','deleted','reverted')`;
-  // The workspace scope, pushed inside the capped subquery (see the comment above this function):
-  // an entry_id semi-join against entries and entries_trash, both indexed by workspace_id.
-  // Measured on workerd (an adversarial 5,000-events-in-one-other-workspace fixture,
-  // test/integration/brief-rows-read.workerd.test.ts's R21 suite): this UNION ALL semi-join reads
-  // fewer rows than the EXISTS-with-PK-equality form tried first (~7,000 vs ~10,000 per batch
-  // statement at N=2000) -- SQLite's plan for this shape apparently amortizes the workspace
-  // membership check better than two independent correlated EXISTS subqueries do. Either way,
-  // this trades bounded-but-blind cost (the old, unscoped cap) for correctness at a real cost
-  // when the window is genuinely dominated by another tenant's own activity: the scan must walk
-  // every non-matching row to confirm there is nothing left to match, since a match is no longer
-  // guaranteed within the first RAW_EVENT_SCAN_LIMIT rows read in date order.
-  // scope-checked: both branches carry their own workspace_id IN (json_each(?3)) clause, bound to
-  // the reader's own scoped workspace list -- assembled here as a fragment and interpolated into
-  // the two statements below, which check-scope.mjs's static scan cannot follow through the
-  // ${inScope} template interpolation.
-  const inScope = `entry_id IN (
-         SELECT id FROM entries WHERE workspace_id IN (SELECT value FROM json_each(?3))
-         UNION ALL
-         SELECT id FROM entries_trash WHERE workspace_id IN (SELECT value FROM json_each(?3))
-       )`;
+  // R22 (budget auditor MAJOR, on top of T-0102 finding 7): the workspace scope is checked per
+  // event row via a JOIN, not by matching entry_id against a subquery over the reader's WHOLE id
+  // list -- the earlier `entry_id IN (SELECT id FROM entries WHERE workspace_id IN (...) UNION
+  // ALL ...)` re-read every one of the reader's own entries/trash rows to build that list (twice
+  // per brief: once for the count probe, once for the main query), so cost grew with the size of
+  // the brain, not with RAW_EVENT_SCAN_LIMIT -- 20,158 rows at 10k memories with only 50 events in
+  // the window. RAW_EVENT_SCAN_LIMIT now caps the RAW, unscoped scan of entry_events itself (it
+  // carries no workspace column to scope against directly), and the entries/entries_trash join
+  // that resolves each of those (at most 1,000) rows' workspace runs strictly after, one PRIMARY
+  // KEY lookup per row -- cost is bounded by the cap and by key lookups, never by brain size.
+  // Reader's-own-events-crowded-out-by-noise (finding 7a's original repro) is the accepted cost of
+  // that bound: a window with over RAW_EVENT_SCAN_LIMIT other-tenant events can crop the reader's
+  // own older events from the "recent changes" list the same way an over-full window always could
+  // -- rawCapped/truncated says so honestly, and undoGroup's own membership (groupCandidates)
+  // re-derives from a narrow, group-specific window, not this 48-hour one, so undo itself is
+  // unaffected either way.
+  // scope-checked: entry_workspace_id, COALESCEd by the join below, is filtered against the
+  // reader's scope in the outer query's WHERE (json_each(?3)) -- deliberately not here, so the
+  // inner LIMIT bounds RAW rows examined, not rows matching that filter (see the comment above).
+  const scopedEvents = `
+         SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+                COALESCE(en.actor_id, t.actor_id) AS author_id,
+                COALESCE(en.workspace_id, t.workspace_id) AS entry_workspace_id,
+                COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
+                substr(COALESCE(en.content, t.content), 1, 160) AS preview,
+                COALESCE(en.tags, json_extract(t.row_json, '$.tags')) AS tags_json,
+                en.id AS live_id
+         FROM (
+           SELECT id, entry_id, event, payload, created_at, actor_id
+           FROM entry_events INDEXED BY idx_entry_events_created
+           WHERE ${eventFilter}
+           ORDER BY created_at ${order}
+           LIMIT ${RAW_EVENT_SCAN_LIMIT}
+         ) e
+         LEFT JOIN entries en ON en.id = e.entry_id
+         LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id`;
   // Q10 (T-0102 finding 7): a "held" event is otherwise visible workspace-wide (below), but a
   // teammate's TRASHED row must still only surface to whoever could restore it -- the same rule
   // trash-list.ts's trashRestoreClauseFor applies, collapsed into one cross-workspace OR since
   // this query (unlike listTrash) is not decomposed per workspace: admin sees everything, anyone
   // else only their own personal trash or a company row they personally deleted.
   const isAdmin = identity.role === "admin";
-  const trashVisible = isAdmin ? "1=1" : "(t.workspace_id = ?5 OR t.actor_id = ?6)";
+  // Trash-only columns are coalesced away by the join above, but when live_id IS NULL the row
+  // came from entries_trash, so entry_workspace_id/author_id ARE that trash row's own columns.
+  const trashVisible = isAdmin ? "1=1" : "(e.entry_workspace_id = ?5 OR e.author_id = ?6)";
   const trashBindings = isAdmin ? [] : [identity.personalWorkspaceId, identity.userId];
   const [countResult, mainResult] = await env.DB.batch([
     // A cheap, bounded probe: capped at RAW_EVENT_SCAN_LIMIT + 1 so it can say "at least that
-    // many raw events exist in the window" without ever reading more than that to say so.
+    // many raw events exist in the window" without ever reading more than that to say so. No join,
+    // no workspace scope: it returns a bare count, no row content, so nothing here needs scoping
+    // (scope.ts's rule is about rows reaching the response).
+    // scope-exempt: count-only, no entry_id/content/tags leaves this statement.
     env.DB.prepare(
       `SELECT COUNT(*) as raw_count FROM (
          SELECT 1 FROM entry_events INDEXED BY idx_entry_events_created
-         WHERE ${eventFilter} AND ${inScope} LIMIT ${RAW_EVENT_SCAN_LIMIT + 1}
+         WHERE ${eventFilter} LIMIT ${RAW_EVENT_SCAN_LIMIT + 1}
        )`,
-    ).bind(since, until, workspacesJson),
+    ).bind(since, until),
+    // scope-checked: inScope's COALESCE(...) IN (json_each(?3)) below, filtering the already-capped
+    // and already-joined rows from scopedEvents above.
     env.DB.prepare(
-      // scope-checked: the reader's scope clause is now applied to entry_id, inside the capped
-      // subquery, via the entries/entries_trash semi-join above -- entry_events itself carries no
-      // workspace column, so this is the earliest point a workspace filter can run at all.
       `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
-              COALESCE(en.actor_id, t.actor_id) AS author_id,
-              COALESCE(en.workspace_id, t.workspace_id) AS entry_workspace_id,
-              COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
-              substr(COALESCE(en.content, t.content), 1, 160) AS preview,
-              COALESCE(en.tags, json_extract(t.row_json, '$.tags')) AS tags_json
-       FROM (
-         SELECT id, entry_id, event, payload, created_at, actor_id FROM entry_events INDEXED BY idx_entry_events_created
-         WHERE ${eventFilter} AND ${inScope}
-         ORDER BY created_at ${order}
-         LIMIT ${RAW_EVENT_SCAN_LIMIT}
-       ) e
-       LEFT JOIN entries en ON en.id = e.entry_id
-       LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id
-       WHERE (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
-         AND (e.actor_id = ?4 OR COALESCE(en.actor_id, t.actor_id) = ?4 OR e.event = 'held')
-         AND (en.id IS NOT NULL OR ${trashVisible})
+              e.author_id, e.entry_workspace_id, e.source, e.preview, e.tags_json
+       FROM (${scopedEvents}) e
+       WHERE e.entry_workspace_id IN (SELECT value FROM json_each(?3))
+         AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
+         AND (e.actor_id = ?4 OR e.author_id = ?4 OR e.event = 'held')
+         AND (e.live_id IS NOT NULL OR ${trashVisible})
        ORDER BY e.created_at ${order}
        LIMIT 200`,
     ).bind(since, until, workspacesJson, identity.userId, ...trashBindings),
