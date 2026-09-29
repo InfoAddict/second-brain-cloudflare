@@ -179,22 +179,46 @@ export function trashManyStatements(
     /** Retraction hook statements (validity.ts, D-RET): run after the trash inserts, while the rows and their edges still exist. */
     hook?: D1PreparedStatement[];
     /**
-     * Codex review, T-0102 F2 (NIT): the workspaces the caller's own scoped read authorized this
-     * batch's ids under (forgetEntry: one, its authorizedWorkspaceId; trashMirroredEntries: every
-     * workspace `allowed`'s rows actually came from). Neither the trash INSERT nor the entries
-     * DELETE re-checked workspace_id before this, so a row that moved to a workspace outside what
-     * this batch was ever authorized for -- a share/unshare landing in the gap between the read
-     * and this commit -- was still trashed and deleted purely by id. Optional and additive: a
-     * caller that omits it keeps the pre-existing by-id-only behavior.
+     * Codex review, T-0102 F2 (NIT), then MAJOR (director follow-up after a cloud re-review): the
+     * exact (id, workspace) pairs the caller's own scoped read authorized this batch's rows
+     * under -- the same pairs `retractionHook` (validity.ts) already builds its own `authorized()`
+     * guard from, so every statement this batch runs, `meta.hook` included, is keyed on the
+     * identical guard rather than merely similar ones. A blanket "workspace is somewhere in this
+     * set" check (the F2 fix's own first version) does not: two rows read from two different
+     * allowed workspaces, then one moved into the other's between the read and this commit, still
+     * pass a set-membership check while `authorized()`'s own exact pair for it would not, so the
+     * hook silently skipped a row every other statement in the batch still processed -- the same
+     * class of half-applied batch D1 (undo.ts) closed. Optional and additive: a caller that omits
+     * it keeps the pre-existing by-id-only behavior.
      */
-    workspaceIds?: readonly string[];
+    workspacePairs?: readonly { id: string; workspaceId: string }[];
   },
 ): D1PreparedStatement[] {
   const all = [...plan.tier1, ...plan.tier2, ...plan.tier3];
   if (!all.length) return [];
   const stmts: D1PreparedStatement[] = [];
-  const workspaceGuardSql = (p: Params, alias: string) =>
-    meta.workspaceIds ? ` AND ${alias}.workspace_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(meta.workspaceIds))}))` : "";
+  const pairsJson = meta.workspacePairs ? JSON.stringify(meta.workspacePairs.map(x => [x.id, x.workspaceId])) : undefined;
+  /** For a statement directly on `entries` (aliased `alias`): its own row must be one of the
+   * authorized pairs. */
+  const entriesGuardSql = (p: Params, alias: string) =>
+    pairsJson
+      ? ` AND EXISTS (SELECT 1 FROM json_each(${p.add(pairsJson)}) k WHERE json_extract(k.value, '$[0]') = ${alias}.id AND json_extract(k.value, '$[1]') = ${alias}.workspace_id)`
+      : "";
+  /** For a statement on another table that references an entry via `idCols` (`entry_versions`,
+   * `edges`): the LIVE `entries` row for whichever id matches must still be at the pair's
+   * workspace -- not this table's own workspace_id column, which is a point-in-time copy
+   * (`entry_versions`: the workspace at change time; `edges`: denormalized at write time) that a
+   * race moving the live entry does not update, so checking it would not detect the same race the
+   * entries DELETE itself refuses on. Runs while `entries` still holds the row (this statement
+   * always lands before the entries DELETE in the batch). */
+  const referencedEntryGuardSql = (p: Params, idCols: readonly string[]) =>
+    // scope-checked: the EXISTS clause below IS the scope guard, assembled here in JS from
+    // meta.workspacePairs -- every call site interpolates it (or the "" no-op when there are no
+    // pairs to check).
+    pairsJson
+      ? ` AND EXISTS (SELECT 1 FROM entries en, json_each(${p.add(pairsJson)}) k
+            WHERE (${idCols.map(c => `en.id = ${c}`).join(" OR ")}) AND json_extract(k.value, '$[0]') = en.id AND json_extract(k.value, '$[1]') = en.workspace_id)`
+      : "";
   // nonce (last column, TRASH_COLUMNS): a fresh per-row identity (adv-final MAJOR 1), the same
   // randomblob-per-row pattern entry_events uses for its own id below — evaluated once per row
   // of the INSERT...SELECT, never the same value across a multi-row tier1/tier2 batch.
@@ -215,7 +239,7 @@ export function trashManyStatements(
       `INSERT INTO entries_trash (${TRASH_COLUMNS})
        SELECT e.id, e.workspace_id, e.actor_id, e.content, ${rowJsonSql("e")}, ${withEdges ? edgesJsonSql("e") : "'[]'"}, e.vector_ids,
               ${nowIdx}, ${actorIdx}, ${channelIdx}, ${reasonIdx}, lower(hex(randomblob(16)))
-         FROM entries e WHERE e.id IN (SELECT value FROM json_each(${idList}))${workspaceGuardSql(p, "e")}`,
+         FROM entries e WHERE e.id IN (SELECT value FROM json_each(${idList}))${entriesGuardSql(p, "e")}`,
     ).bind(...p.values()));
   };
   if (plan.tier1.length) insert(plan.tier1, true);
@@ -223,12 +247,18 @@ export function trashManyStatements(
   stmts.push(...(meta.hook ?? []));
   if (plan.tier3.length) {
     const p = new Params();
+    // Codex review, T-0102, director follow-up MAJOR: keyed on the same workspace guard as the
+    // trash INSERT and the entries DELETE below -- unguarded, this ran unconditionally even when
+    // a share/unshare race made the INSERT or the entries DELETE affect zero rows, wiping a live
+    // row's version history out from under it while the row itself stayed live (the batch
+    // half-applied, same class as D1).
     stmts.push(env.DB.prepare(
-      // scope-exempt: by-id: versions of entries the caller authorized; an oversized entry leaves no history behind.
-      // Guarded on the id not already being trashed: a losing tier-3 forget (its stale size read predates a
-      // shrink that let a racing forget trash the row normally) must not wipe the winner's trashed history.
+      // scope-exempt: by-id: versions of entries the caller authorized (plus referencedEntryGuardSql's
+      // own scope-checked EXISTS below); an oversized entry leaves no history behind. Guarded on the
+      // id not already being trashed: a losing tier-3 forget (its stale size read predates a shrink
+      // that let a racing forget trash the row normally) must not wipe the winner's trashed history.
       `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(plan.tier3))}))
-         AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id)`,
+         AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id)${referencedEntryGuardSql(p, ["entry_versions.entry_id"])}`,
     ).bind(...p.values()));
   }
   const ids = JSON.stringify(all);
@@ -237,7 +267,10 @@ export function trashManyStatements(
     const list = p.add(ids);
     stmts.push(env.DB.prepare(
       // scope-exempt: by-id cascade: edge endpoints of the rows being trashed
-      `DELETE FROM edges WHERE source_id IN (SELECT value FROM json_each(${list})) OR target_id IN (SELECT value FROM json_each(${list}))`,
+      // Codex review, T-0102, director follow-up MAJOR: same workspace guard as the rest of this batch,
+      // for the same reason as the version DELETE above -- an unguarded edges DELETE could not half-apply
+      // on its own, but running it while the entries DELETE was refused still orphaned a live row's edges.
+      `DELETE FROM edges WHERE (source_id IN (SELECT value FROM json_each(${list})) OR target_id IN (SELECT value FROM json_each(${list})))${referencedEntryGuardSql(p, ["edges.source_id", "edges.target_id"])}`,
     ).bind(...p.values()));
   }
   {
@@ -247,7 +280,7 @@ export function trashManyStatements(
       // validity: retraction-hooked (forget and the disconnect purge pass meta.hook, D-RET)
       // versioning: trash
       // scope-exempt: by-id delete: callers authorize the entries before building the batch
-      `DELETE FROM entries WHERE id IN (SELECT value FROM json_each(${idIdx}))${workspaceGuardSql(p, "entries")}`,
+      `DELETE FROM entries WHERE id IN (SELECT value FROM json_each(${idIdx}))${entriesGuardSql(p, "entries")}`,
     ).bind(...p.values()));
   }
   return stmts;
@@ -305,9 +338,9 @@ export async function trashMirroredEntries(
     const change = { actorId: auth.userId, channel: "rest" as const };
     // D-RET restore rule only (P10): what a purged mirror row had replaced is current again.
     cfg ??= await resolveConfig(env);
-    const hook = retractionHook(env, allowed.map((r) => ({ id: r.id, workspaceId: r.workspace_id ?? "" })), () => "1", change, cfg, now);
-    const workspaceIds = [...new Set(allowed.map((r) => r.workspace_id ?? ""))];
-    const batchResults = await env.DB.batch(trashManyStatements(env, plan, { reason: "disconnect", change, now, hook: hook.statements, workspaceIds }));
+    const workspacePairs = allowed.map((r) => ({ id: r.id, workspaceId: r.workspace_id ?? "" }));
+    const hook = retractionHook(env, workspacePairs, () => "1", change, cfg, now);
+    const batchResults = await env.DB.batch(trashManyStatements(env, plan, { reason: "disconnect", change, now, hook: hook.statements, workspacePairs }));
     await auditValidity(env, change, hook.read(batchResults, trashHookOffset(plan)));
     // `changes` on a DELETE FROM entries is not a reliable count here: real D1 folds in every
     // FTS/entry_counts trigger row it fired alongside the entries row (a single delete reported

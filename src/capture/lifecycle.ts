@@ -57,7 +57,7 @@ export async function forgetEntry(
   // D-RET: the rows this one closed reopen, in the same batch, before its edges and row are deleted.
   // The dependent cascade runs for a person's forget only; bulk integration removals apply the restore rule alone (P10).
   const hook = retractionHook(env, [{ id, workspaceId: row.workspace_id ?? "" }], () => "1", change, opts.config, now, { cascade: opts.reason === "forget" });
-  const results = await env.DB.batch(trashManyStatements(env, plan, { reason: opts.reason, change, now, hook: hook.statements, workspaceIds: [authorizedWorkspaceId] }));
+  const results = await env.DB.batch(trashManyStatements(env, plan, { reason: opts.reason, change, now, hook: hook.statements, workspacePairs: [{ id, workspaceId: row.workspace_id ?? "" }] }));
   // A racing deleter removed it between the read and the batch: it owns the cleanup and the audit.
   if (changesOf(results[results.length - 1]) === 0) return { status: "not_found" };
   const done = hook.read(results, trashHookOffset(plan));
