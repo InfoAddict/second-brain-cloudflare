@@ -306,7 +306,7 @@ describe("capture receipts", () => {
 
   it("explains an outcome rather than only labelling it", () => {
     expect(headline({ action: "merged" })).toContain("You had written about this before");
-    expect(headline({ kept_canonical: "abc" })).toContain("kept unconfirmed");
+    expect(headline({ kept_canonical: "abc" })).toContain("saved as unconfirmed");
   });
 });
 
