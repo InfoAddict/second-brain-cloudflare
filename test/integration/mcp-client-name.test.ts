@@ -127,6 +127,25 @@ describe("MCP write tools record the calling client", () => {
     expect(meta).not.toHaveProperty("client");
   });
 
+  // Director, round 3: the fix moved from store.ts's one-off into selectList (versions.ts), shared
+  // by every snapshotStatement/guardedSnapshotManyStatement caller -- this drives three of them
+  // through real MCP tools (update: capture/store.ts, set_status: capture/lifecycle.ts, resolve
+  // action=done: memory/actions.ts) rather than hand-seeding a version row, so a regression in any
+  // one writer, not just store.ts's, fails here.
+  it("every MCP-reachable version write carries meta.client: update, set_status, and an action", async () => {
+    const id = "e-structural-client";
+    sqlite.seed({ id, content: "a task to resolve", createdAt: Date.now(), tags: ["task"] });
+
+    await call("update", { id, content: "a task to resolve, edited" }, { clientName: "Test Client" });
+    expect(await latestVersionMeta(id)).toMatchObject({ client: "Test Client" });
+
+    await call("set_status", { id, status: "canonical" }, { clientName: "Test Client" });
+    expect(await latestVersionMeta(id)).toMatchObject({ client: "Test Client" });
+
+    await call("resolve", { id, action: "done" }, { clientName: "Test Client" });
+    expect(await latestVersionMeta(id)).toMatchObject({ client: "Test Client" });
+  });
+
   it("set_status records the calling client", async () => {
     const id = "e-status";
     sqlite.seed({ id, content: "original text", createdAt: Date.now() });

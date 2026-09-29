@@ -485,8 +485,6 @@ export function buildMcpServer(
       if (!identity) return { content: [{ type: "text", text: "Resolve requires an authenticated identity." }] };
       const id = rawId.trim();
       if (!id) return { content: [{ type: "text", text: "id is required" }] };
-      // Carried on the ChangeContext for whenever the version/history writers this
-      // feeds (src/memory/actions.ts, Builder A's) start reading it — not yet.
       const client = await resolveClient(extra);
       if (action === "confirm_insight" || action === "dismiss_insight") {
         const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, vector_ids") as (Record<string, any> | null);

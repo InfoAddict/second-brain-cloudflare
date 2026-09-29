@@ -484,9 +484,7 @@ export async function updateEntryContent(
       committed = await env.DB.batch([
         snapshotStatement(env, {
           entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags,
-          // history-view.ts / mcp/server.ts's historyActorVia both read this off the version, not
-          // just the audit event that lands with it (W22/W25 gap: it was event-only before).
-          meta: { event_id: eventId, ...(change.client ? { client: change.client } : {}) }, now,
+          meta: { event_id: eventId }, now,
           // ADV-10: readContent is this write's own base, right here in JS — its UTF-16 length is the
           // exact boundary a later reconstruction needs, at zero cost. Stored only when this row
           // actually lands as a delta (buildSnapshot nulls it out on a full copy, same as prior_length).

@@ -89,6 +89,14 @@ function selectList(
   p: Params, delta: string,
   s: { reason: VersionReason; change: ChangeContext; meta?: Record<string, unknown>; metaSql?: string; now: number; priorLengthUtf16?: number },
 ): string {
+  // Every version's own meta carries the calling client, the same way its entry_events row
+  // already does -- history-view.ts's changeItems and every reader of it (mcp/server.ts's
+  // historyActorVia, history-view.js's item.client) read it off the version, not just the event.
+  // A caller's own explicit meta.client (none today) always wins; metaSql callers build their own
+  // JSON in SQL and are responsible for their own client field, same as before this comment.
+  const meta = s.metaSql === undefined && s.change.client && (s.meta === undefined || s.meta.client === undefined)
+    ? { ...s.meta, client: s.change.client }
+    : s.meta;
   // scope-exempt: by-id: callers authorize the entry (or entries) before building the batch
   return `SELECT e.id, e.workspace_id,
        ${NEWEST_SEQ} + 1,
@@ -97,7 +105,7 @@ function selectList(
        CASE WHEN ${delta} THEN ${s.priorLengthUtf16 !== undefined ? p.add(s.priorLengthUtf16) : "NULL"} ELSE NULL END,
        e.tags,
        json_object('when_at', e.when_at, 'when_kind', e.when_kind, 'when_source', e.when_source, 'when_label', e.when_label, 'valid_from', e.valid_from, 'valid_until', e.valid_until),
-       ${p.add(s.change.actorId)}, ${p.add(s.change.channel)}, ${p.add(s.reason)}, ${s.metaSql ?? p.add(JSON.stringify(s.meta ?? {}))},
+       ${p.add(s.change.actorId)}, ${p.add(s.change.channel)}, ${p.add(s.reason)}, ${s.metaSql ?? p.add(JSON.stringify(meta ?? {}))},
        COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id AND v.seq = (SELECT MAX(x.seq) FROM entry_versions x WHERE x.entry_id = e.id)),
                 COALESCE(e.updated_at, e.created_at)),
        MAX(${p.add(s.now)}, COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id AND v.seq = (SELECT MAX(x.seq) FROM entry_versions x WHERE x.entry_id = e.id)),
