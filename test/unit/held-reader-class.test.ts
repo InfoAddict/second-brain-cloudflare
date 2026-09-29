@@ -34,8 +34,10 @@ const JOINS_ENTRIES = /\bJOIN entries\b/;
  * it earns another pinned exemption, not a silent miss.
  */
 export const PROJECTS_CONTENT = /content|preview/;
-/** The hold filter itself, literal or the shared fragment (any alias): NOT_HELD_SQL interpolated is `${NOT_HELD_SQL}` after an alias dot, or the literal LIKE it expands to. */
-const HOLD_FILTER = /\$\{NOT_HELD_SQL\}|NOT LIKE '%"quarantine:/;
+/** The hold filter itself, literal or the shared fragment (any alias): NOT_HELD_SQL interpolated
+ * is `${NOT_HELD_SQL}` after an alias dot, `${notHeldSqlFor("alias")}` for a self-join where a
+ * bare `tags` would be ambiguous (Codex review, T-0102 A), or the literal LIKE either expands to. */
+const HOLD_FILTER = /\$\{NOT_HELD_SQL\}|\$\{notHeldSqlFor\(|NOT LIKE '%"quarantine:/;
 
 interface Hit { file: string; line: number; sql: string }
 

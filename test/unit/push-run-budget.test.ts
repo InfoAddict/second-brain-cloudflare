@@ -48,9 +48,12 @@ function seedDue(s: SqliteD1, id: string, workspaceId = "", whenAt = Date.now() 
     .bind(workspaceId, whenAt, id).run();
 }
 
-/** Marks a due row held (quarantine:<reason>), as Q3's contradiction/quarantine path does. */
-function holdEntry(s: SqliteD1, id: string, reason = "needs-review") {
-  s.db.prepare(`UPDATE entries SET tags = json_insert(tags, '$[#]', ?) WHERE id = ?`)
+/** Marks a due row held (quarantine:<reason> paired with status:draft), as withHold does and as
+ * Q3's contradiction/quarantine path does.
+ * Codex review, T-0102 A: isHeld now requires that exact pairing -- a bare quarantine:-prefixed
+ * tag alone, with no status:draft alongside it, is a 3.7 user tag, not a hold. */
+function holdEntry(s: SqliteD1, id: string, reason = "instruction") {
+  s.db.prepare(`UPDATE entries SET tags = json_insert(json_insert(tags, '$[#]', ?), '$[#]', 'status:draft') WHERE id = ?`)
     .bind(`${QUARANTINE_TAG_PREFIX}${reason}`, id).run();
 }
 

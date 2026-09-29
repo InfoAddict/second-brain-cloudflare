@@ -1,7 +1,7 @@
 // Track 4 (self-protecting) shared contract: the quarantine tag namespace,
 // the canonical-edit label, and the caller-tag guard for both. A change to
 // this file is a spec revision, not a lane decision (16-t3-t4-trust-spec.md 6.1).
-import { withStatus } from "../memory/status";
+import { getStatus, withStatus } from "../memory/status";
 
 export const QUARANTINE_TAG_PREFIX = "quarantine:";
 export const EDITED_CANONICAL_TAG_PREFIX = "edited-canonical:";
@@ -9,25 +9,44 @@ export const EDITED_CANONICAL_TAG_PREFIX = "edited-canonical:";
 export type HoldReason = "instruction" | "hidden" | "burst" | "capsule" | "too_long";
 const HOLD_REASONS: readonly HoldReason[] = ["instruction", "hidden", "burst", "capsule", "too_long"];
 
+/** Escapes `%`, `_` and `\` for a SQLite `LIKE ... ESCAPE '\'` pattern, so `too_long`'s literal
+ * underscore can't act as LIKE's single-character wildcard and widen the match. */
+function likeLiteral(s: string): string {
+  return s.replace(/[\\%_]/g, c => `\\${c}`);
+}
+
 /**
- * Excludes a row only for the five hold tags this Worker itself writes (Codex review, T-0102):
- * matches `isHeld`/`heldReason` exactly, so a 3.7 brain's own `quarantine:2020` or
- * `quarantine:review` tag — predating this namespace, never one of the five reasons — is never
- * excluded from recall or re-indexing. The only wildcards are the leading and trailing `%` around
- * each literal reason, which match the JSON array's neighbours; no reason string carries a LIKE
- * metacharacter.
+ * Excludes a row when EITHER of two things is true (Codex review, T-0102):
+ *
+ * 1. It carries a `quarantine:<reason>` tag matching one of the five exact reasons this Worker
+ *    ever writes, whatever its other tags — a recognized reason is never coincidental (see
+ *    `heldReason`), so it holds a row unconditionally, the same as `isInsightEligible`'s "held
+ *    whatever its other tags" contract.
+ * 2. It carries ANY `quarantine:`-prefixed tag paired with `status:draft` in the same row — the
+ *    exact shape `withHold` always writes together. Broader than (1) on purpose: a row shaped
+ *    like this Worker's own hold but carrying a reason this build doesn't recognize (a newer
+ *    version's sixth reason, or a forged tag) still holds out of caution, matching the
+ *    agent-facing reader's `heldReason(tags) ?? "unrecognized"` fallback (src/mcp/server.ts).
+ *
+ * A 3.7 brain's own `quarantine:2020` or `quarantine:review` tag matches neither: "2020" and
+ * "review" are not recognized reasons, and pre-4.0 writers never paired either with status:draft.
+ * That tag stays an ordinary user tag.
  *
  * Starts with the bare column name `tags`, like the single-condition form this replaces, so every
  * existing call site's `${NOT_HELD_SQL}` (unqualified, one `entries`-shaped table in scope) still
  * reads correctly. A query that joins two tag-bearing tables under aliases cannot safely splice
  * this in more than once with only the first `tags` qualified — use `notHeldSqlFor(alias)` there.
  */
-export const NOT_HELD_SQL = HOLD_REASONS.map(r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r}"%'`).join(" AND ");
+export const NOT_HELD_SQL = `${HOLD_REASONS.map(
+  r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${likeLiteral(r)}"%' ESCAPE '\\'`,
+).join(" AND ")} AND (tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%' OR tags NOT LIKE '%"status:draft"%')`;
 
 /** `NOT_HELD_SQL`, with every `tags` reference qualified by `alias` — for a query where more than
  * one tag-bearing table is in scope (a self-join) and a bare `tags` would be ambiguous. */
 export function notHeldSqlFor(alias: string): string {
-  return HOLD_REASONS.map(r => `${alias}.tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r}"%'`).join(" AND ");
+  return `${HOLD_REASONS.map(
+    r => `${alias}.tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${likeLiteral(r)}"%' ESCAPE '\\'`,
+  ).join(" AND ")} AND (${alias}.tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%' OR ${alias}.tags NOT LIKE '%"status:draft"%')`;
 }
 const EDITED_CANONICAL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -46,14 +65,15 @@ export function isEditedCanonicalDateValue(value: string): boolean {
 }
 
 /**
- * True when any tag holds the row out of recall — a tag matching `quarantine:<recognized
- * reason>` exactly, never a bare `quarantine:` prefix. A 3.7 brain could carry a tag like
- * `quarantine:2020` or `quarantine:review` of its own, predating this namespace entirely; that
- * tag stays an ordinary user tag; only the five reasons this Worker itself writes ever hold a
- * row. Reuses heldReason's own exact match rather than duplicating it (Codex review, T-0102).
+ * True when a row is held out of recall: `heldReason` recognizes its reason (unconditional — see
+ * `NOT_HELD_SQL`'s own comment for why), or it carries some `quarantine:`-prefixed tag paired with
+ * `status:draft` in the same row (defense in depth for an unrecognized reason). A 3.7 brain's own
+ * `quarantine:2020` or `quarantine:review` tag matches neither and is never held.
  */
 export function isHeld(tags: readonly string[]): boolean {
-  return heldReason(tags) !== null;
+  if (heldReason(tags) !== null) return true;
+  if (getStatus(tags) !== "draft") return false;
+  return tags.some(t => isTagString(t) && t.trim().toLowerCase().startsWith(QUARANTINE_TAG_PREFIX));
 }
 
 /**

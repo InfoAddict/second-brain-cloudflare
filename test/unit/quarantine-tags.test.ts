@@ -69,25 +69,41 @@ describe("public/utils.js hides both prefixes", () => {
   });
 });
 
-describe("NOT_HELD_SQL contains no LIKE wildcard other than the outer %", () => {
-  it("matches the exact literal", () => {
-    expect(NOT_HELD_SQL).toBe(`tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%'`);
+describe("NOT_HELD_SQL excludes a row when heldReason recognizes it, or quarantine: pairs with status:draft", () => {
+  it("matches the exact literal: the five exact-reason clauses ANDed, then ANDed with the pairing OR", () => {
+    const reasons = ["instruction", "hidden", "burst", "capsule", "too_long"];
+    const exactReasons = reasons.map(r => `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}${r.replace("_", "\\_")}"%' ESCAPE '\\'`).join(" AND ");
+    expect(NOT_HELD_SQL).toBe(`${exactReasons} AND (tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%' OR tags NOT LIKE '%"status:draft"%')`);
   });
 
-  it("carries no underscore or bound placeholder", () => {
-    expect(NOT_HELD_SQL).not.toContain("_");
+  it("carries no bound placeholder", () => {
     expect(NOT_HELD_SQL).not.toContain("?");
   });
 
-  it("carries exactly two percent signs, the leading and trailing wildcards", () => {
-    expect(NOT_HELD_SQL.match(/%/g)?.length).toBe(2);
+  it("escapes too_long's underscore, so it can't act as LIKE's single-character wildcard", () => {
+    const tooLongClause = NOT_HELD_SQL.split(" AND ").find(c => c.includes("too"));
+    expect(tooLongClause).toContain("too\\_long");
+    expect(tooLongClause).toContain("ESCAPE '\\'");
   });
 });
 
 describe("isHeld / heldReason / withHold", () => {
-  it("isHeld is false with no quarantine tag and true with one", () => {
+  it("isHeld is true for a recognized reason unconditionally, whatever its other tags (a recognized reason is never coincidental)", () => {
     expect(isHeld(["work", "status:canonical"])).toBe(false);
     expect(isHeld(["work", `${QUARANTINE_TAG_PREFIX}instruction`])).toBe(true);
+    expect(isHeld(["work", `${QUARANTINE_TAG_PREFIX}instruction`, "status:canonical"])).toBe(true);
+    expect(isHeld(["work", `${QUARANTINE_TAG_PREFIX}instruction`, "status:draft"])).toBe(true);
+  });
+
+  it("isHeld is true for an unrecognized reason only when status:draft is paired -- defense in depth for a future reason or a forged tag", () => {
+    expect(isHeld([`${QUARANTINE_TAG_PREFIX}some-future-reason`, "status:draft"])).toBe(true);
+    expect(isHeld([`${QUARANTINE_TAG_PREFIX}some-future-reason`])).toBe(false);
+    expect(heldReason([`${QUARANTINE_TAG_PREFIX}some-future-reason`, "status:draft"])).toBeNull();
+  });
+
+  it("a 3.7 legacy tag that merely shares the quarantine: prefix, an unrecognized reason never paired with status:draft, is not held", () => {
+    expect(isHeld(["quarantine:2020", "outcome:won"])).toBe(false);
+    expect(isHeld(["quarantine:review"])).toBe(false);
   });
 
   it("heldReason reads the recognized reason and is null otherwise", () => {

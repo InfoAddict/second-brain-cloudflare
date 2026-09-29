@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (232 queries, 115 exceptions, 32 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (237 queries, 117 exceptions, 35 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1513,7 +1513,11 @@ describe("the checker over the real source tree", () => {
     // MINOR/MAJOR follow-up: lowestQualifyingVersion's separate scope-exempt lookup merged into
     // classifyMember's single scope-checked chain scan (undo.ts), which now also carries the
     // actor check that closes the widened-group-key MAJOR. Net one fewer statement, not a new one.
-    ).toEqual({ queries: 236, exempt: 116, checked: 35, outerJoin: 1 });
+    // Deliberate: +1 query, +1 documented exception (236/116/35 -> 237/117/35) for the Codex
+    // cross-vendor review (T-0102 B3, src/entries/import.ts): orphanEventsDelete clears an
+    // imported id's orphaned entry_events the same way orphanVersionsDelete already clears its
+    // orphaned entry_versions, scope-exempt by id for the same reason.
+    ).toEqual({ queries: 237, exempt: 117, checked: 35, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
