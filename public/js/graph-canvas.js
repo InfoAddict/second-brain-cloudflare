@@ -401,7 +401,14 @@ function initGraphSim(canvas, nodes, edges) {
     return t.length > 22 ? t.slice(0, 22).trimEnd() + '…' : t
   }
   // A rounded label pill centered horizontally at cx, with its top at topY (world coords).
+  //
+  // Theme-aware (T-0101.6.1 UI review, graph-superseded dark mode): a light pill lost
+  // almost all contrast against the dark canvas once a dimmed node's own alpha stacked on
+  // top of the pill's own translucency, so the pill flips to a dark chip with light text in
+  // dark mode, the same ink the rest of draw() already uses (data-theme), rather than one
+  // constant light-mode treatment regardless of theme.
   function labelPill(text, cx, topY, emphasize, alpha) {
+    const darkTheme = document.documentElement.getAttribute('data-theme') === 'dark'
     ctx.font = (emphasize ? '600 ' : '') + '11px "Geist", system-ui, sans-serif'
     const tw = ctx.measureText(text).width
     const padX = 5,
@@ -410,7 +417,9 @@ function initGraphSim(canvas, nodes, edges) {
     const x = cx - tw / 2 - padX
     const w = tw + padX * 2
     ctx.globalAlpha = alpha
-    ctx.fillStyle = emphasize ? 'rgba(252,251,247,0.97)' : 'rgba(252,251,247,0.82)'
+    ctx.fillStyle = darkTheme
+      ? (emphasize ? 'rgba(40,38,36,0.97)' : 'rgba(40,38,36,0.88)')
+      : (emphasize ? 'rgba(252,251,247,0.97)' : 'rgba(252,251,247,0.82)')
     ctx.beginPath()
     ctx.moveTo(x + rr, topY)
     ctx.arcTo(x + w, topY, x + w, topY + h, rr)
@@ -418,7 +427,9 @@ function initGraphSim(canvas, nodes, edges) {
     ctx.arcTo(x, topY + h, x, topY, rr)
     ctx.arcTo(x, topY, x + w, topY, rr)
     ctx.fill()
-    ctx.fillStyle = emphasize ? '#161616' : '#68635f'
+    ctx.fillStyle = darkTheme
+      ? (emphasize ? '#f7f5f2' : '#cfc9c2')
+      : (emphasize ? '#161616' : '#68635f')
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(text, cx, topY + h / 2)
@@ -487,11 +498,26 @@ function initGraphSim(canvas, nodes, edges) {
     ctx.setLineDash([])
     for (const n of nodes) {
       const r = nodeRadius(n)
-      ctx.globalAlpha = isDimmedGraphNode(n) ? 0.4 : 1
+      const dimmed = isDimmedGraphNode(n)
+      ctx.globalAlpha = dimmed ? 0.4 : 1
       ctx.fillStyle = graphNodeColor(n)
       ctx.beginPath()
       ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
       ctx.fill()
+      // T-0101.6.1 UI review: opacity alone is a color-only cue (invisible to a contrast
+      // checker, and easy to miss at a glance); a dashed ring reads as "replaced" without
+      // relying on the viewer telling 40% apart from 100%.
+      if (dimmed) {
+        ctx.globalAlpha = 0.7
+        ctx.setLineDash([2 / cam.scale, 2 / cam.scale])
+        ctx.strokeStyle = inkHex
+        ctx.lineWidth = 1 / cam.scale
+        ctx.beginPath()
+        ctx.arc(n.x, n.y, r + 1.5, 0, Math.PI * 2)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.globalAlpha = dimmed ? 0.4 : 1
+      }
       // Shared-with-the-team marker: an outline, not a fill or a hue — fill colour
       // is already the cluster palette, so a shared-vs-personal hue would collide
       // with the topic key the canvas is built around. Deliberately thinner, more
@@ -615,10 +641,14 @@ function initGraphSim(canvas, nodes, edges) {
     // fixed while the graph pans/zooms. Ivory pill + dark text reads on both themes.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     const hasSharedNode = nodes.some((n) => n.workspace === 'company')
+    // T-0101.6.1 UI review: a graph of nothing but replaced/ended nodes (no clusters, no
+    // shared node) still draws the dashed ring on the canvas, and needs a key for it too -
+    // the legend cannot be gated on cluster rows or the shared ring alone.
+    const hasDimmedNode = nodes.some((n) => isDimmedGraphNode(n))
     // A graph of nothing but loose (uncategorised) shared nodes has no cluster
     // rows, but the shared-with-the-team ring is still drawn on the canvas and
     // still needs a key — the legend cannot be gated on cluster rows alone.
-    if (clusterLegend.length || hasSharedNode) {
+    if (clusterLegend.length || hasSharedNode || hasDimmedNode) {
       // The legend is an overlay sitting on top of the graph, so its size is a claim
       // on the canvas, not on the window. Bounding it by available height alone was
       // wrong: a phone is tall, so all two dozen rows fitted and buried most of the
@@ -640,6 +670,11 @@ function initGraphSim(canvas, nodes, edges) {
       if (hasSharedNode) {
         rows.push({ label: t('graph.sharedLegend'), color: inkHex, count: '', ring: true })
       }
+      // The dashed ring drawn on every dimmed (replaced/ended) node needs its own key, the
+      // same way the shared-with-the-team ring above already has one.
+      if (hasDimmedNode) {
+        rows.push({ label: t('validity.chipReplaced'), color: inkHex, count: '', ring: true, dashed: true })
+      }
       ctx.font = '600 11px "Geist", system-ui, sans-serif'
       let maxW = 0
       for (const r of rows) maxW = Math.max(maxW, ctx.measureText(r.label).width + ctx.measureText(String(r.count)).width)
@@ -660,9 +695,11 @@ function initGraphSim(canvas, nodes, edges) {
         ctx.beginPath()
         ctx.arc(10 + padX + sw / 2, y, sw / 2, 0, Math.PI * 2)
         if (r.ring) {
+          if (r.dashed) ctx.setLineDash([2, 2])
           ctx.strokeStyle = r.color
           ctx.lineWidth = 1.5
           ctx.stroke()
+          ctx.setLineDash([])
         } else {
           ctx.fillStyle = r.color
           ctx.fill()
