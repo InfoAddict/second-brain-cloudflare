@@ -168,7 +168,13 @@ async function releaseHeldAfterEdit(
   }
 
   const now = Date.now();
-  const casColumns = { tags: row.tags, workspace_id: authorizedWorkspaceId, vector_ids: row.vector_ids ?? null };
+  // Codex review, T-0102 D2: content added to the guard. Content is never touched by a release
+  // (the comment above this function says so), but the re-embed above ran against the content
+  // THIS call read -- a concurrent edit that changed content between that read and this commit
+  // would otherwise still pass (tags/workspace/vector_ids unchanged) and release text nobody
+  // reviewed: the re-embedded vectors, and the released tags, for a version of the row that no
+  // longer exists.
+  const casColumns = { tags: row.tags, content: row.content, workspace_id: authorizedWorkspaceId, vector_ids: row.vector_ids ?? null };
   const p = new Params();
   const tagsIdx = p.add(JSON.stringify(releasedTags));
   const vectorIdsIdx = p.add(JSON.stringify(newVectorIds));
@@ -457,10 +463,29 @@ export async function revertEntry(
   const hookRow = [{ id, workspaceId: authorizedWorkspaceId }];
   const retraction = retracting ? retractionHook(env, hookRow, landed, change, config, now, { cascade: true }) : null;
   const unretraction = undeprecating ? unretractionHook(env, hookRow, landed, change, config, now, { cascade: true }) : null;
+  // Round 6: replacing vector_ids also pins the value this undo read, so the row decides which
+  // upload won and the old ids retired below are exactly the ones this commit replaced. Read here,
+  // ahead of revertGuard below, so the guard can pin it too.
+  const readVectorIds = row.vector_ids ?? "[]";
   // Pinned at authorization (the caller's own scoped read), never at the write: a share/unshare
   // writes no version, so without this a concurrent move leaves MAX(seq) unchanged and an admin's
   // undo can commit into the row after it left their reach (U3, R2-7, Class 1).
-  const workspaceGuard = (guardP: Params) => buildCasGuard(guardP, { workspace_id: authorizedWorkspaceId });
+  //
+  // Codex review, T-0102 D1: the SAME guard the UPDATE uses, not a lighter one just for the
+  // snapshot. The snapshot's own guard used to be workspace_id alone, while the UPDATE also
+  // pinned vector_ids whenever this revert touches the vector index (nextVectorIds !== undefined)
+  // -- a concurrent re-embed that changed vector_ids between this read and the commit left the
+  // snapshot (workspace unchanged) landing while the UPDATE's own vector_ids pin made it lose,
+  // half-applying the revert: a phantom "revert" version in the history with the row's actual
+  // content and tags never touched. Every statement downstream of ownSnapshotLandedSql (the
+  // UPDATE, the retract/unretract hooks at `landed` above, the merge-recreate inserts below)
+  // trusts that a landed snapshot means a real, consistent revert; that is only true once the
+  // snapshot cannot land without the UPDATE being ABLE to land right behind it.
+  const revertGuard = (guardP: Params) => {
+    const cols: Record<string, unknown> = { workspace_id: authorizedWorkspaceId };
+    if (nextVectorIds !== undefined) cols.vector_ids = readVectorIds;
+    return buildCasGuard(guardP, cols);
+  };
   const p = new Params();
   // The when_* columns are set only when this revert is actually restoring the date. Rebinding them
   // from this call's own stale JS read, as every other column here does, would silently erase a date
@@ -472,14 +497,10 @@ export async function revertEntry(
     ? `, valid_from = ${p.add(nextValidity!.valid_from ?? null)}, valid_until = ${p.add(nextValidity!.valid_until ?? null)}`
     : "";
   const vectorIdsSet = nextVectorIds !== undefined ? `, vector_ids = ${p.add(nextVectorIds)}` : "";
-  // Round 6: replacing vector_ids also pins the value this undo read, so the row decides which upload
-  // won and the old ids retired below are exactly the ones this commit replaced.
-  const readVectorIds = row.vector_ids ?? "[]";
-  const vectorIdsGuard = nextVectorIds !== undefined ? ` AND e.vector_ids = ${p.add(readVectorIds)}` : "";
   // updated_at clamped strictly past its own previous value (the digest mark guard trusts it
   // plus byte length; a same-millisecond, same-length revert with no clamp would leave it unmoved).
   // versioning: snapshot
-  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = MAX(${p.add(now)}, COALESCE(e.updated_at, e.created_at) + 1)${vectorIdsSet}${whenSet}${validitySet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)}${vectorIdsGuard} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
+  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = MAX(${p.add(now)}, COALESCE(e.updated_at, e.created_at) + 1)${vectorIdsSet}${whenSet}${validitySet} WHERE e.id = ${p.add(id)} AND ${revertGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
   // Embedded before the batch, like the main content above, so the insert below can carry its own
   // vector_ids the way restoreEntry does (U14). Each insert is guarded by the SAME "this request's own
@@ -552,7 +573,7 @@ export async function revertEntry(
       snapshotStatement(env, {
         entryId: id, reason: "revert", change,
         content: contentChanged ? { kind: "next", content: restoredContent } : { kind: "unchanged" },
-        nextTags: restoredTags, nextWhen, nextState: nextValidity, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
+        nextTags: restoredTags, nextWhen, nextState: nextValidity, skipNoOp: false, expectNewestSeq: newest.seq, guard: revertGuard,
         // Recorded whenever this revert restores the date, so a later undo of THIS version (a redo)
         // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
         // recreated_incoming carries only ids and which merge each belongs to (never content, never

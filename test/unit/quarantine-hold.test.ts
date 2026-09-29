@@ -45,12 +45,16 @@ describe("holdStatements emits snapshot, guarded tags UPDATE with vector_ids '[]
     const snapshot = vi.fn((_env: Env, s: HoldSnapshotInput<typeof change>) => ({ kind: "snapshot", s }) as unknown as D1PreparedStatement);
     const prune = vi.fn((_env: Env, id: string, keep: number) => ({ kind: "prune", id, keep }) as unknown as D1PreparedStatement);
     const heldTags = heldTagsFor(["work"], ["instruction"]);
+    // Codex review, T-0102 D3: the same guard reference must reach BOTH the snapshot and the
+    // UPDATE below, or a lost compare-and-set on the UPDATE leaves a phantom hold-version row
+    // whose guard let it land unconditionally.
+    const guard = (p: { add(v: unknown): string }) => `updated_at = ${p.add(123)} AND actor_id = ${p.add("u-1")}`;
 
     const stmts = holdStatements(env, { snapshotStatement: snapshot, pruneStatement: prune, versionKeep: 20 }, {
       entryId: "e-1", reasons: ["instruction", "hidden"], score: 1.8,
       signals: [{ id: "I4", weight: 0.6 }, { id: "I3", weight: 0.8 }, { id: "H3", weight: 0.6 }],
       change, heldTags, now: 1_790_000_000_000,
-      guard: p => `updated_at = ${p.add(123)} AND actor_id = ${p.add("u-1")}`,
+      guard,
     });
 
     expect(stmts).toHaveLength(3);
@@ -59,6 +63,7 @@ describe("holdStatements emits snapshot, guarded tags UPDATE with vector_ids '[]
       entryId: "e-1", reason: "status", change, content: { kind: "unchanged" }, nextTags: heldTags,
       meta: { hold: { reasons: ["instruction", "hidden"], score: 1.8, signals: ["I4", "I3", "H3"] } },
       now: 1_790_000_000_000,
+      guard,
     });
 
     expect(prepared).toHaveLength(1);

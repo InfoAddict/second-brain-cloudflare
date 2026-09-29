@@ -16,6 +16,7 @@ import { withVolatility, type Volatility } from "../memory/volatility";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import type { ChangeContext, AuditChannel } from "../lib/audit";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement, type WhenChange } from "../memory/versions";
+import { INDEXABLE_SQL } from "./lifecycle";
 import { scoreWrite, type QuarantineChannel } from "../quarantine/score";
 import { heldTagsFor, holdDecision, holdStatements, type HeldInfo } from "../quarantine/hold";
 import { isHeld, withEditedCanonical } from "../quarantine/tags";
@@ -92,9 +93,14 @@ export async function storeEntry(
   // Compare-and-set on the content AND the workspace these vectors were stamped for (R4-2, round 5),
   // AND the vector_ids the caller read (round 6): the row alone decides which upload won, and an
   // upload that lost is this call's own ids, deleted here and nowhere else.
+  // Codex review, T-0102 D4: also gated on INDEXABLE_SQL, checked at commit time rather than
+  // pinned to a snapshot value. upsertEntryVectors above checked isHeld on the tags THIS call was
+  // given, but embedding takes time (an AI call), and nothing between that check and this UPDATE
+  // stopped a concurrent write from holding or deprecating the row in the meantime — landing a
+  // real, indexed vector on a row the hold or deprecation contract says must have none.
   // versioning: exempt: vector bookkeeping
   const result = await env.DB.prepare(
-    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ? AND vector_ids = ?`
+    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ? AND vector_ids = ? AND ${INDEXABLE_SQL}`
   ).bind(JSON.stringify(stored.vectorIds), id, content, writeCtx.workspaceId, commit.expectedVectorIds).run();
 
   if (changesOf(result) === 0) {
