@@ -82,10 +82,10 @@ export async function storeEntry(
   commit: { expectedVectorIds: string } = { expectedVectorIds: "[]" },
 ): Promise<StoredEntry> {
   // Codex review, T-0102 F3 (MAJOR): the "batch-embed: exempt" reasoning this comment used to
-  // give -- a held write never reaches storeEntry (class A), so content here is always under the
-  // scorer's 32 KB budget -- is only true for captureEntry's own create-time call. Two other
-  // callers route through storeEntry with content that was never scored at all and can be up to
-  // the full 128 KB cap: vectorize/pending.ts's indexPendingRow (a deferred row, chosen by length
+  // give -- a held write never reaches this function via class A's gate, so content here is
+  // always under the scorer's 32 KB budget -- is only true for captureEntry's own create-time
+  // call. Two other callers route through storeEntry with content that was never scored at all
+  // and can be up to the full 128 KB cap: vectorize/pending.ts's indexPendingRow (a deferred row, chosen by length
   // alone) and migration/embedding.ts's backfill pass. Both would cost one AI call per chunk
   // without this. Always batchEmbeds now, not opt-in: embedMany costs the same as embed for the
   // common one-or-two-chunk capture (R20 never regresses that caller), and only ever helps a
