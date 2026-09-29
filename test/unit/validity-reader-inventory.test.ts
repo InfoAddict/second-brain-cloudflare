@@ -123,7 +123,9 @@ const SHARED_FILE_EXEMPT_LINES: Record<string, number[]> = {
   // held-row exclusion.
   // MOVED (T-0089.2.3): GET /stale's own `reason` computation (spec 14 5.9) added lines above it
   // and everything after; recomputed against the real scanner output.
-  "src/routes/admin.ts": [611, 624, 636, 661, 734, 759, 808, 857, 862, 1001, 1008, 1125, 1131, 1460, 1551, 1581, 1697],
+  // MOVED +15 (FX3 finding 2/7): the member-removal vector-delete cap and the 202 response's
+  // removedEntries/removedVectors fields added lines above every site below.
+  "src/routes/admin.ts": [626, 639, 651, 676, 749, 774, 823, 872, 877, 1016, 1023, 1140, 1146, 1475, 1566, 1596, 1712],
   // MOVED +1 (R16): entries.ts imports supersededBySql.
   "src/routes/entries.ts": [42, 64, 95],
 };
