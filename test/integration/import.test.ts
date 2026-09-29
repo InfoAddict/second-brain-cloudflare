@@ -467,7 +467,10 @@ describe("POST /import", () => {
   });
 
   describe("Rahil's decision: 128 KB per note (18-copy-deck.md 6.8)", () => {
-    it("skips an oversize record with a clear count, rather than failing the whole import", async () => {
+    // Codex review, T-0102 B2: skipping an oversize row here silently lost real 3.7 data on an
+    // upgrade (the note existed, and now does not, with no record of it). It is imported instead,
+    // forced held too_long -- the same state a too-long note reaches on a fresh 4.0 write.
+    it("imports an oversize record held too_long, rather than skipping it and losing it", async () => {
       const entries = [
         { id: "ok", content: "a normal memory", created_at: 1000 },
         { id: "too-big", content: "a".repeat(131_073), created_at: 2000 },
@@ -476,11 +479,15 @@ describe("POST /import", () => {
       expect(res.status).toBe(200);
       const data = await res.json() as any;
       expect(data.ok).toBe(true);
-      expect(data.imported).toBe(1);
-      expect(data.skipped_too_large).toBe(1);
-      expect(db.entries.map((e: any) => e.id)).toEqual(["ok"]);
-      const skippedResult = data.results.find((r: any) => r.id === "too-big");
-      expect(skippedResult).toMatchObject({ id: "too-big", status: "skipped", reason: "too_large" });
+      expect(data.imported).toBe(2);
+      expect(data.skipped_too_large).toBe(0);
+      expect(db.entries.map((e: any) => e.id).sort()).toEqual(["ok", "too-big"]);
+      const importedResult = data.results.find((r: any) => r.id === "too-big");
+      expect(importedResult).toMatchObject({ id: "too-big", status: "imported" });
+      const stored = db.entries.find((e: any) => e.id === "too-big");
+      const tags = JSON.parse(stored.tags);
+      expect(tags).toContain("quarantine:too_long");
+      expect(tags).toContain("status:draft");
     });
 
     it("accepts a record at exactly the limit", async () => {
