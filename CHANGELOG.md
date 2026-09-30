@@ -16,6 +16,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - A memory replaced by a newer, contradicting one now records that in its history (status changed to deprecated, with the reason and the newer memory's id).
 - Memories removed by an integration are now recorded in the audit trail: a trashed Notion page, a cancelled or pruned calendar event, or "delete synced memories" on disconnect. Each record names the reason and the integration. The dashboard does not show these records yet, and the trail is best effort: if a batch of records fails to write, it is logged and skipped, and the deletion still goes through. The audit records for a large deletion are written in batches of 50.
 - Every memory audit record now says where the change came from: `mcp` for an AI assistant, `rest` for the dashboard and API, or `system:<job>` for a background job.
+- A memory's version history now records which AI tool made the change on every kind of change: edits, status changes, actions, validity changes and undo. Before, only some of these recorded it.
 
 **Saving**
 
@@ -55,6 +56,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 **Search**
 
 - Search records which memories it showed with one database call instead of one per result, so a 20-result search makes up to 19 fewer database calls.
+- Searches built around a common word now read about 65 to 73% fewer database rows. A heavy solo brain of 10,000 memories now uses about 62% of the free plan's daily database reads, down from about 91%. Search results and their ranking are unchanged.
 - Recall can now say why a memory came back. Ask for it with `explain: true` on the MCP `recall` tool, or `explain=1` on `GET /recall`. The MCP tool adds one line under each result, for example `why: meaning #2 · keywords "gatewright" (rare) · canonical · recent (Sep 20) · reranked up`. The REST API adds a `why` object per result: its rank in the meaning search, the keyword terms it matched (with how rare each is), the ranking multipliers applied (recency, frequency, importance, tag boost), the reranker's percentile, the link it was reached through, and which result slot it took. It is off by default, results and their order are identical either way, and it uses no extra database queries or AI calls.
 - Every recall now comes back with a short `receipt`, in the MCP reply and as a `receipt` field on `GET /recall`. It costs nothing extra to get, and an agent can name it when it answers from a specific search, so you or a later conversation can trace the answer back to it.
 
@@ -74,6 +76,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Decisions you logged have their own review queue, with your stated confidence next to how things actually turned out over time.
 - Commitments (something owed to you, or by you) show up alongside due items until they are marked done.
 - A held memory shows a banner with the reason and a Release button. Nothing is held silently.
+- A held memory's sheet no longer also suggests Index now. It is out of search by policy while held, not because it needs indexing.
 
 **Desktop app**
 
