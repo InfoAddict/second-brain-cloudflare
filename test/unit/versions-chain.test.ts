@@ -104,6 +104,13 @@ describe("buildChain", () => {
   });
 
   it("CPU: 1 MB ASCII, 20 deltas under 5 ms; 1 MB emoji-heavy under 10 ms", async (ctx) => {
+    // v8 coverage instrumentation adds per-call overhead this budget was never meant to absorb (the
+    // emoji-heavy path measured 81 ms against this 10 ms budget under coverage on CI);
+    // .github/workflows/ci.yml runs this file again without --coverage so the budget stays enforced.
+    if (process.env.COVERAGE === "1") {
+      ctx.skip(true, "CPU budget not meaningful under v8 coverage instrumentation");
+      return;
+    }
     const scale = Number(process.env.VERSIONS_CPU_SCALE ?? 1);
     // CPU time, not wall time: process.cpuUsage() reports actual cycles this process was granted and
     // spent, so waiting for a scheduler turn (as opposed to running slowly once granted one) cannot

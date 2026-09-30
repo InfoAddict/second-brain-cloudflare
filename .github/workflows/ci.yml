@@ -37,6 +37,12 @@ jobs:
       # drifting away from its SQL shows up in the diff.
       - run: npm run check:scope -- --inventory
       - run: npm run test:coverage
+      # The CPU-budget tests above skip their timing assertions under coverage
+      # instrumentation (v8 coverage adds per-call overhead the budgets were
+      # never meant to absorb) — this re-run, without --coverage, is what
+      # actually enforces those budgets on CI.
+      - name: CPU budget tests (no coverage)
+        run: npx vitest run test/unit/quarantine-cold-cpu.test.ts test/unit/quarantine-score.test.ts test/unit/versions-chain.test.ts
       # Bundles the Worker without deploying (no auth/network). Catches build
       # or config errors that typecheck and tests miss. A fresh checkout has no
       # .wrangler/ redirect, so this reads wrangler.jsonc directly.

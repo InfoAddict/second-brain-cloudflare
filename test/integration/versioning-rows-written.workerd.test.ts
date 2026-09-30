@@ -89,6 +89,26 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("rows written on workerd", () =
     } finally { await d1.close(); }
   }, 120_000);
 
+  // CI fix: node:sqlite (Node 22, test/integration/versions-sql.test.ts) truncates a TEXT value
+  // at its first NUL byte when marshaling it back to a JS string; real D1 does not. This is the
+  // byte-for-byte proof on the environment that matters.
+  it("a NUL byte forces a full-copy snapshot, and real D1 keeps the byte intact", async () => {
+    const { d1, env, roots } = await setup();
+    try {
+      await env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('e1', ?, '[]', 'api', 1000, '[]', ?, ?)`,
+      ).bind("a\u0000b", roots.ownerPersonalWorkspaceId, roots.ownerUserId).run();
+      const stmt = snapshotStatement(env, {
+        entryId: "e1", reason: "update", change: { actorId: roots.ownerUserId, channel: "rest" },
+        content: { kind: "next", content: "a\u0000b and more" }, nextTags: [], now: Date.now(),
+      });
+      await stmt.run();
+      const version = await env.DB.prepare(`SELECT content, prior_length FROM entry_versions WHERE entry_id = 'e1'`).first<{ content: string; prior_length: number | null }>();
+      expect(version?.prior_length).toBeNull();
+      expect(version?.content).toBe("a\u0000b");
+    } finally { await d1.close(); }
+  }, 120_000);
+
   it("a prune of one writes 1 row on real D1, not the spec's 2", async () => {
     const { d1, env, roots } = await setup();
     try {

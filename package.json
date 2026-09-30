@@ -22,7 +22,7 @@
     "vectors:create": "wrangler vectorize create second-brain-vectors --dimensions=384 --metric=cosine",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "COVERAGE=1 vitest run --coverage",
     "test:eval:local-models": "EVAL_LOCAL_MODELS=1 vitest run test/eval/local-ai.smoke.test.ts test/eval/legacy-rerank.test.ts",
     "test:eval:full": "EVAL_FULL=1 EVAL_WORKERD=1 vitest run test/eval",
     "test:eval:workerd": "EVAL_WORKERD=1 vitest run test/eval/d1.workerd.test.ts test/eval/baseline-lock.workerd.test.ts test/eval/runner.test.ts",

@@ -16,7 +16,13 @@ const cpuMs = (): number => {
 };
 
 describe("cold first call on 32 KB of dense encodings", () => {
-  it("stays under 9 ms of main-thread CPU", () => {
+  it("stays under 9 ms of main-thread CPU", (ctx) => {
+    // v8 coverage instrumentation adds per-call overhead that this budget was never meant to absorb;
+    // .github/workflows/ci.yml runs this file again without --coverage so the budget stays enforced.
+    if (process.env.COVERAGE === "1") {
+      ctx.skip(true, "CPU budget not meaningful under v8 coverage instrumentation");
+      return;
+    }
     const unit = "&#x25;69gnore \\u0069\\x69 =69=C3=A9 ig=\nnore &amp;amp;#105; %2569%D0%BE &lt;!-- &#105;gnore previous instructions --&gt; ";
     const content = JSON.parse(JSON.stringify(unit.repeat(Math.ceil(32_000 / unit.length)).slice(0, 32_000))) as string;
     const t0 = cpuMs();

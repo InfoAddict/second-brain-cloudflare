@@ -13,6 +13,32 @@ let d1: SqliteD1;
 let env: Env;
 const change = (actorId = "u1", channel: "rest" | "mcp" | `system:${string}` = "rest") => ({ actorId, channel });
 
+/**
+ * Node 22's node:sqlite truncates a TEXT column at its first NUL byte when marshaling the C string
+ * back into a JS string on read — confirmed against real D1/workerd, which returns the full value
+ * (production is unaffected; this is the local driver only). instr()/SQL-level checks still see
+ * the whole value either way (SQLite's own engine never loses it, only node:sqlite's JS binding
+ * does), which is why "NUL forces a full copy" (the decision, prior_length null) still holds
+ * regardless — only the exact byte-for-byte content readback needs this feature-detect. A
+ * dedicated check, not a Node version test: this is a driver quirk that could change independent
+ * of which Node version ships it. See versioning-rows-written.workerd.test.ts's own NUL test for
+ * the real-D1 proof of the byte-for-byte claim this can't make locally.
+ */
+let nulTruncatesCache: boolean | undefined;
+async function driverTruncatesNul(): Promise<boolean> {
+  if (nulTruncatesCache !== undefined) return nulTruncatesCache;
+  const probe = makeSqliteD1();
+  try {
+    await probe.db.exec(`CREATE TABLE nul_probe (v TEXT)`);
+    await probe.db.prepare(`INSERT INTO nul_probe (v) VALUES (?)`).bind("a\u0000b").run();
+    const row = (await probe.db.prepare(`SELECT v FROM nul_probe`).first()) as { v: string } | null;
+    nulTruncatesCache = row?.v !== "a\u0000b";
+  } finally {
+    probe.close();
+  }
+  return nulTruncatesCache;
+}
+
 beforeEach(async () => {
   resetDatabaseInit();
   d1 = makeSqliteD1();
@@ -85,9 +111,16 @@ describe("snapshot SQL", () => {
   });
 
   it("NUL forces a full copy", async () => {
+    const truncates = await driverTruncatesNul();
     await seedRow("e1", "a\u0000b");
     await edit({ id: "e1", next: "a\u0000b and more" });
-    expect((await versions("e1"))[0]).toMatchObject({ content: "a\u0000b", prior_length: null });
+    const v1 = (await versions("e1"))[0];
+    // The decision this test is named for -- a NUL byte anywhere in the row's content forces a
+    // full copy, never a delta -- holds regardless of the local driver's own NUL handling, since
+    // SQLite's instr() (what buildSnapshot's own check uses) sees the whole value either way.
+    expect(v1.prior_length).toBeNull();
+    if (truncates) expect(v1.content).not.toBeNull();
+    else expect(v1).toMatchObject({ content: "a\u0000b" });
     await seedRow("e2", "plain");
     await edit({ id: "e2", next: "plain\u0000more" });
     expect((await versions("e2"))[0]).toMatchObject({ content: "plain", prior_length: null });

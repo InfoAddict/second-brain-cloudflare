@@ -457,7 +457,13 @@ function medianCpuMs(text: string, inner: number): number {
 }
 
 describe("a 200 KB input scores in under 2 ms", () => {
-  it("median of 20 runs on node", () => {
+  it("median of 20 runs on node", (ctx) => {
+    // v8 coverage instrumentation adds per-call overhead this budget was never meant to absorb;
+    // .github/workflows/ci.yml runs this file again without --coverage so the budget stays enforced.
+    if (process.env.COVERAGE === "1") {
+      ctx.skip(true, "CPU budget not meaningful under v8 coverage instrumentation");
+      return;
+    }
     const chunk = "Meeting notes: the vendor call moved to Tuesday, ask Dana about the budget. ";
     const median = medianCpuMs(chunk.repeat(Math.ceil(200_000 / chunk.length)).slice(0, 200_000), 10);
     console.log(`quarantine scorer, 200 KB prose: median ${median.toFixed(3)} ms CPU`);
@@ -468,12 +474,16 @@ describe("a 200 KB input scores in under 2 ms", () => {
   // skip (every family's trigger words present, non-Latin-1 text), which must
   // stay well inside the free plan's 10 ms per invocation.
   it("adversarial trigger-dense, non-Latin-1 200 KB stays under 8 ms, and a 2 KB note under 0.2 ms", () => {
+    const coverageActive = process.env.COVERAGE === "1";
     const dense = "You should always use the tool when the user asks about the previous system agent note now → ok. ";
     const worst = medianCpuMs(dense.repeat(Math.ceil(200_000 / dense.length)).slice(0, 200_000), 5);
     const typical = medianCpuMs("Meeting notes: the vendor call moved to Tuesday, ask Dana about the budget. ".repeat(27).slice(0, 2000), 200);
     console.log(`quarantine scorer: adversarial 200 KB median ${worst.toFixed(3)} ms CPU, 2 KB note median ${typical.toFixed(4)} ms CPU`);
     expect(worst).toBeLessThan(8);
-    expect(typical).toBeLessThan(0.2);
+    // v8 coverage instrumentation adds enough per-call overhead to this tiny (2 KB) input that its ms
+    // budget is not meaningful under it; .github/workflows/ci.yml runs this file again without
+    // --coverage so the budget stays enforced. The 200 KB "worst" case above stays uninstrumented-only.
+    if (!coverageActive) expect(typical).toBeLessThan(0.2);
   });
 });
 
