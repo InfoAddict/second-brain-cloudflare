@@ -5,17 +5,13 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
   "batches": [
     [
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
-      "SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts",
-      "SELECT count(*) AS n FROM (
-       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?
-       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
-     )",
-      "SELECT count(*) AS n FROM (
-       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?
-       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
-     )",
+      "WITH g AS MATERIALIZED (
+       SELECT total, everyone, max(CAST(0.3 * total AS INTEGER) + 1, 2001) AS cap
+       FROM (SELECT (SELECT COALESCE(SUM(n), 0) FROM entry_counts) AS total, (SELECT max(COALESCE(SUM(n), 0), 1) FROM entry_counts) AS everyone)
+     ), p AS MATERIALIZED (SELECT total, cap, min(cap, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?1), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?2), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?3), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?4), 0) * total / everyone) + min(cap, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?5), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?6), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?7), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?8), 0) * total / everyone) > total AS scan FROM g)
+     SELECT total, CASE WHEN scan THEN NULL ELSE (SELECT count(*) FROM (SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id WHERE entries_fts MATCH ?9 LIMIT (SELECT cap FROM g))) END AS n0, CASE WHEN scan THEN NULL ELSE (SELECT count(*) FROM (SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id WHERE entries_fts MATCH ?10 LIMIT (SELECT cap FROM g))) END AS n1,
+       CASE WHEN scan THEN (SELECT json_array(COUNT(*), SUM(CASE WHEN content LIKE ?11 ESCAPE '\\' THEN 1 ELSE 0 END), SUM(CASE WHEN content LIKE ?12 ESCAPE '\\' THEN 1 ELSE 0 END)) FROM entries) END AS scanned
+     FROM p",
     ],
     [
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
@@ -96,17 +92,13 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
   "batches": [
     [
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
-      "SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts",
-      "SELECT count(*) AS n FROM (
-       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?
-       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
-     )",
-      "SELECT count(*) AS n FROM (
-       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?
-       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
-     )",
+      "WITH g AS MATERIALIZED (
+       SELECT total, everyone, max(CAST(0.3 * total AS INTEGER) + 1, 2001) AS cap
+       FROM (SELECT (SELECT COALESCE(SUM(n), 0) FROM entry_counts) AS total, (SELECT max(COALESCE(SUM(n), 0), 1) FROM entry_counts) AS everyone)
+     ), p AS MATERIALIZED (SELECT total, cap, min(cap, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?1), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?2), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?3), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?4), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?5), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?6), 0) * total / everyone) + min(cap, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?7), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?8), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?9), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?10), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?11), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?12), 0) * total / everyone) > total AS scan FROM g)
+     SELECT total, CASE WHEN scan THEN NULL ELSE (SELECT count(*) FROM (SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id WHERE entries_fts MATCH ?13 LIMIT (SELECT cap FROM g))) END AS n0, CASE WHEN scan THEN NULL ELSE (SELECT count(*) FROM (SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id WHERE entries_fts MATCH ?14 LIMIT (SELECT cap FROM g))) END AS n1,
+       CASE WHEN scan THEN (SELECT json_array(COUNT(*), SUM(CASE WHEN content LIKE ?15 ESCAPE '\\' THEN 1 ELSE 0 END), SUM(CASE WHEN content LIKE ?16 ESCAPE '\\' THEN 1 ELSE 0 END)) FROM entries) END AS scanned
+     FROM p",
     ],
     [
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
@@ -189,17 +181,13 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
   "batches": [
     [
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
-      "SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts",
-      "SELECT count(*) AS n FROM (
-       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?
-       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
-     )",
-      "SELECT count(*) AS n FROM (
-       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?
-       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
-     )",
+      "WITH g AS MATERIALIZED (
+       SELECT total, everyone, max(CAST(0.3 * total AS INTEGER) + 1, 2001) AS cap
+       FROM (SELECT (SELECT COALESCE(SUM(n), 0) FROM entry_counts) AS total, (SELECT max(COALESCE(SUM(n), 0), 1) FROM entry_counts) AS everyone)
+     ), p AS MATERIALIZED (SELECT total, cap, min(cap, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?1), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?2), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?3), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?4), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?5), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?6), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?7), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?8), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?9), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?10), 0) * total / everyone) + min(cap, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?11), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?12), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?13), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?14), 0) * total / everyone, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ?15), 0) * total / everyone) > total AS scan FROM g)
+     SELECT total, CASE WHEN scan THEN NULL ELSE (SELECT count(*) FROM (SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id WHERE entries_fts MATCH ?16 LIMIT (SELECT cap FROM g))) END AS n0, CASE WHEN scan THEN NULL ELSE (SELECT count(*) FROM (SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id WHERE entries_fts MATCH ?17 LIMIT (SELECT cap FROM g))) END AS n1,
+       CASE WHEN scan THEN (SELECT json_array(COUNT(*), SUM(CASE WHEN content LIKE ?18 ESCAPE '\\' THEN 1 ELSE 0 END), SUM(CASE WHEN content LIKE ?19 ESCAPE '\\' THEN 1 ELSE 0 END)) FROM entries) END AS scanned
+     FROM p",
     ],
     [
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",

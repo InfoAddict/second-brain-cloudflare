@@ -40,7 +40,7 @@ const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../..
 const SCHEMA_PROBE_RESULTS = [
   ...["entries", "edges", "insight_candidates", "workspaces", "users", "memberships",
     "entry_events", "admin_events", "maintenance_cursor", "prompt_capsule_revisions", "projects",
-    "push_subscriptions", "recall_log", "entry_versions", "entries_trash", "entries_fts", "entry_counts"]
+    "push_subscriptions", "recall_log", "entry_versions", "entries_trash", "entries_fts", "entries_fts_vocab", "entry_counts"]
     .map(name => ({ kind: "table", name })),
   ...["idx_entries_created_at", "idx_entries_source", "idx_entries_workspace_created", "idx_entries_capsule",
     "idx_edges_source", "idx_edges_target", "idx_edges_weight", "idx_insight_candidates_queue",

@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
 import {
+  D1_MAX_BOUND_PARAMS,
   FTS_MATCH_BUDGET,
   FTS_SHORT_TOKEN_SAMPLE,
   KEYWORD_MAX_TOKENS,
@@ -53,8 +54,8 @@ export interface DistilledQuery {
   query: string;
   df: Map<string, number> | null;
   total: number | null;
-  /** How df/total were obtained: the FTS index, the LIKE full scan, or skipped (single term). */
-  distillSource: "fts" | "like" | "shortcut";
+  /** How df/total were obtained: the FTS index, the LIKE full scan, that scan capped as the FTS counts would be (a common-word query), or skipped (single term). */
+  distillSource: "fts" | "like" | "scan" | "shortcut";
 }
 
 export interface TimeBounds {
@@ -200,6 +201,56 @@ function ftsTermCountStmtSqlCap(env: Env, term: string, scope: ScopeClause | nul
 }
 
 /**
+ * A term's distinct trigrams, folded as the trigram tokenizer folds a count-safe term. Every row holding the term holds each
+ * of them, so the smallest document count among them in entries_fts_vocab bounds the term's df from above.
+ */
+export function probeTrigrams(term: string): string[] {
+  const cs = [...term.toLowerCase()];
+  return [...new Set(cs.slice(2).map((_, i) => cs.slice(i, i + 3).join("")))];
+}
+
+/**
+ * Every term's df in one statement, from whichever source reads fewer rows. The per-term FTS counts read about two rows per
+ * match (the index row and the entries row it joins), up to the saturation cap; one LIKE pass over the scope reads its total
+ * and returns exact counts. The caller caps those as the FTS counts would be, so both routes give the same df.
+ *
+ * entries_fts_vocab prices the counts: a term's matches are estimated as its trigram bound (probeTrigrams), which counts
+ * every workspace, scaled by the scope's share of all entries. The pass is taken when those estimates, capped, sum past the
+ * scope's total, that is when the counts would read at least twice what the pass reads. The margin absorbs a loose bound
+ * (common trigrams, rare word): on the core-1k eval it sent no query to the pass that the counts served cheaper.
+ *
+ * `priced` false keeps the counts without reading the vocabulary. Columns: total, n0..n<k-1> (null on the pass), and
+ * `scanned` (null on the counts), a JSON array [COUNT(*), d0..d<k-1>]. Null when the binds pass D1's limit.
+ */
+function dfCountsStmt(env: Env, terms: string[], scope: ScopeClause | null, priced: boolean): D1PreparedStatement | null {
+  const binds: unknown[] = [];
+  const bind = (v: unknown) => `?${binds.push(v)}`;
+  // Scope values are bound once and referenced by number from every subquery.
+  const clause = scope ? scope.clause.replace(/\?/g, (i => () => bind(scope.bindings[i++]))(0)) : "";
+  const whereScope = clause ? ` WHERE ${clause}` : "";
+  const andScope = clause ? ` AND ${clause}` : "";
+  const estimate = (t: string) =>
+    `min(cap, ${probeTrigrams(t).map(g => `coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ${bind(g)}), 0) * total / everyone`).join(", ")})`;
+  const price = priced ? `${terms.map(estimate).join(" + ")} > total` : "0";
+  const counts = terms.map((t, i) =>
+    // scope-checked: the caller's clause IS applied through andScope (scope.clause, placeholders numbered), same join as ftsTermCountStmt
+    `CASE WHEN scan THEN NULL ELSE (SELECT count(*) FROM (SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id WHERE entries_fts MATCH ${bind(ftsMatchQuery([t])!)}${andScope} LIMIT (SELECT cap FROM g))) END AS n${i}`);
+  const sums = terms.map(t => `SUM(CASE WHEN content LIKE ${bind(contentLikePattern(t))} ${CONTENT_LIKE_ESCAPE} THEN 1 ELSE 0 END)`).join(", ");
+  // scope-checked: the caller's clause IS applied to entry_counts, to each FTS count's entries join and to the pass, through
+  // whereScope/andScope, which are scope.clause with its placeholders numbered; the lexer sees only the fragment names.
+  // `everyone` is unscoped on purpose: it only scales the vocabulary's all-workspace counts, and never reaches a result.
+  const sql = `WITH g AS MATERIALIZED (
+       SELECT total, everyone, max(CAST(${QUERY_SATURATION_FRACTION} * total AS INTEGER) + 1, ${FTS_MATCH_BUDGET + 1}) AS cap
+       FROM (SELECT (SELECT COALESCE(SUM(n), 0) FROM entry_counts${whereScope}) AS total, (SELECT max(COALESCE(SUM(n), 0), 1) FROM entry_counts) AS everyone)
+     ), p AS MATERIALIZED (SELECT total, cap, ${price} AS scan FROM g)
+     SELECT total, ${counts.join(", ")},
+       CASE WHEN scan THEN (SELECT json_array(COUNT(*), ${sums}) FROM entries${whereScope}) END AS scanned
+     FROM p`;
+  if (binds.length <= D1_MAX_BOUND_PARAMS) return env.DB.prepare(sql).bind(...binds);
+  return priced ? dfCountsStmt(env, terms, scope, false) : null;
+}
+
+/**
  * T-0074: a too-short token's df, estimated from the newest
  * FTS_SHORT_TOKEN_SAMPLE readable rows. The index cannot count it and the
  * exact count reads the whole partition. The sample is a bounded read that
@@ -238,14 +289,38 @@ async function distillViaFts(
   env: Env,
   bounds: Readonly<TimeBounds>,
   scope: ScopeClause | null,
-): Promise<{ df: Map<string, number>; total: number } | null> {
+): Promise<{ df: Map<string, number>; total: number; scanned?: { df: Map<string, number>; total: number } } | null> {
   const hasBounds = bounds.after !== undefined || bounds.before !== undefined;
 
   let total: number;
   let liveness: { name: string; sql: string | null }[] | undefined;
   let countResults: { results?: unknown[] }[];
+  let scanned: { df: Map<string, number>; total: number } | undefined;
 
-  if (!hasBounds) {
+  // A short term's df is sampled on the FTS route only, so its query keeps the counts.
+  const combined = hasBounds ? null : dfCountsStmt(env, dfTerms, scope, !shortTerms.length);
+  if (combined) {
+    const results = await env.DB.batch([
+      env.DB.prepare(FTS_LIVENESS_SQL),
+      combined,
+      ...(shortTerms.length ? [shortTermSampleStmt(env, shortTerms, bounds, scope)] : []),
+    ]);
+    liveness = results[0].results as { name: string; sql: string | null }[] | undefined;
+    const row = (results[1].results?.[0] ?? {}) as Record<string, unknown>;
+    total = (row.total as number) ?? 0;
+    countResults = [
+      ...dfTerms.map((_, i) => ({ results: [{ n: row[`n${i}`] }] })),
+      ...results.slice(2),
+    ];
+    if (typeof row.scanned === "string") {
+      const [scanTotal, ...counts] = JSON.parse(row.scanned) as (number | null)[];
+      const cap = saturationCap(total);
+      const exact = new Map(dfTerms.map((t, i) => [t, counts[i] ?? 0]));
+      // Capped as the FTS counts would be: min(df, cap) is exactly what a LIMIT cap count returns.
+      countResults = dfTerms.map(t => ({ results: [{ n: Math.min(exact.get(t)!, cap) }] }));
+      scanned = { df: exact, total: scanTotal ?? 0 };
+    }
+  } else if (!hasBounds) {
     const results = await env.DB.batch([
       env.DB.prepare(FTS_LIVENESS_SQL),
       entryCountsTotalStmt(env, scope),
@@ -279,7 +354,7 @@ async function distillViaFts(
     // Laplace-smoothed so an unseen token reads as rare-but-possible, not as absent from the corpus (which would inflate its IDF past any counted term's).
     shortTerms.forEach((t, i) => df.set(t, Math.min(total, Math.ceil((((sample?.[`d${i}`] ?? 0) + 1) * total) / (n + 2)))));
   }
-  return { df, total };
+  return { df, total, scanned };
 }
 
 export async function distillToRareTerms(
@@ -351,7 +426,13 @@ export async function distillToRareTerms(
         && counted.some(t => (viaFts.df.get(t) ?? 0) === saturationCap(viaFts.total));
       if (viaFts && !unrankable) {
         const { df, total } = viaFts;
-        return { query: rankAndRebuild(uniq, content, tokensOf, df, total, new Set(shortTerms)), df, total, distillSource: "fts" };
+        return { query: rankAndRebuild(uniq, content, tokensOf, df, total, new Set(shortTerms)), df, total, distillSource: viaFts.scanned ? "scan" : "fts" };
+      }
+      // The pass already holds what the LIKE fallback below would count (the same terms, scope and rows).
+      if (viaFts?.scanned) {
+        const { df, total } = viaFts.scanned;
+        if (!total) return { query: content.join(" "), df: null, total: null, distillSource: "like" };
+        return { query: rankAndRebuild(uniq, content, tokensOf, df, total), df, total, distillSource: "like" };
       }
     } catch (e) {
       console.error("FTS distillation count failed (degrading to LIKE):", e);

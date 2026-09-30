@@ -94,6 +94,8 @@ describe("literal identifier tokens in SQLite recall", () => {
   it("counts literal tokens in the FTS document-frequency scan", async () => {
     sqlite.seed({ id: "exact", content: "ERR_TLS_90412 50%_off completed", createdAt: 1 });
     sqlite.seed({ id: "decoy", content: "ERRXTLSX90412 50Xoff completed", createdAt: 2 });
+    // Rows without the terms, so the counts are cheaper than one pass and the FTS route is taken.
+    for (let i = 0; i < 20; i++) sqlite.seed({ id: `filler-${i}`, content: "unrelated filler", createdAt: 10 + i });
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
     const result = await distillToRareTerms("ERR_TLS_90412 50%_off", env);

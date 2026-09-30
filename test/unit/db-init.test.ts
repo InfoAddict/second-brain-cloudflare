@@ -91,6 +91,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "recall_log", "idx_recall_log_ws",
   // Content history and soft delete (T-0089.1.1, T-0089.1.2).
   "entry_versions", "idx_entry_versions_entry", "entries_trash", "idx_entries_trash_deleted", "idx_entries_trash_workspace_deleted",
+  // Trigram document counts that price distillation's df counts.
+  "entries_fts_vocab",
   "entries_fts",
   "entry_counts",
   ...PROMPT_CAPSULE_TRIGGERS,
@@ -303,7 +305,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 77 -> 79 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
       // MOVED 79 -> 81 (cloud re-review MINOR, R22 crowd-out fix) by idx_entry_events_actor and idx_entry_events_held.
       // MOVED 81 -> 82 (R23, budget auditor BLOCK) by idx_entry_events_life_end.
-      expect(migrated).toBe(82); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs + T7 ledger/standing indexes + entry_events actor/held/life_end indexes)
+      // MOVED 82 -> 83 by entries_fts_vocab, the fts5vocab table that prices distillation's df counts.
+      expect(migrated).toBe(83); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs + T7 ledger/standing indexes + entry_events actor/held/life_end indexes)
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -674,7 +677,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 71 -> 73 (T-0089.7.1, T-0089.7.2, merge with release/v4) by idx_entries_ledger and idx_entries_standing.
     // MOVED 73 -> 75 (cloud re-review MINOR, R22 crowd-out fix) by idx_entry_events_actor and idx_entry_events_held.
     // MOVED 75 -> 76 (R23, budget auditor BLOCK) by idx_entry_events_life_end.
-    expect(cold).toBe(76); // one probe, then the 75 statements a new brain needs
+    // MOVED 76 -> 77 by entries_fts_vocab.
+    expect(cold).toBe(77); // one probe, then the 76 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });

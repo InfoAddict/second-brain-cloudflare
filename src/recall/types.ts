@@ -155,7 +155,7 @@ export interface RecallDiagnostics {
   /** Why the keyword arm served FTS or LIKE on the last recall; memberFirst recalls never reach keywordSearch. */
   ftsRoute?: "fts" | "fts-bounded" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error" | "like-member-first" | "skipped-by-variant";
   /** T-0059: how df/total were obtained on the last recall's term distillation. */
-  distillSource?: "fts" | "like" | "shortcut";
+  distillSource?: "fts" | "like" | "scan" | "shortcut";
   /** What the cross-encoder step did on the last recall; "applied" means one model call reordered the candidates. */
   rerankRoute?: RerankRoute;
   /** Set when single-term keyword evidence was withheld: the term is too common (df over the saturation fraction, or the keyword window filled) or the corpus size was unavailable. */

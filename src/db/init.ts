@@ -60,6 +60,7 @@ export function resetDatabaseInit(): void {
 // never partially applying, and is treated as a no-op rather than retried.
 export const ENTRIES_FTS_TABLE_DDL =
   `CREATE VIRTUAL TABLE entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')`;
+export const ENTRIES_FTS_VOCAB_DDL = `CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts_vocab USING fts5vocab(entries_fts, row)`;
 export const ENTRIES_FTS_INSERT_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entries_fts_insert
     AFTER INSERT ON entries
     BEGIN
@@ -247,6 +248,9 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // without this, SQLite's only path is the deleted_at index above, so it walks the whole trash
   // table filtering every row for a workspace match — see db/schema.sql for the measured cost.
   idx_entries_trash_workspace_deleted: `CREATE INDEX IF NOT EXISTS idx_entries_trash_workspace_deleted ON entries_trash(workspace_id, deleted_at DESC)`,
+  // Per-trigram document counts over entries_fts, read by distillation to price its df counts (src/recall/distill.ts).
+  // Stores nothing and resolves entries_fts by name at query time, so it may exist before, and survive a rebuild of, the index.
+  entries_fts_vocab: ENTRIES_FTS_VOCAB_DDL,
   // entries_fts and its three sync triggers are NOT here (v2.2 ownership
   // rule): they are created together, in one dedicated batch, below in
   // applySchema — never as independent SCHEMA_OBJECTS/POST_COLUMN_OBJECTS
