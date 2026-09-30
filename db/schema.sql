@@ -405,6 +405,11 @@ CREATE TRIGGER IF NOT EXISTS entries_fts_delete
       DELETE FROM entries_fts WHERE rowid = OLD.rowid;
     END;
 
+-- Per-trigram document counts over entries_fts (distillation prices its df counts with it).
+-- Stores nothing; resolves entries_fts by name at query time. Must stay in step with src/db/init.ts.
+-- D1 export does not support virtual tables: drop it before `wrangler d1 export` and recreate it after, as for entries_fts.
+CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts_vocab USING fts5vocab(entries_fts, row);
+
 -- Exact per-workspace entry counters (T-0065), replacing distillation's scoped
 -- COUNT(*)/cache. Same ownership as entries_fts above: table and its three
 -- triggers created together. Must stay in step with src/db/init.ts.

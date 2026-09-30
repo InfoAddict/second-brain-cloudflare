@@ -176,6 +176,21 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     await initializeDatabase(env);
     expect(d1.issued.some((s) => /CREATE TABLE IF NOT EXISTS entry_versions/.test(s))).toBe(false);
     expect(d1.issued.some((s) => /CREATE TABLE IF NOT EXISTS entries_trash/.test(s))).toBe(false);
+    expect(d1.issued.some((s) => /entries_fts_vocab/.test(s))).toBe(false);
+  });
+
+  it("creates entries_fts_vocab on a 3.7.0 upgrade, counting the pre-4.0 rows, and a repeat init leaves it alone", async () => {
+    d1.db.exec(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES ('e1', 'atlas ledger', '[]', 'api', 1000, '[]'), ('e2', 'atlas plan', '[]', 'api', 2000, '[]')`);
+    env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() });
+
+    await initializeDatabase(env);
+    resetDatabaseInit();
+    await initializeDatabase(env);
+
+    const table = (await (d1.db as any).prepare(`SELECT type FROM sqlite_master WHERE name = 'entries_fts_vocab'`).first()) as { type: string } | null;
+    expect(table?.type).toBe("table");
+    const atl = (await (d1.db as any).prepare(`SELECT doc FROM entries_fts_vocab WHERE term = 'atl'`).first()) as { doc: number } | null;
+    expect(atl?.doc).toBe(2);
   });
 
   it("a pre-4.0 row's first update versions correctly with no gap: seq 1, valid_from = COALESCE(updated_at, created_at)", async () => {

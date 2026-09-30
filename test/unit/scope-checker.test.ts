@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (242 queries, 119 exceptions, 36 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (244 queries, 119 exceptions, 38 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1559,7 +1559,11 @@ describe("the checker over the real source tree", () => {
     // already-1,000-row-capped raw scan (still scope-checked, a JS-assembled fragment), landing
     // back on the pre-finding-7 count underneath a materially cheaper query. Recomputed against the
     // real scanner output on the merged tree, not hand-combined.
-    ).toEqual({ queries: 242, exempt: 119, checked: 36, outerJoin: 1 });
+    //
+    // Deliberate: +2 queries, +2 scope-checked (242/119/36 -> 244/119/38) for distillation's combined df statement
+    // (src/recall/distill.ts dfCountsStmt): its per-term FTS count fragment and the statement holding the entries pass,
+    // both scoped through scope.clause with numbered placeholders.
+    ).toEqual({ queries: 244, exempt: 119, checked: 38, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

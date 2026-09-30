@@ -172,7 +172,8 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     await Promise.all(state.deferred);
 
     expect(state.diagnostics.ftsUsed).toBe(true); // the live index actually served this
-    expect(state.diagnostics.distillSource).toBe("fts"); // T-0059: distillation counted through the index too
+    // T-0059: distillation counted through the index, or (every row here holds the terms) the one pass that prices cheaper; same call either way
+    expect(["fts", "scan"]).toContain(state.diagnostics.distillSource);
     const budget = snapshotRecallBudget(state.diagnostics, result);
     // T-0059/T-0065 (distill.ts): the LIKE df scan (1 D1 call) is replaced by
     // ONE batch — liveness, entry_counts' total, and every per-term count
@@ -201,7 +202,7 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     await Promise.all(state.deferred);
 
     expect(warmDiagnostics.ftsUsed).toBe(true);
-    expect(warmDiagnostics.distillSource).toBe("fts");
+    expect(["fts", "scan"]).toContain(warmDiagnostics.distillSource);
     // Matches the first call above exactly (T-0065): entry_counts has no
     // warm/cold distinction left to be cheaper than the first call.
     expect(snapshotRecallBudget(warmDiagnostics, warm).d1Statements).toBe(5);
