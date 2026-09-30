@@ -54,6 +54,15 @@ async function latestEventPayload(event: string): Promise<Record<string, unknown
   return JSON.parse(row.payload);
 }
 
+async function latestVersionMeta(entryId: string): Promise<Record<string, unknown> | null> {
+  await Promise.all(pending);
+  const row = await sqlite.db.prepare(
+    `SELECT meta FROM entry_versions WHERE entry_id = ? ORDER BY seq DESC LIMIT 1`,
+  ).bind(entryId).first() as { meta: string } | null;
+  if (!row) return null;
+  return JSON.parse(row.meta);
+}
+
 beforeEach(async () => {
   resetDatabaseInit();
   pending = [];
@@ -86,6 +95,55 @@ describe("MCP write tools record the calling client", () => {
     await call("update", { id, content: "replaced text" }, { clientName: "Test Client" });
     const payload = await latestEventPayload("updated");
     expect(payload).toMatchObject({ client: "Test Client" });
+  });
+
+  // W22/W25 (director, round 2 of the walkthrough follow-ups): the trash row and entry_events
+  // both get the calling client from capture/store.ts's audit event, but its own snapshotStatement
+  // call for the update path never copied change.client into entry_versions.meta -- the history
+  // tool's "changes" list (mcp/server.ts's historyActorVia) and the dashboard timeline
+  // (history-view.js's item.client) both read that field and promise it, so it must be there too.
+  it("update records the calling client on the version it snapshots, not just the audit event", async () => {
+    const id = "e-update-version-client";
+    sqlite.seed({ id, content: "original text", createdAt: Date.now() });
+    await call("update", { id, content: "replaced text" }, { clientName: "Test Client" });
+    const meta = await latestVersionMeta(id);
+    expect(meta).toMatchObject({ client: "Test Client" });
+  });
+
+  it("a REST update records no client on the version it snapshots", async () => {
+    const id = "e-rest-update-version-client";
+    sqlite.seed({ id, content: "original text", createdAt: Date.now() });
+    const res = await worker.fetch(
+      new Request("http://localhost/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+        body: JSON.stringify({ id, content: "replaced text" }),
+      }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const meta = await latestVersionMeta(id);
+    expect(meta).not.toHaveProperty("client");
+  });
+
+  // Director, round 3: the fix moved from store.ts's one-off into selectList (versions.ts), shared
+  // by every snapshotStatement/guardedSnapshotManyStatement caller -- this drives three of them
+  // through real MCP tools (update: capture/store.ts, set_status: capture/lifecycle.ts, resolve
+  // action=done: memory/actions.ts) rather than hand-seeding a version row, so a regression in any
+  // one writer, not just store.ts's, fails here.
+  it("every MCP-reachable version write carries meta.client: update, set_status, and an action", async () => {
+    const id = "e-structural-client";
+    sqlite.seed({ id, content: "a task to resolve", createdAt: Date.now(), tags: ["task"] });
+
+    await call("update", { id, content: "a task to resolve, edited" }, { clientName: "Test Client" });
+    expect(await latestVersionMeta(id)).toMatchObject({ client: "Test Client" });
+
+    await call("set_status", { id, status: "canonical" }, { clientName: "Test Client" });
+    expect(await latestVersionMeta(id)).toMatchObject({ client: "Test Client" });
+
+    await call("resolve", { id, action: "done" }, { clientName: "Test Client" });
+    expect(await latestVersionMeta(id)).toMatchObject({ client: "Test Client" });
   });
 
   it("set_status records the calling client", async () => {

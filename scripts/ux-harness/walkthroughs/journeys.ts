@@ -15,7 +15,7 @@ import type { Env } from "../../../src/env";
 import { ensureTenantBootstrap } from "../../../src/lib/tenancy";
 import { resolveIdentityByUserId } from "../../../src/lib/identity";
 import { forgetEntry } from "../../../src/capture/lifecycle";
-import { resolveConfig, DEFAULTS } from "../../../src/config";
+import { resolveConfig, DEFAULTS, CONFIG_KEY } from "../../../src/config";
 import { updateEntryContent } from "../../../src/capture/store";
 import { createMember } from "../../../src/lib/team-admin";
 import { moveEntry } from "../../../src/capture/share";
@@ -23,7 +23,12 @@ import { captureEntry } from "../../../src/capture/entry";
 import { withHold, withEditedCanonical } from "../../../src/quarantine/tags";
 import { memoryHeader } from "../../../src/recall/render";
 import { STANDING_TAG } from "../../../src/tags/t7";
+import { planSupersede, supersedeStatements, type Window } from "../../../src/memory/validity";
+import { VIEWPORTS } from "../browser";
 import { NotBuilt, type Journey } from "./types";
+
+/** w8's own teammate token, stashed between setup() and run() (journeys run one at a time). */
+let w8PriyaToken = "";
 
 async function ownerCtx(env: Env) {
   const roots = await ensureTenantBootstrap(env);
@@ -240,10 +245,30 @@ export const journeys: Journey[] = [
         `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w8-mem', 'Shared with the team.', '[]', 'api', ?, '[]', ?, ?)`,
       ).bind(Date.now() - 86_400_000, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
       await moveEntry("w8-mem", "company", env, ctx.owner, ctx.change);
-      await createMember(env, { name: "Priya", role: "member" });
+      const { token } = await createMember(env, { name: "Priya", role: "member" });
+      w8PriyaToken = token;
     },
     async run(ctx) {
+      // history.ts's own D-SH rule: the author sees every event; the shared-cut footer only
+      // shows for a non-author viewer, so this must actually view as Priya, not the owner.
+      // Registered after browser.ts's own newPage() hook, so it overrides sb_token on the very
+      // next navigation (evaluateOnNewDocument scripts run in registration order).
+      await ctx.page.evaluateOnNewDocument(t => localStorage.setItem("sb_token", t), w8PriyaToken);
       await gotoMemory(ctx.page, ctx.baseUrl, "w8-mem");
+      // Registering evaluateOnNewDocument right before the one navigation gotoMemory makes was
+      // observed to occasionally lose the race against browser.ts's own hook when run back-to-back
+      // with other journeys (never when run alone) -- verify the token actually took, and force one
+      // reload if not, rather than report a false PENDING for a real, if flaky, harness timing gap.
+      const active = await ctx.page.evaluate(() => localStorage.getItem("sb_token"));
+      if (active !== w8PriyaToken) {
+        await ctx.page.evaluate(t => localStorage.setItem("sb_token", t), w8PriyaToken);
+        await ctx.page.reload({ waitUntil: "networkidle0" });
+        await ctx.page.evaluate(() => (window as unknown as { switchTab(tab: string): void }).switchTab("memories"));
+        await ctx.page.waitForSelector(`.memory-card[data-id="w8-mem"] .card-content`, { timeout: 5000 });
+        await ctx.page.click(`.memory-card[data-id="w8-mem"] .card-content`);
+        await ctx.page.waitForSelector("#view-sheet.open", { timeout: 3000 }).catch(() => {});
+      }
+      await ctx.page.waitForSelector(".history-footer[data-footer='shared-cut'], [data-belongs-to]", { timeout: 5000 }).catch(() => {});
       const belongsLine = await ctx.page.$(".history-footer[data-footer='shared-cut'], [data-belongs-to]");
       if (!belongsLine) throw new NotBuilt("UX-A.2 / D-SH: the belongs-to line and share-start history cut", "no .history-footer[data-footer='shared-cut'] on the memory sheet for a teammate viewer");
       await ctx.shot("belongs-line", "the D-SH belongs-to / shared-cut footer");
@@ -273,8 +298,41 @@ export const journeys: Journey[] = [
   {
     id: "w10",
     title: "MCP burst (20 status changes), then the home board",
-    async setup() { throw new NotBuilt("S4: 'AI tools changed' dashboard line", "public/js/ai-changes.js does not exist on the merged tree yet (S4 lands after SH/TR per 16-t3-t4-trust-spec.md 5's merge order)"); },
-    async run() {},
+    // Touches quarantine holds / undo groups / the brief's changes list (src/brief/changes.ts) --
+    // director, 2026-09-29: re-run after FX2 merges, since that lane changes this exact code path.
+    async setup(env) {
+      const ctx = await ownerCtx(env);
+      const now = Date.now();
+      for (let i = 0; i < 20; i++) {
+        const id = `w10-mem-${i}`;
+        await env.DB.prepare(
+          `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, '["work"]', 'api', ?, '[]', ?, ?)`,
+        ).bind(id, `Memory ${i}`, now - 3_600_000, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+        await env.DB.prepare(
+          `INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, tags, state, actor_id, channel, reason, meta, valid_from, created_at) VALUES (?, ?, 1, ?, NULL, '["work"]', '{}', ?, 'mcp', 'status', '{"client":"Cursor"}', NULL, ?)`,
+        ).bind(id, ctx.roots.ownerPersonalWorkspaceId, `Memory ${i}`, ctx.owner.userId, now - 3_600_000 + i * 1000).run();
+        await env.DB.prepare(
+          `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, ?, ?, 'status_changed', '{"channel":"mcp","status":"canonical","client":"Cursor"}', ?)`,
+        ).bind(`w10-ev-${i}`, id, ctx.owner.userId, now - 3_600_000 + i * 1000).run();
+      }
+    },
+    async run(ctx) {
+      await gotoHome(ctx.page, ctx.baseUrl);
+      const summary = await ctx.page.waitForSelector(".ai-changes-summary", { timeout: 5000 }).catch(() => null);
+      if (!summary) throw new NotBuilt("S4: 'AI tools changed' dashboard line", "no .ai-changes-summary panel on the home board");
+      await ctx.shot("summary", "the home board's AI-changes summary line");
+      const reviewBtn = await ctx.page.$("#ai-changes-review");
+      if (!reviewBtn) throw new NotBuilt("S4: AI-changes review toggle", "no #ai-changes-review button");
+      await reviewBtn.click();
+      const groupRow = await ctx.page.waitForSelector(".ai-change-row.ai-change-group", { timeout: 3000 }).catch(() => null);
+      if (!groupRow) throw new NotBuilt("S4/S3: burst grouping in the AI-changes panel", "no .ai-change-row.ai-change-group after expanding -- the 20-row burst did not group");
+      await ctx.shot("expanded", "the AI-changes panel expanded, showing the grouped burst");
+      const undoAllBtn = await ctx.page.$(".ai-change-row.ai-change-group .ai-change-btn");
+      if (!undoAllBtn) throw new NotBuilt("S4/S3: Undo all on a burst group", "no .ai-change-btn (Undo all) on the grouped row");
+      await ctx.page.evaluate(el => (el as HTMLElement).click(), undoAllBtn);
+      await acceptConfirm(ctx.page);
+      await ctx.shot("undone", "the home board after Undo all on the burst group");
+    },
   },
   {
     id: "w11",
@@ -293,6 +351,14 @@ export const journeys: Journey[] = [
       const visible = await ctx.page.evaluate(el => (el as HTMLElement).style.display !== "none", heldBanner);
       if (!visible) throw new NotBuilt("T3/T4 lane S5: held banner", "#view-held is present but hidden for a held memory");
       await ctx.shot("held", "the held banner on a quarantined memory's sheet");
+      // Director, copywriter decision (deck section 15): this row's own vector_ids ('[]') makes it
+      // indexed:false too, so the held state is also the regression shot for "not indexed yet"
+      // staying hidden behind the held banner, at both widths.
+      const notIndexedNote = await ctx.page.evaluate(() => document.body.textContent?.includes("Not searchable by meaning") ?? false);
+      if (notIndexedNote) throw new Error("the not-indexed-yet note shows on a held memory's sheet; the held check should suppress it (memory-crud.js)");
+      await ctx.page.setViewport(VIEWPORTS.mobile);
+      await ctx.shot("held-mobile", "the held banner and suppressed not-indexed-yet note, mobile width");
+      await ctx.page.setViewport(VIEWPORTS.desktop);
       const releaseBtn = await ctx.page.$("#view-held-release");
       if (!releaseBtn) throw new NotBuilt("T3/T4 lane S5: Release action", "no #view-held-release button");
       // A direct DOM click, not Puppeteer's own (which insists the element be scrolled fully into
@@ -307,8 +373,43 @@ export const journeys: Journey[] = [
   {
     id: "w12",
     title: "Superseded fact",
-    async setup() { throw new NotBuilt("Track 2: validity labels (UX-F.1 / SH-5)", "no validUntil/supersededBy rendering found in public/js/memory-crud.js -- the backend (T-0089.2.1) has landed but the sheet's \"true until\"/\"replaced by\" labels have not"); },
-    async run() {},
+    async setup(env) {
+      const ctx = await ownerCtx(env);
+      const oldFrom = Date.now() - 2 * 86_400_000;
+      const newFrom = Date.now() - 86_400_000;
+      // supersededBySql's own join is exact: COALESCE(closer.valid_from, closer.created_at) must
+      // equal the closed row's valid_until -- seedOne's own createdAt default won't match a Window
+      // built separately, so both rows are seeded directly with the SAME timestamps the Window uses.
+      await env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w12-old', 'We ship on Thursdays.', '[]', 'api', ?, '[]', ?, ?)`,
+      ).bind(oldFrom, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+      await env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w12-new', 'We ship on Fridays now.', '[]', 'api', ?, '[]', ?, ?)`,
+      ).bind(newFrom, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+      const older: Window = { id: "w12-old", from: oldFrom, until: null, workspaceId: ctx.roots.ownerPersonalWorkspaceId, status: null };
+      const newer: Window = { id: "w12-new", from: newFrom, until: null, workspaceId: ctx.roots.ownerPersonalWorkspaceId, status: null };
+      const plan = planSupersede(older, newer);
+      await env.DB.batch(supersedeStatements(env, plan, older, newer, ctx.change, DEFAULTS));
+    },
+    async run(ctx) {
+      await gotoMemory(ctx.page, ctx.baseUrl, "w12-old");
+      // memory-crud.js's validityStatusCaptionHtml composes "True from ... until ..." and
+      // "Replaced by: {preview}" as two separate i18n strings, not one "(true until ...)" phrase.
+      // The caption re-fetches and re-renders asynchronously after the sheet opens; poll rather
+      // than reading it once immediately.
+      await ctx.page.waitForFunction(
+        () => (document.getElementById("view-status-caption")?.textContent ?? "").includes("Replaced by"),
+        { timeout: 5000 },
+      ).catch(() => {});
+      const caption = await ctx.page.$eval("#view-status-caption", el => el.textContent).catch(() => null);
+      if (!caption || !caption.includes("Replaced by") || !caption.includes("until")) {
+        throw new NotBuilt("Track 2: validity labels (UX-F.1 / SH-5)", `no "True from ... until ..." / "Replaced by" text in #view-status-caption (${JSON.stringify(caption)})`);
+      }
+      await ctx.shot("desktop", "the superseded fact's sheet, desktop width");
+      await ctx.page.setViewport(VIEWPORTS.mobile);
+      await ctx.shot("mobile", "the superseded fact's sheet, mobile width");
+      await ctx.page.setViewport(VIEWPORTS.desktop);
+    },
   },
   {
     id: "w13",
@@ -351,9 +452,13 @@ export const journeys: Journey[] = [
       for (let i = 1; i <= 7; i++) {
         await updateEntryContent(env, "w14-mem", `v${i}`, { ...DEFAULTS, VERSION_KEEP: 5 }, undefined, undefined, ctx.writeCtx, ctx.change, ctx.roots.ownerPersonalWorkspaceId);
       }
+      // The "pruned" footer compares chain.rows.length against config.VERSION_KEEP read fresh at
+      // render time (history-view.ts) -- the override above only reached the write path.
+      await env.OAUTH_KV.put(CONFIG_KEY, JSON.stringify({ VERSION_KEEP: 5 }));
     },
     async run(ctx) {
       await gotoMemory(ctx.page, ctx.baseUrl, "w14-mem");
+      await ctx.page.waitForSelector("#view-timeline .history-item[data-seq]", { timeout: 3000 }).catch(() => {});
       const prunedFooter = await ctx.page.$(".history-footer[data-footer='pruned']");
       if (!prunedFooter) throw new NotBuilt("UX-A.2: pruned footer", "no .history-footer[data-footer='pruned'] on the timeline");
       await ctx.shot("pruned", "the pruned-history footer");
@@ -465,7 +570,12 @@ export const journeys: Journey[] = [
   {
     id: "w22",
     title: "DCR client name recorded in the timeline, trash row and MCP history",
-    async setup() { throw new NotBuilt("UX-E: client-name walkthrough", "this is an MCP chat walkthrough, not a dashboard journey -- passes via npm run ux:chat (chat-walkthroughs/trust-scenarios.ts), checking MCP history and the trash row; the dashboard timeline is the one surface still unverified here"); },
+    // capture/store.ts's update path now copies change.client into entry_versions.meta too (was
+    // event-only), so the dashboard timeline (history-view.js's item.client) reads correctly, same
+    // as the MCP history tool and the trash row -- this runner still can't drive a browser to
+    // confirm the timeline directly, but npm run ux:chat's own W22 now passes all three surfaces
+    // it CAN check (trash row + MCP history), with no remaining known gap on the third.
+    async setup() { throw new NotBuilt("UX-E: client-name walkthrough", "this is an MCP chat walkthrough, not a dashboard journey -- passes via npm run ux:chat (chat-walkthroughs/trust-scenarios.ts), not run-all.ts"); },
     async run() {},
   },
   (() => {
@@ -558,7 +668,48 @@ export const journeys: Journey[] = [
   {
     id: "w26",
     title: "Wrong, then Undo from the toast, then the restored memory's sheet shows \"Replaced by\" again",
-    async setup() { throw new NotBuilt("Track 2 D3: validity labels (UX-F.1 / SH-5)", "builder 154c8ae4 on branch v4/t2-ui is building the sheet's \"true until\"/\"replaced by\" rendering now (director, 2026-09-28); this journey (formerly the OTHER W23, in 14-t2-time-spec.md, now renumbered W26 there and here) stays pending until it lands, same as W12"); },
-    async run() {},
+    async setup(env) {
+      const ctx = await ownerCtx(env);
+      const oldFrom = Date.now() - 2 * 86_400_000;
+      const newFrom = Date.now() - 86_400_000;
+      await env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w26-old', 'We ship on Thursdays.', '[]', 'api', ?, '[]', ?, ?)`,
+      ).bind(oldFrom, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+      await env.DB.prepare(
+        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES ('w26-new', 'We ship on Fridays now.', '[]', 'api', ?, '[]', ?, ?)`,
+      ).bind(newFrom, ctx.roots.ownerPersonalWorkspaceId, ctx.owner.userId).run();
+      const older: Window = { id: "w26-old", from: oldFrom, until: null, workspaceId: ctx.roots.ownerPersonalWorkspaceId, status: null };
+      const newer: Window = { id: "w26-new", from: newFrom, until: null, workspaceId: ctx.roots.ownerPersonalWorkspaceId, status: null };
+      const plan = planSupersede(older, newer);
+      await env.DB.batch(supersedeStatements(env, plan, older, newer, ctx.change, DEFAULTS));
+    },
+    async run(ctx) {
+      // Mark the newer fact Wrong: D-RET's retraction hook restores the older one it had closed.
+      await gotoMemory(ctx.page, ctx.baseUrl, "w26-new");
+      const wrongOption = await ctx.page.$('#view-status [data-status="deprecated"]');
+      if (!wrongOption) throw new NotBuilt("UX-H.1: status control", 'no [data-status="deprecated"] option on the memory sheet');
+      await wrongOption.click();
+      const undoBtn = await waitForToast(ctx.page);
+      if (!undoBtn) throw new NotBuilt("Track 2 D3 (UX-F.1): Wrong toast naming what it restored", "marking a superseding fact Wrong produced no Undo toast");
+      await ctx.shot("wrong", "the toast after marking the newer fact Wrong");
+      // Undo the Wrong: the newer fact is trusted again, so it re-closes the older one.
+      await undoBtn.click();
+      await ctx.shot("undone", "after undoing the Wrong from the toast");
+      await gotoMemory(ctx.page, ctx.baseUrl, "w26-old");
+      // The caption re-fetches and re-renders asynchronously after the sheet opens; poll rather
+      // than reading it once immediately after the click.
+      await ctx.page.waitForFunction(
+        () => (document.getElementById("view-status-caption")?.textContent ?? "").includes("Replaced by"),
+        { timeout: 5000 },
+      ).catch(() => {});
+      const caption = await ctx.page.$eval("#view-status-caption", el => el.textContent).catch(() => null);
+      if (!caption || !caption.includes("Replaced by")) {
+        throw new NotBuilt("Track 2 D3 (UX-F.1 / SH-5): Replaced by after undo", `the restored memory's #view-status-caption does not show "Replaced by" again after the undo (${JSON.stringify(caption)})`);
+      }
+      await ctx.shot("desktop", "the older fact's sheet showing Replaced by again, desktop width");
+      await ctx.page.setViewport(VIEWPORTS.mobile);
+      await ctx.shot("mobile", "the older fact's sheet showing Replaced by again, mobile width");
+      await ctx.page.setViewport(VIEWPORTS.desktop);
+    },
   },
 ];

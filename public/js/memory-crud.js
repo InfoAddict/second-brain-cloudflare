@@ -589,7 +589,11 @@ function renderViewBrain(entry) {
   for (const note of notes) {
     rows.push(`<div class="view-brain-note">${escHtml(note)}</div>`)
   }
-  if (entry.indexed === false) {
+  // Copywriter decision (deck section 15): a held memory is out of search by policy, not because
+  // it is still indexing - the held banner already says so, and "not indexed yet" beside it would
+  // read as a second, conflicting reason. Same heldReason(entry.tags) check as the held banner.
+  const heldForIndexNote = typeof heldReason === 'function' ? heldReason(entry.tags || []) : null
+  if (entry.indexed === false && !heldForIndexNote) {
     rows.push(`<div class="view-brain-note view-brain-note--warn">${escHtml(t('memories.notIndexedYet'))}</div>`)
   }
 
