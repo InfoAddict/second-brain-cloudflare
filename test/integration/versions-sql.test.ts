@@ -15,11 +15,11 @@ const change = (actorId = "u1", channel: "rest" | "mcp" | `system:${string}` = "
 
 /**
  * Node 22's node:sqlite truncates a TEXT column at its first NUL byte when marshaling the C string
- * back into a JS string on read — confirmed against real D1/workerd, which returns the full value
+ * back into a JS string on read; confirmed against real D1/workerd, which returns the full value
  * (production is unaffected; this is the local driver only). instr()/SQL-level checks still see
  * the whole value either way (SQLite's own engine never loses it, only node:sqlite's JS binding
  * does), which is why "NUL forces a full copy" (the decision, prior_length null) still holds
- * regardless — only the exact byte-for-byte content readback needs this feature-detect. A
+ * regardless; only the exact byte-for-byte content readback needs this feature-detect. A
  * dedicated check, not a Node version test: this is a driver quirk that could change independent
  * of which Node version ships it. See versioning-rows-written.workerd.test.ts's own NUL test for
  * the real-D1 proof of the byte-for-byte claim this can't make locally.

@@ -39,7 +39,7 @@ jobs:
       - run: npm run test:coverage
       # The CPU-budget tests above skip their timing assertions under coverage
       # instrumentation (v8 coverage adds per-call overhead the budgets were
-      # never meant to absorb) — this re-run, without --coverage, is what
+      # never meant to absorb); this re-run, without --coverage, is what
       # actually enforces those budgets on CI.
       - name: CPU budget tests (no coverage)
         run: npx vitest run test/unit/quarantine-cold-cpu.test.ts test/unit/quarantine-score.test.ts test/unit/versions-chain.test.ts

@@ -261,7 +261,7 @@ describe("renderHistory — change and event rows", () => {
     // this test is about; the dedicated describe blocks below cover team
     // mode's real-name path.
     // formatDateUI (i18n.js, loaded by installI18n) renders in the runtime's own timezone, same
-    // as history-view.js's own call — a hardcoded "6:40 AM" was really Eastern time and read as
+    // as history-view.js's own call. A hardcoded "6:40 AM" was really Eastern time and read as
     // "10:40 AM" wherever CI's TZ=UTC put it. Computing the expected string through the same
     // function keeps this timezone-independent instead of hardcoding either reading.
     const sharedDate = ctx.formatDateUI(EVENT_SHARED.at, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
