@@ -558,6 +558,25 @@ describe("pricing the df counts with entries_fts_vocab", () => {
     return { sqlite, env };
   }
 
+  it("a query needing more than 24 vocabulary lookups keeps the counts and reads no vocabulary", async () => {
+    const { sqlite, env } = await brain(10);
+    // Eight long words: far more than 24 distinct trigrams.
+    const out = await distillToRareTerms("atlasatlas ledgerledger widgetwidget harborharbor cactuscactus budgetbudget reportreport kernelkernel", env);
+    expect(out.distillSource).toBe("fts");
+    const combined = sqlite.batches.flat().find(sql => sql.startsWith("WITH RECURSIVE g AS MATERIALIZED"));
+    expect(combined).toBeTruthy();
+    expect(combined).not.toContain("entries_fts_vocab");
+    sqlite.close();
+  });
+
+  it("a common-word query within the lookup cap still reaches the pass", async () => {
+    const { sqlite, env } = await brain(10);
+    const out = await distillToRareTerms("atlas ledger widget", env);
+    expect(out.distillSource).toBe("scan");
+    expect(sqlite.batches.flat().find(sql => sql.startsWith("WITH RECURSIVE g AS MATERIALIZED"))).toContain("entries_fts_vocab");
+    sqlite.close();
+  });
+
   it("a missing entries_fts_vocab degrades to the LIKE scan with the same df", async () => {
     const { sqlite, env } = await brain(10);
     sqlite.db.prepare(`DROP TABLE entries_fts_vocab`).run();
@@ -576,7 +595,7 @@ describe("pricing the df counts with entries_fts_vocab", () => {
     sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-personal'`).run();
     const out = await distillToRareTerms(sixteen.join(" "), env, undefined, {}, memberOfTeams(30));
     expect(out.distillSource).toBe("fts");
-    const combined = sqlite.batches.flat().find(sql => sql.startsWith("WITH g AS MATERIALIZED"));
+    const combined = sqlite.batches.flat().find(sql => sql.startsWith("WITH RECURSIVE g AS MATERIALIZED"));
     expect(combined).toBeTruthy();
     expect(combined).not.toContain("entries_fts_vocab");
     sqlite.close();
@@ -587,7 +606,7 @@ describe("pricing the df counts with entries_fts_vocab", () => {
     sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-personal'`).run();
     const out = await distillToRareTerms(sixteen.join(" "), env, undefined, {}, memberOfTeams(70));
     expect(out.distillSource).toBe("fts");
-    expect(sqlite.batches.flat().some(sql => sql.startsWith("WITH g AS MATERIALIZED"))).toBe(false);
+    expect(sqlite.batches.flat().some(sql => sql.startsWith("WITH RECURSIVE g AS MATERIALIZED"))).toBe(false);
     expect(sqlite.batches.flat().some(sql => sql.startsWith("SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts WHERE"))).toBe(true);
     sqlite.close();
   });

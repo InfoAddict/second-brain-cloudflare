@@ -86,7 +86,11 @@ function rankAndRebuild(
   return rebuilt.length ? rebuilt.join(" ") : content.join(" ");
 }
 
-/** One term's scoped, time-bounded FTS MATCH count, capped at the saturation point. */
+/**
+ * One term's scoped, time-bounded df, capped at the saturation point. LIKE is the one definition of df, on every route: the
+ * trigram index folds some content characters LIKE does not (the Kelvin sign to "k", long s to "s"), so MATCH finds a superset
+ * of LIKE's rows for a term of three or more characters, and MATCH AND LIKE is exactly LIKE, read through the index.
+ */
 function ftsTermCountStmt(
   env: Env,
   term: string,
@@ -104,10 +108,10 @@ function ftsTermCountStmt(
   return env.DB.prepare(
     `SELECT count(*) AS n FROM (
        SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       WHERE entries_fts MATCH ? AND e.content LIKE ? ${CONTENT_LIKE_ESCAPE}${timeWhere}${scopeSql}
        LIMIT ?
      )`
-  ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), cap);
+  ).bind(match, contentLikePattern(term), ...timeBindings, ...(scope?.bindings ?? []), cap);
 }
 
 /** Scoped, time-bounded COUNT(*), batched with the liveness check (one subrequest). Time-bounded callers only — entry_counts has no time dimension. */
@@ -183,7 +187,7 @@ export async function scopedEntryTotal(env: Env, scope: ScopeClause | null): Pro
   }
 }
 
-/** One term's scoped FTS MATCH count, capped via a SQL subquery on entry_counts (see saturationCapSql) rather than a JS-bound number. No time bounds: those callers use ftsTermCountStmt/ftsScopedTotal instead. */
+/** One term's scoped df (MATCH AND LIKE, see ftsTermCountStmt), capped via a SQL subquery on entry_counts (see saturationCapSql) rather than a JS-bound number. No time bounds: those callers use ftsTermCountStmt/ftsScopedTotal instead. */
 function ftsTermCountStmtSqlCap(env: Env, term: string, scope: ScopeClause | null) {
   const match = ftsMatchQuery([term])!; // pre-filtered eligible by the caller
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
@@ -194,10 +198,10 @@ function ftsTermCountStmtSqlCap(env: Env, term: string, scope: ScopeClause | nul
   return env.DB.prepare(
     `SELECT count(*) AS n FROM (
        SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${scopeSql}
+       WHERE entries_fts MATCH ? AND e.content LIKE ? ${CONTENT_LIKE_ESCAPE}${scopeSql}
        LIMIT ${cap.sql}
      )`
-  ).bind(match, ...(scope?.bindings ?? []), ...cap.bindings);
+  ).bind(match, contentLikePattern(term), ...(scope?.bindings ?? []), ...cap.bindings);
 }
 
 /**
@@ -209,45 +213,98 @@ export function probeTrigrams(term: string): string[] {
   return [...new Set(cs.slice(2).map((_, i) => cs.slice(i, i + 3).join("")))];
 }
 
+/** The most vocabulary lookups one price may take: each reads its trigram's whole doclist (about 0.5 ms at 100k entries). */
+const PRICE_MAX_LOOKUPS = 24;
+
+/**
+ * The price's lookups, in the order they are taken: one distinct trigram each, with the terms it bounds. Round-robin across
+ * terms (each term's first and last trigram, then its middles), so every term's bound starts falling early.
+ */
+function priceSteps(terms: string[]): { trigram: string; terms: number[] }[] {
+  const queues = terms.map(t => {
+    const all = probeTrigrams(t);
+    const middles = all.slice(1, -1);
+    const ordered = all.length <= 2 ? all : [all[0], all[all.length - 1]];
+    while (middles.length) ordered.push(middles.splice(Math.floor(middles.length / 2), 1)[0]);
+    return ordered;
+  });
+  const steps = new Map<string, number[]>();
+  for (let round = 0; queues.some(q => round < q.length); round++) {
+    queues.forEach((q, k) => { if (round < q.length) steps.set(q[round], [...(steps.get(q[round]) ?? []), k]); });
+  }
+  return [...steps].map(([trigram, ks]) => ({ trigram, terms: [...new Set(ks)] }));
+}
+
 /**
  * Every term's df in one statement, from whichever source reads fewer rows. The per-term FTS counts read about two rows per
- * match (the index row and the entries row it joins), up to the saturation cap; one LIKE pass over the scope reads its total
- * and returns exact counts. The caller caps those as the FTS counts would be, so both routes give the same df.
+ * match (the index row and the entries row it joins), up to the saturation cap; one LIKE pass over the scope reads its total.
+ * Both apply LIKE as the definition of df (see ftsTermCountStmt), and the caller caps the pass's counts as the counts route
+ * caps them, so the route decides the cost and never the df.
  *
- * entries_fts_vocab prices the counts: a term's matches are estimated as its trigram bound (probeTrigrams), which counts
- * every workspace, scaled by the scope's share of all entries. The pass is taken when those estimates, capped, sum past the
- * scope's total, that is when the counts would read at least twice what the pass reads. The margin absorbs a loose bound
- * (common trigrams, rare word): on the core-1k eval it sent no query to the pass that the counts served cheaper.
+ * The price: a term's matches are bounded by its trigrams' document counts in entries_fts_vocab, which count every workspace,
+ * so each is scaled by the scope's share of all entries. The pass is taken when these bounds, capped, still sum past the
+ * scope's total once every trigram is read, that is when the counts would read at least twice what the pass reads; the
+ * margin absorbs a loose bound (common trigrams, rare word). Lookups are lazy (a recursive walk takes the next trigram only
+ * while the sum is still past the total), so a query that cannot reach the pass stops early, and one needing more than
+ * PRICE_MAX_LOOKUPS keeps the counts without reading the vocabulary.
  *
- * `priced` false keeps the counts without reading the vocabulary. Columns: total, n0..n<k-1> (null on the pass), and
- * `scanned` (null on the counts), a JSON array [COUNT(*), d0..d<k-1>]. Null when the binds pass D1's limit.
+ * Columns: total, n0..n<k-1> (null on the pass), and `scanned` (null on the counts), a JSON array [COUNT(*), d0..d<k-1>].
+ * Null when the binds pass D1's limit.
  */
-function dfCountsStmt(env: Env, terms: string[], scope: ScopeClause | null, priced: boolean): D1PreparedStatement | null {
+type DfRoute = "priced" | "counts" | "pass";
+
+function dfCountsStmt(env: Env, terms: string[], scope: ScopeClause | null, route: DfRoute): D1PreparedStatement | null {
+  const steps = route === "priced" ? priceSteps(terms) : [];
+  if (steps.length > PRICE_MAX_LOOKUPS) return dfCountsStmt(env, terms, scope, "counts");
   const binds: unknown[] = [];
   const bind = (v: unknown) => `?${binds.push(v)}`;
   // Scope values are bound once and referenced by number from every subquery.
   const clause = scope ? scope.clause.replace(/\?/g, (i => () => bind(scope.bindings[i++]))(0)) : "";
   const whereScope = clause ? ` WHERE ${clause}` : "";
   const andScope = clause ? ` AND ${clause}` : "";
-  const estimate = (t: string) =>
-    `min(cap, ${probeTrigrams(t).map(g => `coalesce((SELECT doc FROM entries_fts_vocab WHERE term = ${bind(g)}), 0) * total / everyone`).join(", ")})`;
-  const price = priced ? `${terms.map(estimate).join(" + ")} > total` : "0";
+  // walk row i holds every term's bound m<k> with lookups 0..i-1 applied, and `e`, lookup i, taken only while their sum is
+  // past the total. It ends with the lookups, so a price that settles early reads few rows.
+  const bounds = terms.map((_, k) => `m${k}`);
+  const trigrams = bind(JSON.stringify(steps.map(st => st.trigram)));
+  const masks = bind(JSON.stringify(steps.map(st => st.terms.reduce((mask, k) => mask | (1 << k), 0))));
+  const lookup = (i: string) =>
+    `min(cap, coalesce((SELECT doc FROM entries_fts_vocab WHERE term = json_extract(${trigrams}, '$[' || (${i}) || ']')), 0) * total / everyone)`;
+  const next = bounds.map((m, k) => `CASE WHEN (json_extract(${masks}, '$[' || w.i || ']') >> ${k}) & 1 THEN min(${m}, e) ELSE ${m} END`);
+  // total, cap and everyone ride along in each row: reading g once per step would cost a row each.
+  const walk = `walk(i, total, cap, everyone, ${bounds.join(", ")}, e) AS (
+       SELECT 0, total, cap, everyone, ${bounds.map(() => "cap").join(", ")}, CASE WHEN ${terms.length} * cap > total THEN ${lookup("0")} END FROM g
+       UNION ALL
+       SELECT w.i + 1, total, cap, everyone, ${next.join(", ")},
+         CASE WHEN ${next.join(" + ")} > total AND w.i + 1 < ${steps.length} THEN ${lookup("w.i + 1")} END
+       FROM walk w WHERE w.e IS NOT NULL
+     )`;
+  const priced = route === "priced" && steps.length > 0;
+  const price = priced
+    // The sum only falls as lookups land, so its minimum is the last row's.
+    ? `(SELECT min(${bounds.join(" + ")}) > total FROM walk)`
+    : route === "pass" ? "1" : "0";
+  // One LIKE pattern per term, shared by its count and the pass, so both routes apply the same definition of df.
+  const like = terms.map(t => bind(contentLikePattern(t)));
   const counts = terms.map((t, i) =>
     // scope-checked: the caller's clause IS applied through andScope (scope.clause, placeholders numbered), same join as ftsTermCountStmt
-    `CASE WHEN scan THEN NULL ELSE (SELECT count(*) FROM (SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id WHERE entries_fts MATCH ${bind(ftsMatchQuery([t])!)}${andScope} LIMIT (SELECT cap FROM g))) END AS n${i}`);
-  const sums = terms.map(t => `SUM(CASE WHEN content LIKE ${bind(contentLikePattern(t))} ${CONTENT_LIKE_ESCAPE} THEN 1 ELSE 0 END)`).join(", ");
+    `CASE WHEN scan THEN NULL ELSE (SELECT count(*) FROM (SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id WHERE entries_fts MATCH ${bind(ftsMatchQuery([t])!)} AND e.content LIKE ${like[i]} ${CONTENT_LIKE_ESCAPE}${andScope} LIMIT (SELECT cap FROM g))) END AS n${i}`);
+  const sums = like.map(p => `SUM(CASE WHEN content LIKE ${p} ${CONTENT_LIKE_ESCAPE} THEN 1 ELSE 0 END)`).join(", ");
   // scope-checked: the caller's clause IS applied to entry_counts, to each FTS count's entries join and to the pass, through
   // whereScope/andScope, which are scope.clause with its placeholders numbered; the lexer sees only the fragment names.
   // `everyone` is unscoped on purpose: it only scales the vocabulary's all-workspace counts, and never reaches a result.
-  const sql = `WITH g AS MATERIALIZED (
+  const sql = `WITH RECURSIVE g AS MATERIALIZED (
        SELECT total, everyone, max(CAST(${QUERY_SATURATION_FRACTION} * total AS INTEGER) + 1, ${FTS_MATCH_BUDGET + 1}) AS cap
-       FROM (SELECT (SELECT COALESCE(SUM(n), 0) FROM entry_counts${whereScope}) AS total, (SELECT max(COALESCE(SUM(n), 0), 1) FROM entry_counts) AS everyone)
-     ), p AS MATERIALIZED (SELECT total, cap, ${price} AS scan FROM g)
+       FROM (${priced
+         // One read of entry_counts for both: the scope's total and, to scale the all-workspace vocabulary, everyone's.
+         ? `SELECT COALESCE(SUM(CASE WHEN ${clause || "1"} THEN n END), 0) AS total, max(COALESCE(SUM(n), 0), 1) AS everyone FROM entry_counts`
+         : `SELECT COALESCE(SUM(n), 0) AS total, 1 AS everyone FROM entry_counts${whereScope}`})
+     ),${priced ? `\n     ${walk},` : ""}
+     p AS MATERIALIZED (SELECT total, cap, ${price} AS scan FROM g)
      SELECT total, ${counts.join(", ")},
        CASE WHEN scan THEN (SELECT json_array(COUNT(*), ${sums}) FROM entries${whereScope}) END AS scanned
      FROM p`;
   if (binds.length <= D1_MAX_BOUND_PARAMS) return env.DB.prepare(sql).bind(...binds);
-  return priced ? dfCountsStmt(env, terms, scope, false) : null;
+  return route === "priced" ? dfCountsStmt(env, terms, scope, "counts") : null;
 }
 
 /**
@@ -298,7 +355,7 @@ async function distillViaFts(
   let scanned: { df: Map<string, number>; total: number } | undefined;
 
   // A short term's df is sampled on the FTS route only, so its query keeps the counts.
-  const combined = hasBounds ? null : dfCountsStmt(env, dfTerms, scope, !shortTerms.length);
+  const combined = hasBounds ? null : dfCountsStmt(env, dfTerms, scope, shortTerms.length ? "counts" : "priced");
   if (combined) {
     const results = await env.DB.batch([
       env.DB.prepare(FTS_LIVENESS_SQL),
@@ -468,4 +525,17 @@ export async function distillToRareTerms(
   } catch {
     return { query: content.join(" "), df: null, total: null, distillSource: "like" };
   }
+}
+
+/** Test seam: every term's df through one forced route of dfCountsStmt, capped as distillation uses it. Null when the statement cannot be built. */
+export async function dfThroughRoute(env: Env, terms: string[], scope: ScopeClause | null, route: "counts" | "pass"): Promise<Map<string, number> | null> {
+  const stmt = dfCountsStmt(env, terms, scope, route);
+  if (!stmt) return null;
+  const row = ((await stmt.all()).results?.[0] ?? {}) as Record<string, unknown>;
+  const cap = saturationCap((row.total as number) ?? 0);
+  if (typeof row.scanned === "string") {
+    const [, ...counts] = JSON.parse(row.scanned) as (number | null)[];
+    return new Map(terms.map((t, i) => [t, Math.min(counts[i] ?? 0, cap)]));
+  }
+  return new Map(terms.map((t, i) => [t, (row[`n${i}`] as number) ?? 0]));
 }
