@@ -85,6 +85,20 @@ describe("pushDueItems", () => {
     expect((init as RequestInit).headers).toMatchObject({ "Content-Encoding": "aes128gcm" });
   });
 
+  it("does not push a task that is already done", async () => {
+    sq = await migrated();
+    seedDue(sq, "done-1", "Send the invoice", Date.now() - DAY, "Send the invoice");
+    sq.db.prepare(`UPDATE entries SET tags = '["task","task:done"]' WHERE id = 'done-1'`).run();
+    seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+    const fetchSpy = mockFetchAlways(201);
+
+    const result = await pushDueItems(env, "");
+
+    expect(result.sent).toBe(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("sends TTL and Urgency headers on every push POST — Apple's push service requires TTL", async () => {
     sq = await migrated();
     seedDue(sq, "e1", "File the report", Date.now() - DAY, "File the report");
@@ -115,7 +129,7 @@ describe("pushDueItems", () => {
     expect(encryptSpy).toHaveBeenCalledTimes(1);
     const plaintext = new TextDecoder().decode(encryptSpy.mock.calls[0][0].plaintext);
     const payload = JSON.parse(plaintext);
-    expect(payload.title).toBe("1 thing due - tap to view");
+    expect(payload.title).toBe("Something is due. Tap to see it.");
     expect(payload.body).toBeUndefined();
     expect(payload.entry_id).toBeUndefined();
   });
@@ -144,8 +158,8 @@ describe("pushDueItems", () => {
 
       const plaintext = new TextDecoder().decode(encryptSpy.mock.calls[0][0].plaintext);
       const payload = JSON.parse(plaintext);
-      expect(payload.body).toContain("2020-09-22");
-      expect(payload.body).not.toContain("2020-09-21");
+      expect(payload.body).toContain("Sep 22, 2020");
+      expect(payload.body).not.toContain("Sep 21");
     } finally {
       process.env.TZ = originalTz;
     }
@@ -170,7 +184,7 @@ describe("pushDueItems", () => {
 
     const plaintext = new TextDecoder().decode(encryptSpy.mock.calls[0][0].plaintext);
     const payload = JSON.parse(plaintext);
-    expect(payload.body).toContain("2020-09-23");
+    expect(payload.body).toContain("Sep 23, 2020");
   });
 
   it("does not re-notify for the same when_at once pushed", async () => {

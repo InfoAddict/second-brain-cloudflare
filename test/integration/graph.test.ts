@@ -114,7 +114,7 @@ describe("GET /graph", () => {
     // registry entry this type depends on.
     seedEntry(db, "i1", "An insight", ["work"]);
     seedEntry(db, "m1", "A source memory", ["work"]);
-    const created = await createEdge("i1", "m1", "drawn_from", { provenance: "system" }, env);
+    const created = await createEdge("i1", "m1", "drawn_from", { provenance: "system", readableWorkspaceIds: db.entries.map((e: any) => e.workspace_id ?? "") }, env);
     expect(created).not.toBeNull();
 
     const res = await worker.fetch(req("GET", "/graph"), env, ctx);

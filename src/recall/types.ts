@@ -1,11 +1,49 @@
 import type { EdgeProvenance, EdgeType } from "../graph/types";
 import type { Identity } from "../lib/identity";
+import type { MemoryStatus } from "../memory/status";
 import type { EmbeddingQueryMode } from "./query-profile";
+import type { RankMultipliers } from "./math";
 import type { RootView } from "./root-selector";
+import type { SupersededBy, ValidityState } from "./validity-view";
+
+/** A deprecated memory found at as-of time T: what was believed then, later retracted (spec 14 5.7). */
+export interface RetractedBelief {
+  /** The record time of the newest version whose prior tags were not deprecated: when it was last marked wrong. */
+  retractedAt: number;
+  /** The id of the true-at-T result it replaced, when found via a `supersedes` edge; null when standalone. */
+  attachedTo: string | null;
+}
 
 export interface CompoundStaleSignal {
   count: number;
   oldestUpdatedAt: number;
+}
+
+/** How one query term matched a note: level 2 = as a word of its own, 1 = only inside a longer word. */
+export interface KeywordTermTrace {
+  term: string;
+  level: 1 | 2;
+  idf: number;
+}
+
+/** Where in the returned list a memory was seated. */
+export type WhySlot = "direct" | "linked" | "evidence" | "deeper";
+
+/** Why one memory came back: data recall had already computed, returned only when `explain` is asked for. */
+export interface WhyTrace {
+  /** 1-based rank in the dense (meaning) arm, null when that arm did not return it. */
+  dense_rank: number | null;
+  keyword_terms: KeywordTermTrace[];
+  /** Null on memories that were not scored through the direct ranking (linked ones). */
+  multipliers: RankMultipliers | null;
+  /** The cross-encoder's percentile among what it scored (1 best, 0 worst), null when it did not score this memory. */
+  rerank_percentile: number | null;
+  /** Whether blending the model's scores moved this memory up or down the list; null when it did not move or was not scored. */
+  rerank_move: "up" | "down" | null;
+  /** False when the vector carried no created_at, so recency was scored as brand new; null when not scored directly. */
+  age_known: boolean | null;
+  graph: { provenance: EdgeProvenance; type: EdgeType; from: string } | null;
+  slot: WhySlot;
 }
 
 export interface RecallMatch {
@@ -28,6 +66,48 @@ export interface RecallMatch {
   viaType?: EdgeType;
   viaLinkedAt?: number;           // when the edge was formed
   viaFrom?: string;               // id of the memory this one was reached from
+  /** Present only when the caller asked to explain the ranking. */
+  why?: WhyTrace;
+  /** Recurring notices this row's near-duplicate collapse absorbed, newest first, up to 5 (4.4). */
+  similar?: { id: string; createdAt: number }[];
+  /** Effective start: COALESCE(valid_from, created_at) (T-0089.2.1). */
+  validFrom: number;
+  /** Whether valid_from was stated, not defaulted from createdAt. */
+  validFromStated: boolean;
+  validUntil: number | null;
+  validityState: ValidityState;
+  /** The live closer, when validityState is "replaced"; null otherwise. */
+  supersededBy: SupersededBy | null;
+  retractedSource: boolean;
+  /**
+   * As-of fields (spec 14 5.7), present only when `asOf` was set. A true-at-T result carries
+   * asOfTextChangedAt/statusAt/recordedAfterAsOf/asOfPruned/asOfTextHidden/asOfHeld; a belief
+   * entry carries only retractedBelief.
+   */
+  asOfTextChangedAt?: number | null;
+  statusAt?: MemoryStatus | null;
+  recordedAfterAsOf?: boolean;
+  /** The oldest version history still kept ran out before reaching a row at or before T (item 6). */
+  asOfPruned?: boolean;
+  /** D-SH cut the version chain before reaching a row at or before T (item 6). */
+  asOfTextHidden?: boolean;
+  /** The text/tags this row had at T were held then (T-0102 MAJOR fix): `content` is "" here, whatever the row's current hold status. */
+  asOfHeld?: boolean;
+  retractedBelief?: RetractedBelief | null;
+}
+
+/** A standing instruction that fired above the results (spec 15 2.7-2.9), hydrated fresh from D1, never from KV. */
+export interface StandingFire {
+  id: string;
+  content: string;
+  createdAt: number;
+  workspace: "personal" | "company" | "system";
+  /** Set only when the row is not the caller's own (2.9: "set by Dana, Jul 3, 2026"). */
+  actorName?: string;
+  project: string | null;
+  score: number;
+  /** Present only when the caller asked to explain the ranking (2.9). */
+  why?: string;
 }
 
 export interface RecallSearchResult {
@@ -39,6 +119,14 @@ export interface RecallSearchResult {
   // memory has to be shortened for the response.
   queryTokens?: string[];
   compoundStale?: CompoundStaleSignal;
+  /** Present only when `asOf` was set (spec 14 5.7/5.9). */
+  asOf?: { at: number; notRecordedBefore: number | null };
+  /** Standing instructions that fired, capped at STANDING_MAX_FIRES, present only when non-empty (spec 15 2.8/2.9). */
+  standing?: StandingFire[];
+  /** Part C (05-proof.md, T-0089.5.3): a short, citable id for this recall — the recall_log
+   * row's id when RECALL_LOG is on and this call logged, otherwise a hash of the query and
+   * the time bucket. Always present; zero D1 cost when the log is off. */
+  receipt: string;
 }
 
 export interface RecallDiagnostics {
@@ -67,7 +155,7 @@ export interface RecallDiagnostics {
   /** Why the keyword arm served FTS or LIKE on the last recall; memberFirst recalls never reach keywordSearch. */
   ftsRoute?: "fts" | "fts-bounded" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error" | "like-member-first" | "skipped-by-variant";
   /** T-0059: how df/total were obtained on the last recall's term distillation. */
-  distillSource?: "fts" | "like" | "shortcut";
+  distillSource?: "fts" | "like" | "scan" | "shortcut";
   /** What the cross-encoder step did on the last recall; "applied" means one model call reordered the candidates. */
   rerankRoute?: RerankRoute;
   /** Set when single-term keyword evidence was withheld: the term is too common (df over the saturation fraction, or the keyword window filled) or the corpus size was unavailable. */
@@ -135,6 +223,12 @@ export interface RecallInternalOptions {
   keywordPreRankedOverride?: boolean;
   /** Eval-only experiment switches; no route or MCP tool sets these. */
   variant?: RecallVariantFlags;
+  /**
+   * As-of recall (spec 14 5.7): what was actually true at this moment, not what is true now.
+   * Set, this skips parseTimePhrase's bounds, swaps the keyword and hydration predicates for
+   * validity-at-T, and appends retracted beliefs after every actually-true result.
+   */
+  asOf?: number;
 }
 
 export interface KeywordRow {
@@ -150,4 +244,4 @@ export interface KeywordRow {
   odd?: boolean;
 }
 
-export type { VectorizeMatch } from "./math";
+export type { RankMultipliers, VectorizeMatch } from "./math";

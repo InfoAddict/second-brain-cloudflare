@@ -13,7 +13,7 @@ import { neighborsFromVectorQuery } from "../../src/graph/traverse";
 import { nearestParents } from "../../src/vectorize/parents";
 import { DEFAULTS } from "../../src/config";
 import { VECTORIZE_UPSERT_BATCH, WRITE_PATH_TOPK } from "../../src/constants";
-import { deleteVectorIds } from "../../src/vectorize/batch";
+import { deleteEntryVectors } from "../../src/vectorize/batch";
 import type { Env } from "../../src/env";
 
 const DIMS = 256;
@@ -37,11 +37,17 @@ const longNote = (tag: string) =>
 
 function makeEnv() {
   const d1 = makeSqliteD1();
+  // Validity columns are runtime ALTERs (src/db/init.ts), not in schema.sql; the duplicate check reads valid_until.
+  d1.db.prepare(`ALTER TABLE entries ADD COLUMN valid_from INTEGER`).run();
+  d1.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   const vectorize = new ExactVectorize({ dimensions: DIMS });
   const embeds: string[] = [];
   const env = {
     DB: d1.db, OAUTH_KV: makeMemoryKV(), VECTORIZE: vectorize as unknown as VectorizeIndex,
-    AI: { run: vi.fn(async (_m: string, input: { text: string[] }) => { embeds.push(input.text[0]); return { data: [bow(input.text[0])] }; }) },
+    // Codex review, T-0102 F3: storeEntry now always batchEmbeds (embedMany, one AI call for the
+    // whole chunk batch), so the mock must return one vector per input text like the real API,
+    // not just the first.
+    AI: { run: vi.fn(async (_m: string, input: { text: string[] }) => { embeds.push(...input.text); return { data: input.text.map(bow) }; }) },
     VECTORIZE_GRACE_MS: "0",
   } as unknown as Env;
   return { env, d1, vectorize, embeds };
@@ -104,14 +110,18 @@ describe("Vectorize call sizes", () => {
 
   it("deletes vectors in calls of at most VECTORIZE_UPSERT_BATCH, and never deletes an id that is kept", async () => {
     const calls: string[][] = [];
-    const env = { VECTORIZE: { deleteByIds: vi.fn(async (ids: string[]) => { calls.push(ids); }) } } as unknown as Env;
+    // Every vector names its entry in metadata.parentId; deleteEntryVectors checks it (T-0089.1.1).
+    const env = { VECTORIZE: {
+      deleteByIds: vi.fn(async (ids: string[]) => { calls.push(ids); }),
+      getByIds: vi.fn(async (ids: string[]) => ids.map(id => ({ id, values: [], metadata: { parentId: "e" } }))),
+    } } as unknown as Env;
     const ids = Array.from({ length: 2_500 }, (_, i) => `v${i}`);
-    await deleteVectorIds(env, ids);
+    await deleteEntryVectors(env, [{ entryId: "e", vectorIds: ids }]);
     expect(calls.map(c => c.length)).toEqual([1000, 1000, 500]);
     expect(calls.flat()).toEqual(ids);
 
     calls.length = 0;
-    await deleteStaleVectors(env, ids, ids.slice(0, 1_200));
+    await deleteStaleVectors(env, "e", ids, ids.slice(0, 1_200));
     expect(calls.flat()).toEqual(ids.slice(1_200));
     expect(Math.max(...calls.map(c => c.length))).toBeLessThanOrEqual(VECTORIZE_UPSERT_BATCH);
   });

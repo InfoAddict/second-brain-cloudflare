@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { COMPRESSION_IMPORTANCE_THRESHOLD, COMPRESSION_MIN_RECALL, isTopicTag } from "../../src/compression/eligibility";
+import { NOT_HELD_SQL } from "../../src/quarantine/tags";
 
 /**
  * Decode a `%"tag"%` bind parameter back to the tag, undoing tagLikePattern's escaping.
@@ -39,13 +40,17 @@ const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../..
 const SCHEMA_PROBE_RESULTS = [
   ...["entries", "edges", "insight_candidates", "workspaces", "users", "memberships",
     "entry_events", "admin_events", "maintenance_cursor", "prompt_capsule_revisions", "projects",
-    "push_subscriptions", "entries_fts", "entry_counts"]
+    "push_subscriptions", "recall_log", "entry_versions", "entries_trash", "entries_fts", "entries_fts_vocab", "entry_counts"]
     .map(name => ({ kind: "table", name })),
   ...["idx_entries_created_at", "idx_entries_source", "idx_entries_workspace_created", "idx_entries_capsule",
     "idx_edges_source", "idx_edges_target", "idx_edges_weight", "idx_insight_candidates_queue",
     "idx_workspaces_kind", "idx_users_token_hash", "idx_users_email", "idx_memberships_workspace",
-    "idx_entry_events_entry", "idx_entry_events_created", "idx_admin_events_created",
-    "idx_projects_workspace", "idx_entries_project", "idx_push_subscriptions_workspace"]
+    "idx_entry_events_entry", "idx_entry_events_created", "idx_entry_events_actor", "idx_entry_events_held", "idx_entry_events_life_end", "idx_admin_events_created",
+    "idx_projects_workspace", "idx_entries_project", "idx_entries_conflict_held", "idx_push_subscriptions_workspace",
+    "idx_recall_log_ws",
+    "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
+    "idx_entries_ledger", "idx_entries_standing",
+    "idx_entry_versions_entry", "idx_entries_trash_deleted", "idx_entries_trash_workspace_deleted"]
     .map(name => ({ kind: "index", name })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
     "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete",
@@ -54,7 +59,7 @@ const SCHEMA_PROBE_RESULTS = [
     .map(name => ({ kind: "trigger", name, definition: TRIGGER_DDL.get(name) })),
   ...["id", "content", "tags", "source", "created_at", "vector_ids", "recall_count",
     "importance_score", "contradiction_wins", "contradiction_losses", "updated_at",
-    "staleness_checked_at", "when_at", "when_kind", "when_source", "when_label"].map(name => ({ kind: "column", name })),
+    "staleness_checked_at", "when_at", "when_kind", "when_source", "when_label", "valid_from", "valid_until"].map(name => ({ kind: "column", name })),
   ...["workspace_id", "actor_id"].map(name => ({ kind: "column", name })),
   // edges.workspace_id arrives by ALTER on upgraded brains and lives in the base
   // CREATE on fresh ones — either way a migrated brain reports it.
@@ -68,11 +73,32 @@ const SCHEMA_PROBE_RESULTS = [
   // whose audit trail cannot record what an action was done TO.
   { kind: "admin_event_column", name: "target_user_id" },
   { kind: "admin_event_column", name: "workspace_id" },
+  // entry_versions.prior_length_utf16 arrives by ALTER on brains created before it existed and
+  // lives in the base CREATE on fresh ones (T-0089.1.1, ADV-10) — a migrated brain reports it either way.
+  { kind: "entry_version_column", name: "prior_length_utf16" },
+  // entries_trash.nonce, same shape (T-0089.1.1, adv-final MAJOR 1): ALTER on an old brain, base
+  // CREATE on a fresh one, reported either way by a migrated brain.
+  { kind: "entries_trash_column", name: "nonce" },
 ];
+
+/**
+ * Values bound through a Params-numbered statement (`?1..?n`, dense, values reused by identity —
+ * ADV-1/ADV-2/Task 6), in the order their placeholders appear in the SQL text. `Params` gives a
+ * value REUSED verbatim (e.g. tags unchanged: the SET clause and the CAS guard bind the same
+ * string) the SAME number, so `args` can be shorter than the number of semantic slots a statement
+ * has — indexing positionally into `args` the way earlier, unnumbered branches in this file do
+ * would silently misread every slot after the first reuse. This resolves each occurrence back to
+ * its real value by placeholder number instead.
+ */
+function placeholderArgs(sql: string, args: unknown[]): unknown[] {
+  return [...sql.matchAll(/\?(\d+)/g)].map(m => args[Number(m[1]) - 1]);
+}
 
 export class D1Mock {
   entries: any[] = [];
   edges: any[] = [];
+  /** entries_trash rows written by the forget batch (the statements the mock models are the trash ones only). */
+  trash: any[] = [];
   // Tenancy rows, populated by the real ensureTenantBootstrap when a route's
   // requireIdentity runs against this double. The statements it issues are
   // modelled just faithfully enough for the owner identity to resolve; member
@@ -81,8 +107,32 @@ export class D1Mock {
   workspaces: any[] = [];
   memberships: any[] = [];
 
+  /**
+   * Vector id -> the row that listed it, remembered across statements (T-0089.1.1): the index still
+   * holds a row's vectors after the write that clears its vector_ids, until they are deleted. Read by
+   * make-env's Vectorize double to answer deleteEntryVectors' parentId check the way real data would.
+   */
+  private listedVectors = new Map<string, string>();
+  private rememberListed(): void {
+    for (const r of [...this.entries, ...this.trash]) {
+      let ids: string[] = [];
+      try { ids = JSON.parse(r.vector_ids ?? "[]"); } catch { ids = []; }
+      for (const v of ids) if (!this.listedVectors.has(v)) this.listedVectors.set(v, r.id);
+    }
+  }
+  __vectorOwners(): Map<string, string> { this.rememberListed(); return this.listedVectors; }
+
   prepare(sql: string) {
+    if (/^\s*(UPDATE entries|DELETE FROM entries|INSERT INTO entries_trash)/i.test(sql)) this.rememberListed();
     let s = sql.replace(/\s+/g, " ").trim();
+
+    // T-0089.4.2 (quarantine): every read this double models predates held
+    // rows, and none of its fixtures seed one, so the clause changes nothing a
+    // test here could see. Stripped like the ESCAPE clause below, rather than
+    // grown onto every exact-string branch, because it never changes which
+    // query a statement IS. Held exclusion itself is covered against real
+    // SQLite in test/integration/recall-held.test.ts.
+    s = s.replace(new RegExp(` AND ${NOT_HELD_SQL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g"), "");
 
     // Team-edition workspace scoping. Production appends `AND workspace_id IN (?, ?)`
     // (or a bare `WHERE` form) whenever an Identity is in play. Every integration test
@@ -112,6 +162,19 @@ export class D1Mock {
         .replace(/WHERE\s*\)/gi, ")");
     }
 
+    // Round 6 (T-0089.1.1): writers that replace vector_ids also compare-and-set the vector_ids they
+    // read (`AND e.vector_ids = ?N`). Modelled once here: the clause is checked against the row at run
+    // time and stripped, so every existing branch below keeps matching the statement it always did.
+    let vectorIdsGuard: { valueIdx: number; idIdx: number } | null = null;
+    {
+      const vg = /\s+AND e\.vector_ids (?:=|IS) \?(\d+)/.exec(s);
+      const idm = /e\.id = \?(\d+)/.exec(s);
+      if (vg && idm) {
+        vectorIdsGuard = { valueIdx: Number(vg[1]) - 1, idIdx: Number(idm[1]) - 1 };
+        s = s.replace(vg[0], "");
+      }
+    }
+
     // Production pairs every tag LIKE clause with `ESCAPE '\\'` (see tagLikePattern). The
     // escape clause never changes which query a statement IS, so branches that identify a
     // query by its exact text compare against this form rather than each growing a suffix.
@@ -123,6 +186,11 @@ export class D1Mock {
       const args = scopeDrop.size ? allArgs.filter((_, i) => !scopeDrop.has(i)) : allArgs;
       const stmt: any = {
       async run() {
+        if (vectorIdsGuard) {
+          const row = db.entries.find((e: any) => e.id === args[vectorIdsGuard!.idIdx]);
+          const expected = args[vectorIdsGuard.valueIdx];
+          if (row && expected !== null && (row.vector_ids ?? "[]") !== expected) return { meta: { changes: 0 } };
+        }
         // D1 returns each batched statement's rows as well as its meta, and a
         // batch carries reads as well as writes: identity resolution pairs its
         // SELECT with the throttled last_used_at write so the pair costs one
@@ -189,7 +257,7 @@ export class D1Mock {
           }
           return { meta: { changes: n } };
         }
-        if (s.startsWith("INSERT INTO entries")) {
+        if (s.startsWith("INSERT INTO entries (")) {
           const colMatch = s.match(/INSERT INTO entries \(([^)]+)\)/i);
           if (!colMatch) throw new Error("INSERT INTO entries missing column list");
           const cols = colMatch[1].split(",").map(c => c.trim());
@@ -219,6 +287,134 @@ export class D1Mock {
           if (row) { row.content = content; row.vector_ids = vector_ids; row.tags = tags; row.updated_at = updated_at; }
           return { meta: { changes: row ? 1 : 0 } };
         }
+        // Short append (T-0089.9/ADV-1/ADV-2, buildCasGuard/Params, dense-numbered): content is
+        // concatenated in SQL, guarded on tags AND workspace_id (the row this call is authorized
+        // for). updated_at is clamped strictly past its own previous value, a bare row reference
+        // with no placeholder of its own (MAX(?N, COALESCE(e.updated_at, e.created_at) + 1)).
+        if (s.startsWith("UPDATE entries AS e SET content = content || ")) {
+          const args2 = placeholderArgs(s, args);
+          const hasWhen = /when_at = \?\d+/.test(s);
+          const [suffix, indexed, chunk, tags, updated_at, ...rest] = args2;
+          const when = hasWhen ? rest.splice(0, 2) : [];
+          const [id, readTags, workspace_id] = rest;
+          const row = db.entries.find((e: any) => e.id === id && (e.tags ?? "[]") === readTags && (e.workspace_id ?? "") === workspace_id);
+          if (row) {
+            row.content = row.content + suffix;
+            if (indexed === 1) row.vector_ids = JSON.stringify([...JSON.parse(row.vector_ids ?? "[]"), chunk]);
+            row.tags = tags; row.updated_at = updated_at;
+            if (hasWhen) { row.when_at = when[0]; row.when_kind = when[1]; row.when_source = "explicit"; }
+          }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // A person's or a system's merge/replace commit (entry.ts), vector_ids folded into the same
+        // guarded UPDATE (ADV-4 residual): SET content, tags, updated_at, vector_ids, guarded on
+        // TAGS first then content (systemCasColumns/personCasColumns build tags before content —
+        // the update/append branch below guards content first, which is how the two are told apart
+        // here). The system form adds the actor/source identity check (an empty actor, its own source).
+        if (/^UPDATE entries AS e SET content = \?\d+, tags = \?\d+, updated_at = (\?\d+, vector_ids = \?\d+ WHERE e\.id = \?\d+ AND e\.tags|MAX\(\?\d+, COALESCE\(e\.updated_at, e\.created_at\) \+ 1\), vector_ids = \?\d+ WHERE e\.id = \?\d+ AND e\.tags)/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const hasActorSourceTail = s.includes("COALESCE(e.actor_id, '') = ''");
+          const [content, tags, updated_at, vector_ids, id, readTags, readContent, workspace_id, source] = args2;
+          const row = db.entries.find((e: any) =>
+            e.id === id && (e.tags ?? "[]") === readTags && e.content === readContent && (e.workspace_id ?? "") === workspace_id
+            && (!hasActorSourceTail || ((e.actor_id ?? "") === "" && e.source === source)));
+          if (row) { row.content = content; row.tags = tags; row.updated_at = updated_at; row.vector_ids = vector_ids; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // updateEntryContent's compare-and-set commit, and the append long branch (identical
+        // shape): updated_at is clamped strictly past its own previous value in both
+        // (`updated_at = MAX(?N, COALESCE(e.updated_at, e.created_at) + 1)`, a bare row reference
+        // with no extra placeholder of its own), so the two forms need no special-casing here —
+        // one placeholder for updated_at's own value, immediately followed by vector_ids, either way.
+        // SET content, tags, updated_at, vector_ids atomically (ADV-4), guarded on content, tags AND
+        // workspace_id (ADV-2, buildCasGuard).
+        if (/^UPDATE entries AS e SET content = \?\d+, tags = \?\d+, updated_at = (\?\d+|MAX\(\?\d+)/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const hasWhen = /when_at = \?\d+/.test(s);
+          const [content, tags, updated_at, vector_ids, ...rest] = args2;
+          const when = hasWhen ? rest.splice(0, 2) : [];
+          const [id, readContent, readTags, workspace_id] = rest;
+          const row = db.entries.find((e: any) => e.id === id && e.content === readContent && (e.tags ?? "[]") === readTags && (e.workspace_id ?? "") === workspace_id);
+          if (row) {
+            row.content = content; row.tags = tags; row.updated_at = updated_at; row.vector_ids = vector_ids;
+            if (hasWhen) { row.when_at = when[0]; row.when_kind = when[1]; row.when_source = "explicit"; }
+          }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // applyStatus's non-deprecated branch (lifecycle.ts, R2-3): SET tags alone, guarded on
+        // workspace_id — the row moved out of the caller's authorized workspace misses.
+        if (/^UPDATE entries AS e SET tags = \?\d+ WHERE e\.id = \?\d+ AND e\.workspace_id = \?\d+$/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const [tags, id, workspace_id] = args2;
+          const row = db.entries.find((e: any) => e.id === id && (e.workspace_id ?? "") === workspace_id);
+          if (row) row.tags = tags;
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // deprecateEntry (lifecycle.ts, R2-3): SET tags and empty vector_ids, guarded on workspace_id
+        // alone — the caller already read tags to compute the deprecated set, so there is nothing
+        // else to re-check. Checked first (a strict end anchor) so entry.ts's wider contradiction
+        // shape below, which guards tags/content too, is not shadowed by this simpler prefix.
+        if (/^UPDATE entries AS e SET tags = \?\d+, vector_ids = '\[\]' WHERE e\.id = \?\d+ AND e\.workspace_id = \?\d+$/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const [tags, id, workspace_id] = args2;
+          const row = db.entries.find((e: any) => e.id === id && (e.workspace_id ?? "") === workspace_id);
+          if (row) { row.tags = tags; row.vector_ids = "[]"; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // A system job's contradiction deprecation (entry.ts): SET tags and empty vector_ids, guarded
+        // on tags, content, workspace_id and the same actor/source identity check.
+        if (/^UPDATE entries AS e SET tags = \?\d+, vector_ids = '\[\]' WHERE e\.id/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const [tags, id, readTags, readContent, workspace_id, source] = args2;
+          const row = db.entries.find((e: any) =>
+            e.id === id && (e.tags ?? "[]") === readTags && e.content === readContent && (e.workspace_id ?? "") === workspace_id
+            && (e.actor_id ?? "") === "" && e.source === source);
+          if (row) { row.tags = tags; row.vector_ids = "[]"; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // Short append: content is concatenated in SQL and the write compares-and-sets on the tags it read.
+        if (s.startsWith("UPDATE entries SET content = content || ?, vector_ids = CASE WHEN ? = 1")) {
+          const hasWhen = s.includes("when_at = ?");
+          const [suffix, indexed, chunk, tags, updated_at, ...rest] = args;
+          const when = hasWhen ? rest.splice(0, 2) : [];
+          const [id, readTags] = rest;
+          const row = db.entries.find((e: any) => e.id === id && (e.tags ?? "[]") === readTags);
+          if (row) {
+            row.content = row.content + suffix;
+            if (indexed === 1) row.vector_ids = JSON.stringify([...JSON.parse(row.vector_ids ?? "[]"), chunk]);
+            row.tags = tags; row.updated_at = updated_at;
+            if (hasWhen) { row.when_at = when[0]; row.when_kind = when[1]; row.when_source = "explicit"; }
+          }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // Long append: compare-and-set on content and tags. Also mirror.ts's sync commit, whose
+        // updated_at is clamped strictly past its own previous value (a bare row reference, MAX(?,
+        // COALESCE(updated_at, created_at) + 1)) — one placeholder for its own value either way.
+        if ((s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ?") || s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = MAX(?,")) && s.includes("WHERE id = ? AND content = ? AND tags = ?")) {
+          const hasWhen = s.includes("when_at = ?");
+          const [content, tags, updated_at, ...rest] = args;
+          const when = hasWhen ? rest.splice(0, 2) : [];
+          const [id, readContent, readTags] = rest;
+          const row = db.entries.find((e: any) => e.id === id && e.content === readContent && (e.tags ?? "[]") === readTags);
+          if (row) {
+            row.content = content; row.tags = tags; row.updated_at = updated_at;
+            if (hasWhen) { row.when_at = when[0]; row.when_kind = when[1]; row.when_source = "explicit"; }
+          }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // An append that also sets the time anchor (Task 3 folds the separate `when` UPDATE into the batch).
+        if (s.startsWith("UPDATE entries SET content = ?, vector_ids = ?, tags = ?, updated_at = ?, when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id")) {
+          const [content, vector_ids, tags, updated_at, when_at, when_kind, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) { Object.assign(row, { content, vector_ids, tags, updated_at, when_at, when_kind, when_source: "explicit" }); }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ?, when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id")) {
+          const [content, tags, updated_at, when_at, when_kind, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) { Object.assign(row, { content, tags, updated_at, when_at, when_kind, when_source: "explicit" }); }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
         if (s.startsWith("UPDATE entries SET content = ?, vector_ids = ? WHERE id")) {
           const [content, vector_ids, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
@@ -240,6 +436,9 @@ export class D1Mock {
         if (s.startsWith("UPDATE entries SET vector_ids")) {
           const [vector_ids, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
+          // storeEntry's and the nightly pass's compare-and-set on the vector_ids read (round 6).
+          if (row && s.endsWith("AND vector_ids = ?") && (row.vector_ids ?? "[]") !== args[args.length - 1]) return { meta: { changes: 0 } };
+          if (row && s.includes("AND vector_ids = '[]'") && (row.vector_ids ?? "[]") !== "[]") return { meta: { changes: 0 } };
           if (row) row.vector_ids = vector_ids;
           return { meta: { changes: row ? 1 : 0 } };
         }
@@ -276,6 +475,13 @@ export class D1Mock {
           if (row) { row.when_at = when_at; row.when_kind = when_kind; row.when_source = "explicit"; }
           return { meta: { changes: row ? 1 : 0 } };
         }
+        // classify writes: compare-and-set on the tags read (T-0089.10).
+        if (s.startsWith("UPDATE entries SET tags = ? WHERE id = ? AND tags = ?")) {
+          const [tags, id, readTags] = args;
+          const row = db.entries.find((e: any) => e.id === id && (e.tags ?? "[]") === readTags);
+          if (row) row.tags = tags;
+          return { meta: { changes: row ? 1 : 0 } };
+        }
         if (s.startsWith("UPDATE entries SET tags = ? WHERE id")) {
           const [tags, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
@@ -286,6 +492,13 @@ export class D1Mock {
           const [content, tags, updated_at, workspace_id, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
           if (row) { row.content = content; row.tags = tags; row.updated_at = updated_at; row.workspace_id = workspace_id; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // updateEntryContent's compare-and-set commit.
+        if (s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND content = ? AND tags = ?")) {
+          const [content, tags, updated_at, id, readContent, readTags] = args;
+          const row = db.entries.find((e: any) => e.id === id && e.content === readContent && (e.tags ?? "[]") === readTags);
+          if (row) { row.content = content; row.tags = tags; row.updated_at = updated_at; }
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id")) {
@@ -313,15 +526,26 @@ export class D1Mock {
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content ||")) {
-          const [addition, id] = args;
-          const row = db.entries.find((e: any) => e.id === id);
-          if (row) {
+          // digest.ts's markSourcesRolledUp (many-row, guarded on workspace_id + each source's own
+          // (rowVersion = COALESCE(updated_at, created_at), byte length of content) — a JSON tuple
+          // list, not a literal id per statement.
+          const [addition, now, workspaceId, tuplesJson] = args;
+          const tuples = JSON.parse(tuplesJson) as [string, number, number][];
+          let changes = 0;
+          for (const [id, rowVersion, contentBytes] of tuples) {
+            const row = db.entries.find((e: any) => e.id === id);
+            if (!row) continue;
+            if ((row.workspace_id ?? "") !== workspaceId) continue;
+            if ((row.updated_at ?? row.created_at) !== rowVersion) continue;
+            if (Buffer.byteLength(row.content ?? "") !== contentBytes) continue;
             const tags: string[] = JSON.parse(row.tags ?? "[]");
             if (!tags.includes("rolled-up")) tags.push("rolled-up");
             row.tags = JSON.stringify(tags);
             row.content = row.content + addition;
+            row.updated_at = now;
+            changes++;
           }
-          return { meta: { changes: row ? 1 : 0 } };
+          return { meta: { changes } };
         }
         if (s.startsWith("UPDATE entries SET tags = json_insert(tags, '$[#]'")) {
           const [tag, id] = args;
@@ -332,6 +556,52 @@ export class D1Mock {
             row.tags = JSON.stringify(tags);
           }
           return { meta: { changes: row ? 1 : 0 } };
+        }
+        // Track 2 (T-0089.2.4): the retraction hooks are set-based SQL this double does not model; they
+        // change nothing here (real SQLite covers them: test/integration/retraction-restore.test.ts).
+        if (/'cause', '(?:un)?retraction'/.test(s) || /^UPDATE entries AS e SET valid_until = \(SELECT/.test(s) || (s.startsWith("INSERT INTO edges") && s.includes("z.id, y.id"))) {
+          return { results: [], meta: { changes: 0 } };
+        }
+        if (s.startsWith("DELETE FROM entry_versions WHERE entry_id IN ( SELECT v.entry_id")) return { meta: { changes: 0 } };
+        // Track 2 (T-0089.2.1): the supersede batch's statements, numbered placeholders throughout.
+        const numbered = (n: string) => args[Number(n) - 1];
+        const windowClosed = /AND EXISTS \(SELECT 1 FROM entries x WHERE x\.id = \?(\d+) AND x\.valid_until = \?(\d+)\)/.exec(s);
+        const closedNow = () => !windowClosed || db.entries.some((e: any) => e.id === numbered(windowClosed[1]) && (e.valid_until ?? null) === numbered(windowClosed[2]));
+        if (/^UPDATE entries SET contradiction_(wins|losses) = contradiction_\1 \+ 1 WHERE id = \?1 AND EXISTS/.test(s)) {
+          const column = s.includes("contradiction_wins") ? "contradiction_wins" : "contradiction_losses";
+          const row = db.entries.find((e: any) => e.id === args[0]);
+          if (!row || !closedNow()) return { meta: { changes: 0 } };
+          row[column] = (row[column] ?? 0) + 1;
+          return { meta: { changes: 1 } };
+        }
+        if (/^UPDATE entries AS e SET valid_until = \?\d+ WHERE e\.id = \?\d+/.test(s)) {
+          const [, untilN, idN] = /SET valid_until = \?(\d+) WHERE e\.id = \?(\d+)/.exec(s)!;
+          const row = db.entries.find((e: any) => e.id === numbered(idN));
+          if (!row) return { meta: { changes: 0 } };
+          const where = s.slice(s.indexOf(" WHERE ") + 7);
+          const value = (col: string) => col === "COALESCE(e.updated_at, e.created_at)" ? row.updated_at ?? row.created_at
+            : col === "COALESCE(e.actor_id, '')" ? row.actor_id ?? ""
+            : col === "e.workspace_id" ? row.workspace_id ?? "" : row[col.replace(/^e\./, "")] ?? null;
+          const holds = [...where.matchAll(/(COALESCE\(e\.\w+, [^)]+\)|e\.\w+) (=|IS|NOT LIKE) (\?\d+|'[^']*')/g)].every(([, col, op, rhs]) => {
+            const want = rhs.startsWith("?") ? numbered(rhs.slice(1)) : rhs.slice(1, -1);
+            if (op === "NOT LIKE") return !String(value(col)).includes(String(want).replace(/%/g, ""));
+            return op === "IS" ? (value(col) ?? null) === (want ?? null) : value(col) === want;
+          });
+          if (!holds) return { meta: { changes: 0 } };
+          row.valid_until = numbered(untilN);
+          return { meta: { changes: 1 } };
+        }
+        if (s.startsWith("INSERT INTO edges") && /AND EXISTS \(SELECT 1 FROM entries x WHERE x\.id = \?\d+ AND x\.valid_until/.test(s)) {
+          // Params reuses a number for a repeated value, so read the SELECT list's own placeholders.
+          const list = /SELECT ((?:\?\d+(?:, )?)+) WHERE/.exec(s)![1].split(", ").map(t => numbered(t.slice(1)));
+          const [id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id] = list;
+          const readable = JSON.parse(String(numbered(/json_each\(\?(\d+)\)/.exec(s)![1]))) as string[];
+          const inWs = (eid: unknown) => db.entries.some((e: any) => e.id === eid && readable.includes(e.workspace_id ?? ""));
+          if (!inWs(source_id) || !inWs(target_id) || !closedNow()) return { meta: { changes: 0 } };
+          const existing = db.edges.find((e: any) => e.source_id === source_id && e.target_id === target_id && e.type === type);
+          if (existing) existing.updated_at = updated_at;
+          else db.edges.push({ id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id });
+          return { meta: { changes: 1 } };
         }
         if (s.startsWith("UPDATE entries SET contradiction_wins = contradiction_wins + 1")) {
           const [id] = args;
@@ -346,16 +616,43 @@ export class D1Mock {
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET recall_count")) {
-          const [id] = args;
-          const row = db.entries.find((e: any) => e.id === id);
-          if (row) row.recall_count = (row.recall_count ?? 0) + 1;
-          return { meta: { changes: row ? 1 : 0 } };
+          // `WHERE id = ?` or `WHERE id IN (?, ...)`: every bound arg is an id.
+          const rows = db.entries.filter((e: any) => args.includes(e.id));
+          for (const row of rows) row.recall_count = (row.recall_count ?? 0) + 1;
+          return { meta: { changes: rows.length } };
         }
         if (s.startsWith("UPDATE entries SET importance_score")) {
           const [score, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
           if (row) row.importance_score = score;
           return { meta: { changes: row ? 1 : 0 } };
+        }
+        // The trash batch (src/memory/trash.ts trashManyStatements): every id list is one JSON parameter.
+        if (s.startsWith("INSERT INTO entries_trash")) {
+          const [idsJson, now, by, channel, reason] = args;
+          const withEdges = s.includes("json_group_array");
+          const rows = db.entries.filter((e: any) => (JSON.parse(idsJson) as string[]).includes(e.id));
+          for (const e of rows) {
+            const { id, content, vector_ids, ...rest } = e;
+            const edges = withEdges ? db.edges.filter((g: any) => g.source_id === id || g.target_id === id) : [];
+            // A plain INSERT, as in SQLite: an id already in the trash is a PRIMARY KEY error.
+            if (db.trash.some((t: any) => t.id === id)) throw new Error("UNIQUE constraint failed: entries_trash.id");
+            db.trash.push({ id, workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "", content, row_json: JSON.stringify(rest), edges_json: JSON.stringify(edges), vector_ids: vector_ids ?? "[]", deleted_at: now, deleted_by: by, channel, reason });
+          }
+          return { meta: { changes: rows.length } };
+        }
+        if (s.startsWith("DELETE FROM entry_versions")) return { meta: { changes: 0 } };
+        if (s.startsWith("DELETE FROM edges WHERE source_id IN (SELECT value FROM json_each")) {
+          const ids = new Set(JSON.parse(args[0]) as string[]);
+          const before = db.edges.length;
+          db.edges = db.edges.filter((e: any) => !ids.has(e.source_id) && !ids.has(e.target_id));
+          return { meta: { changes: before - db.edges.length } };
+        }
+        if (s.startsWith("DELETE FROM entries WHERE id IN (SELECT value FROM json_each")) {
+          const ids = new Set(JSON.parse(args[0]) as string[]);
+          const before = db.entries.length;
+          db.entries = db.entries.filter((e: any) => !ids.has(e.id));
+          return { meta: { changes: before - db.entries.length } };
         }
         if (s.startsWith("DELETE FROM entries WHERE id")) {
           const [id] = args;
@@ -372,8 +669,20 @@ export class D1Mock {
           // ten values, then the pair the guard tests. Modelled here because the
           // rule lives in the statement, so a mock that ignored it would report
           // an insert production would have skipped.
-          if (s.includes("WHERE NOT EXISTS")) {
-            const [ga, gb, gc, gd] = args.slice(10);
+          // The endpoint readability guard every edge insert carries (edgeEndpointsReadableSql): the
+          // ten values, then source, readable JSON, target, readable JSON.
+          let guardEnd = 10;
+          if (s.includes("json_each")) {
+            const [gs, gsr, gt, gtr] = args.slice(10, 14);
+            guardEnd = 14;
+            const readableIn = (id: unknown, json: unknown) => {
+              const allowed = JSON.parse(String(json)) as string[];
+              return db.entries.some((e: any) => e.id === id && allowed.includes(e.workspace_id ?? ""));
+            };
+            if (!readableIn(gs, gsr) || !readableIn(gt, gtr)) return { meta: { changes: 0 } };
+          }
+          if (s.includes("AND NOT EXISTS")) {
+            const [ga, gb, gc, gd] = args.slice(guardEnd);
             const typed = db.edges.some((e: any) =>
               ((e.source_id === ga && e.target_id === gb) || (e.source_id === gc && e.target_id === gd))
               && e.type !== "relates_to");
@@ -485,12 +794,22 @@ export class D1Mock {
             companyWorkspaces: companyWorkspaces || null,
           };
         }
+        // captureEntry's conflict read (T-0089.2.1): the row version alias and the validity window.
+        if (s.includes("AS row_version, valid_from, valid_until FROM entries WHERE id = ? AND workspace_id = ?")) {
+          const row = db.entries.find((e: any) => e.id === args[0] && (e.workspace_id ?? "") === args[1]);
+          return row ? { ...row, row_version: row.updated_at ?? row.created_at, valid_from: row.valid_from ?? null, valid_until: row.valid_until ?? null } : null;
+        }
         // GET /entry. Models the COALESCE alias: a row written before the
         // updated_at column exists carries no value, and the route must see
         // created_at rather than undefined.
         if (s.includes("COALESCE(updated_at, created_at) AS last_updated") && s.includes("FROM entries WHERE id = ?")) {
           const row = db.entries.find((e: any) => e.id === args[0]);
           return row ? { ...row, last_updated: row.updated_at ?? row.created_at } : null;
+        }
+        // appendToEntry's own read of the row it edits.
+        if (s.includes("SELECT content, tags, source, vector_ids, workspace_id FROM entries WHERE id")) {
+          const row = db.entries.find((e: any) => e.id === args[0]);
+          return row ? { content: row.content, tags: row.tags ?? "[]", source: row.source, vector_ids: row.vector_ids ?? "[]", workspace_id: row.workspace_id ?? "" } : null;
         }
         if (s.includes("SELECT vector_ids FROM entries WHERE id")) {
           const row = db.entries.find((e: any) => e.id === args[0]);
@@ -525,6 +844,13 @@ export class D1Mock {
           const unclassified = db.entries.filter((e: any) => !String(e.tags).includes('"status:') && !String(e.tags).includes('"kind:')).length;
           return { count, avg_importance, unvectorized, unclassified };
         }
+        // POST /vectorize-pending's remaining count (adv-final MAJOR 2): every unindexed row, no
+        // grace cutoff, plus the oldest one's created_at so the route can compute retryAfterMs.
+        if (s.includes("COUNT(*) as count") && s.includes("MIN(created_at) as oldest") && s.includes("vector_ids = '[]'")) {
+          const unindexed = db.entries.filter((e: any) => e.vector_ids === '[]');
+          const oldest = unindexed.length ? Math.min(...unindexed.map((e: any) => e.created_at)) : null;
+          return { count: unindexed.length, oldest };
+        }
         if (s.includes("COUNT(*) as count") && s.includes("vector_ids = '[]'") && s.includes("created_at <")) {
           const cutoff = Number(args[0]);
           const count = db.entries.filter((e: any) => e.vector_ids === '[]' && e.created_at < cutoff).length;
@@ -537,13 +863,25 @@ export class D1Mock {
         if (s.includes("COUNT(*) as count")) {
           return { count: db.entries.length };
         }
+        // Standing memory cap check (src/capture/t7-capture.ts, Design 2.1 point 3): the
+        // workspace's live standing:active count, run before a standing capture's INSERT.
+        if (s.includes(`instr(lower(tags), '"standing:active"')`) && s.includes("COUNT(*) AS n")) {
+          const workspaceId = args[0];
+          const n = db.entries.filter((e: any) => {
+            if ((e.workspace_id ?? "") !== workspaceId) return false;
+            const tags: string[] = JSON.parse(e.tags ?? "[]").map((t: string) => String(t).toLowerCase());
+            return tags.includes("standing:active") && !tags.includes("status:deprecated");
+          }).length;
+          return { n };
+        }
         if (s.includes("WHERE id") && !s.includes("json_each")) {
           return db.entries.find((e: any) => e.id === args[0]) ?? null;
         }
         if (s.includes("WHERE tags LIKE") && s.includes("created_at >")) {
           // Cooldown check: find entries matching arg LIKE patterns + any hardcoded tags in SQL
-          const likePatterns: string[] = args.slice(0, -1).map((a: any) => String(a));
-          const cutoff = args[args.length - 1] as number;
+          // Binds are the LIKE pattern(s), the cutoff, and (since the held-digest clause) the workspace id.
+          const likePatterns: string[] = args.filter((a: any) => typeof a === "string" && a.startsWith("%")).map((a: any) => String(a));
+          const cutoff = args.find((a: any) => typeof a === "number") as number;
           // Extract hardcoded tags from SQL (e.g. '%"synthesized"%')
           const hardcoded = [...s.matchAll(/'%"(\w+)"%'/g)].map(m => m[1]);
           const match = db.entries.find((e: any) => {
@@ -707,6 +1045,24 @@ export class D1Mock {
             }));
           return { results };
         }
+        // The disconnect purge's landed-ids read: which of this batch's ids actually got a trash row.
+        if (s.startsWith("SELECT id FROM entries_trash WHERE reason = 'disconnect' AND deleted_at =")) {
+          const [deletedAt, deletedBy, idsJson] = args;
+          const ids = new Set(JSON.parse(idsJson) as string[]);
+          const results = db.trash.filter((r: any) => r.reason === "disconnect" && r.deleted_at === deletedAt && r.deleted_by === deletedBy && ids.has(r.id))
+            .map((r: any) => ({ id: r.id }));
+          return { results };
+        }
+        // The trash size read (trashSizeSelect): sizes are not modelled beyond content, which is enough for tier 1.
+        if (s.includes("length(CAST(e.content AS BLOB)) AS content_bytes")) {
+          const ids = JSON.parse(args[0]) as string[];
+          const results = db.entries.filter((e: any) => ids.includes(e.id)).map((e: any) => ({
+            id: e.id, workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "", vector_ids: e.vector_ids ?? "[]",
+            content_bytes: Buffer.byteLength(e.content ?? ""), row_json_bytes: 300, edges_json_bytes: 2,
+            vector_ids_bytes: Buffer.byteLength(e.vector_ids ?? "[]"),
+          }));
+          return { results };
+        }
         if (s.includes("SELECT id FROM entries WHERE id IN")) {
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
@@ -757,24 +1113,25 @@ export class D1Mock {
                 importance_score: e.importance_score ?? 0, created_at: e.created_at,
                 workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "",
                 source: e.source ?? "", actor_display_name: author?.name ?? null,
+                valid_until: e.valid_until ?? null,
               };
             });
           return { results };
         }
-        if (s.includes("SELECT id, tags FROM entries WHERE id IN")) {
-          // expandGraph deprecation check.
+        if (s.includes("SELECT id, tags, valid_from, valid_until, created_at FROM entries WHERE id IN")) {
+          // expandGraph deprecation and validity check (T-0089.2.1/2.2).
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, tags: e.tags }));
+            .map((e: any) => ({ id: e.id, tags: e.tags, valid_from: e.valid_from ?? null, valid_until: e.valid_until ?? null, created_at: e.created_at }));
           return { results };
         }
-        if (s.includes("SELECT id, content, tags, source, created_at FROM entries WHERE id IN") && !s.includes("tags NOT LIKE")) {
+        if (s.includes("SELECT id, content, tags, source, created_at, valid_until FROM entries WHERE id IN") && !s.includes("tags NOT LIKE")) {
           // Graph node hydration (/connections, /graph). The `tags NOT LIKE` guard
           // keeps this from shadowing recall's hydration query (same columns, but it
           // applies the auto-pattern/deprecated/kind filters itself further down).
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
+            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at, valid_until: e.valid_until ?? null }));
           return { results };
         }
         if (s.includes("recall_count, importance_score") && s.includes("WHERE id IN")) {
@@ -811,7 +1168,15 @@ export class D1Mock {
           return { results };
         }
         if (s.includes("COALESCE(updated_at, created_at) < ?") && s.includes("SELECT id, content, tags FROM entries")) {
-          const cutoff = Number(args[0]);
+          // Bind order (spec 14 5.8, T-0089.2.3): volatileCutoff, now (when_at), stateCutoff,
+          // now (validity), workspace_id (only when the slice clause is present, always last).
+          const hasSlice = s.includes("AND workspace_id = ?");
+          let i = 0;
+          const volatileCutoff = Number(args[i++]);
+          const whenNowArg = Number(args[i++]);
+          const stateCutoff = Number(args[i++]);
+          const nowArg = Number(args[i++]);
+          const workspaceId = hasSlice ? args[i++] : undefined;
           const limitMatch = s.match(/LIMIT (\d+)/);
           const limit = limitMatch ? parseInt(limitMatch[1], 10) : 25;
           // This handler, and the other `tags.includes("auto-pattern"/"auto-insight")`
@@ -833,8 +1198,15 @@ export class D1Mock {
               if (tags.includes("auto-insight")) return false;
               if (tags.includes("synthesized")) return false;
               if (tags.includes("rolled-up")) return false;
+              const validUntil = e.valid_until ?? null;
+              if (!(validUntil == null || validUntil > nowArg)) return false;
+              if (hasSlice && (e.workspace_id ?? "") !== workspaceId) return false;
               const touched = e.updated_at ?? e.created_at;
-              return touched < cutoff;
+              if (tags.includes("volatility:volatile")) {
+                const whenAt = e.when_at ?? null;
+                return touched < volatileCutoff || (whenAt != null && whenAt < whenNowArg);
+              }
+              return touched < stateCutoff;
             })
             .sort((a: any, b: any) => (a.staleness_checked_at ?? 0) - (b.staleness_checked_at ?? 0))
             .slice(0, limit)
@@ -911,7 +1283,7 @@ export class D1Mock {
           const results = rows.map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results };
         }
-        if (s.includes("SELECT id, content FROM entries") && s.includes("WHERE tags LIKE") && s.includes("ORDER BY created_at DESC")) {
+        if (s.includes("SELECT id, content, tags, COALESCE(updated_at, created_at) AS row_version FROM entries") && s.includes("WHERE tags LIKE") && s.includes("ORDER BY created_at DESC")) {
           // compressTag raw entries query — tag match, system-tag exclusion, and the
           // recall/age/contradiction eligibility predicate (cutoff is the 2nd bind param).
           const tagPattern = args[0] as string;
@@ -927,6 +1299,9 @@ export class D1Mock {
               if (tags.includes("synthesized") || tags.includes("auto-pattern") || tags.includes("auto-insight") || tags.includes("rolled-up")) return false;
               // Capsule definitions are never digest members (digest.ts `tags NOT LIKE '%"capsule:%'`).
               if (tags.some(t => t.toLowerCase().startsWith("capsule:"))) return false;
+              // Codex review class E (T-0089.4.2): a held row's content must never reach the
+              // digest model's prompt — excludeHeld's own behavior, mirrored here.
+              if (tags.some(t => t.toLowerCase().startsWith("quarantine:"))) return false;
               if (!(e.importance_score == null || e.importance_score < COMPRESSION_IMPORTANCE_THRESHOLD)) return false;
               const rc = e.recall_count; // NULL/undefined → recall clause is falsy → protected (matches SQL)
               if (!(rc === 0 || (rc < COMPRESSION_MIN_RECALL && e.created_at < cutoff))) return false;
@@ -935,13 +1310,13 @@ export class D1Mock {
             })
             .sort((a: any, b: any) => b.created_at - a.created_at)
             .slice(0, 50)
-            .map((e: any) => ({ id: e.id, content: e.content }));
+            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, row_version: e.updated_at ?? e.created_at }));
           return { results };
         }
-        if (s.includes("SELECT id, content FROM entries WHERE id IN")) {
+        if (s.includes("SELECT id, content FROM entries WHERE id IN") || s.includes("SELECT id, content, tags, valid_until FROM entries WHERE id IN")) {
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, content: e.content }));
+            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, valid_until: e.valid_until ?? null }));
           return { results };
         }
         if (s.includes("json_each(entries.tags)") && s.includes("HAVING count > 10")) {
@@ -1010,7 +1385,7 @@ export class D1Mock {
             .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results: rows };
         }
-        if (s.startsWith("SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries") && s.includes("ORDER BY created_at ASC") && !s.includes("WHERE id = ?")) {
+        if (s.startsWith("SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses") && s.includes(" FROM entries") && s.includes("ORDER BY created_at ASC") && !s.includes("WHERE id = ?")) {
           // GET /export: the caller's readable set, oldest first, no LIMIT. The
           // route appends `WHERE workspace_id IN (?, ?)` (bound to args), so
           // rows outside those workspaces are withheld here too. `last_updated`

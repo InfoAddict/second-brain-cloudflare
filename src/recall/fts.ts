@@ -42,7 +42,8 @@ export function ftsMatchQuery(tokens: string[]): string | null {
 // character with a case distinction (CJK and digits have none and are
 // unaffected either way). T-0059's equivalence proof requires FTS df to equal
 // LIKE df for every uncapped term, so a term this returns false for is routed
-// back to the LIKE scan instead of risking a silently different df.
+// back to the LIKE scan instead of risking a silently different df. The content side (the index folds the Kelvin sign and
+// long s to ASCII, LIKE does not) is closed in distill.ts, whose index counts also require the row's LIKE match.
 const NON_ASCII = /[^\x00-\x7F]/;
 export function ftsCountSafeToken(t: string): boolean {
   if (!NON_ASCII.test(t)) return true;

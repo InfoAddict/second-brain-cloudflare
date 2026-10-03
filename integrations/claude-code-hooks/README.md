@@ -9,7 +9,7 @@ They are independent of the MCP server. Use either, or both.
 
 | Event | Runs on | Action | Cost |
 |---|---|---|---|
-| `SessionStart` | `startup`, `clear`, `compact` | `GET /recall` for this project, prints up to 5 memories into the session | one recall (~1 s), none on compaction |
+| `SessionStart` | `startup`, `clear`, `compact` | `GET /recall` and `GET /brief` for this project, prints memories and a compact attention brief | two parallel reads, none on cached compaction |
 | `SessionEnd` | every reason (`clear`, `resume`, `logout`, `prompt_input_exit`, `other`) | `POST /capture` with the tail of the conversation | one capture (embedding + often a model call), 30 s hook timeout |
 
 `resume` and `fork` are skipped on start: those transcripts already contain the
@@ -20,7 +20,10 @@ On `startup` and `clear` the block that was printed is cached under
 default). Compaction re-prints that file verbatim and makes no request at all:
 the session id survives compaction and rotates on `/clear`, so a cached block is
 always the current session's context. With no cache, or one older than 24 h,
-compaction falls back to a live recall.
+compaction falls back to live recall and brief requests. Both appear inside one
+6,000-character data frame. The brief is the lean one (due and open commitments
+only), retried without the project when it is not registered. It gets at most 3 s
+after recall answers, and a failed or slow brief does not discard recall.
 
 ## Install, upgrade, check, uninstall
 
@@ -66,10 +69,11 @@ when set.
 Recall:
 
 ```
-GET /recall?query=<project>+decisions+and+context&topK=5&workspace=personal&tag=<project>
+GET /recall?query=<project>+decisions+and+context&topK=5&workspace=personal&project=<project>
+GET /brief?lean=1&preview=1&workspace=personal&project=<project>
 ```
 
-with a `tag`-less second attempt if the tagged one returns nothing. With no
+with a project-less second recall attempt if the first returns nothing. With no
 project (a session opened in `$HOME`), one generic query limited to the last 14
 days is sent instead.
 
@@ -87,12 +91,24 @@ Capture:
 Before it is sent, the formatted body — header included — is scanned for
 credentials, and each one is replaced with `[redacted]`: your own configured
 token wherever it appears, `Bearer <token>` values, provider key shapes (`sk-`,
-`ghp_`/`gho_`, `github_pat_`, `xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`),
-whole PEM private-key blocks, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`
-style assignments. Only those shapes: a UUID, a commit SHA, a file path and
-ordinary prose are left exactly as they were, because a memory redacted into
-uselessness is worse than no memory. Tool output — where secrets usually live —
-never reaches the body in the first place.
+`ghp_`/`gho_`, `github_pat_`, `xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`,
+Stripe, npm), JWTs, whole PEM private-key blocks, the password in
+`scheme://user:password@host`, any other 32+ character token mixing digits
+with upper and lower case, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`/
+`*_KEY=`/`CREDENTIALS=` style assignments, including quoted values with
+spaces (`DB_PASSWORD="correct horse battery staple"`). Only those shapes: a UUID, a commit
+SHA, a file path and ordinary prose are left exactly as they were, because a
+memory redacted into uselessness is worse than no memory. Tool output (where
+secrets usually live) never reaches the body in the first place.
+
+Context Claude Code injects into user messages never reaches the body either:
+`<system-reminder>` blocks (which carry your CLAUDE.md files), slash-command,
+local-command, bash and IDE wrappers, and meta records are dropped. Meta,
+sidechain, compact-summary and transcript-only records are skipped by their
+flags; then each user text block is judged on its own, and a block holding
+any tag-like markup (`<name>`) or an instruction-file header anywhere is
+dropped whole. The cost of that safe side: a typed message that contains
+markup, say "`<button>` needs an accessible name", is not captured.
 
 The transcript is read backwards from the end until three human turns are in
 hand (1 MB ceiling), and only human-readable turns survive: `tool_use`,

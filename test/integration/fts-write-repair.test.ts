@@ -241,7 +241,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
 
       const ok = await makeMirrorStore(withFtsWriteGuard(env)).updateEntry("e1", "mirrored updated");
 
-      expect(ok).toBe(true);
+      expect(ok).toBe("updated");
       expect(d1.rows()).toHaveLength(1);
       expect(d1.rows()[0].content).toBe("mirrored updated");
       await expectTableAndTriggersCreated(d1, env);

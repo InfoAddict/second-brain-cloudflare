@@ -461,7 +461,6 @@ describe("dashboard i18n", () => {
     "common.sourceChat",
     "common.sourceBrowser",
     "common.sourceDashboard",
-    "common.sourceClaudeCode",
     "integrations.nounEmail.one",
     // FORMAT ONLY — URLs the user pastes, and punctuation around a placeholder.
     "integrations.urlPlaceholder",
@@ -470,6 +469,9 @@ describe("dashboard i18n", () => {
     "integrations.connect.calendar-icloud.placeholder",
     "brief.shapeSuffix",
     "download.withTag",
+    // FORMAT ONLY — "{what} · {time}": both placeholders, a middle dot
+    // between them, nothing to translate.
+    "aiChanges.group",
     // PROPER NOUN — "Worker" names the Cloudflare Worker component; kept
     // unchanged in Italian same as "Second Brain" (auth.brand) above.
     "board.railVersion",
@@ -563,6 +565,30 @@ describe("dashboard i18n", () => {
       by: "activityEventLabel() in public/js/activity.js, keyed by the audit event name",
     },
     {
+      prefix: "history.reason",
+      by: "historyReasonLabel() in public/js/history-view.js, keyed by HISTORY_REASON_KEYS[item.reason]",
+    },
+    {
+      prefix: "validity.history",
+      by: "historyValidityLabel() in public/js/history-view.js, keyed by VALIDITY_CAUSE_KEYS[item.cause]",
+    },
+    {
+      prefix: "validity.ev",
+      by: "timelineEventLabel() in public/js/memory-crud.js, keyed by the audit event name (superseded/validity_changed/flagged)",
+    },
+    {
+      keys: ["status.trustedHelp", "status.unconfirmedHelp", "status.wrongHelp"],
+      by: "renderViewStatus() in public/js/memory-crud.js, keyed by STATUS_HELP_KEYS[status]",
+    },
+    {
+      keys: ["undo.done", "undo.dateRemoved"],
+      by: "resolveDue()'s undo toast in public/js/due.js, keyed by whether the resolve went to /loops/resolve or /due/clear",
+    },
+    {
+      keys: ["undo.done", "undo.notTask"],
+      by: "resolveLoop()'s undo toast in public/js/loops.js, keyed by the 'done'/'not-task' action",
+    },
+    {
       prefix: "common.source",
       by: "public/utils.js t(key), through the SOURCE_LABELS map keyed by the capture's `source` value",
     },
@@ -573,6 +599,13 @@ describe("dashboard i18n", () => {
     {
       prefix: "home.pinned",
       by: "public/js/home.js renderCaptureHint(), which picks the key into `key` and calls t(key)",
+    },
+    {
+      // NOT a prefix: showDailyLimitBanner() in public/js/daily-limit-banner.js
+      // picks exactly one of these two literals (branching on whether the 429's
+      // `limit` names a write or a read) and calls t(key).
+      keys: ["limits.bannerWrite", "limits.bannerRead"],
+      by: "showDailyLimitBanner() in public/js/daily-limit-banner.js, via t(key)",
     },
     {
       // NOT a prefix: installGuideStepKeys(platform) in
@@ -632,6 +665,12 @@ describe("dashboard i18n", () => {
     {
       prefix: "memories.ev",
       by: "public/js/memory-crud.js t(keys[event]), keyed by the timeline event name",
+    },
+    {
+      // S5 (16-t3-t4-trust-spec.md 7.9): the same timelineEventLabel() keys map as
+      // memories.ev above, but the deck names these two under history.* instead.
+      keys: ["history.evHeld", "history.evReleased"],
+      by: "public/js/memory-crud.js t(keys[event]), keyed by the timeline event name (held/released)",
     },
     {
       prefix: "patterns.shapes.",
@@ -756,6 +795,7 @@ describe("dashboard i18n", () => {
       // form for this indirection is what keeps this list readable.
       "public/js/activity.js t(keys[event])",
       "public/js/board.js t(`patterns.shapes.${shape}`)",
+      "public/js/daily-limit-banner.js t(key)",
       "public/js/brief.js t(`patterns.shapes.${shape}`)",
       // Both of these resolve through captureDefaultKey() in public/utils.js, which
       // returns one of exactly four literals — home.auto{Shared,Personal}{Yours,Org}.
@@ -775,6 +815,18 @@ describe("dashboard i18n", () => {
       "public/js/memory-crud.js t(keys[event])",
       "public/js/patterns.js t(`patterns.shapes.${shape}`)",
       "public/utils.js t(key)",
+      // historyReasonLabel()'s two returns: the plain reason label, and the
+      // reasonStatus one with a {status} interpolation. Same template
+      // literal, so the scanner sees one identity twice.
+      "public/js/history-view.js t(`history.${key}`)",
+      "public/js/history-view.js t(`history.${key}`)",
+      // historyValidityLabel()'s two returns: historyEndSet's own (no preview) and every
+      // other cause's (with preview). Same template literal, so the scanner sees one identity
+      // twice, same convention as the two history.${key} entries above.
+      "public/js/history-view.js t(`validity.${key}`)",
+      "public/js/history-view.js t(`validity.${key}`)",
+      "public/js/memory-crud.js t(STATUS_HELP_KEYS[status] || '')",
+      "public/js/due.js t(wentToLoops ? 'undo.done' : 'undo.dateRemoved')",
     ].sort();
 
     function dynamicIdentity(file: string, fn: string, snippet: string): string {
@@ -813,5 +865,27 @@ describe("dashboard i18n", () => {
     // sorted-array equality too, since it's what a reader expects a "closed list" check to
     // look like at a glance.
     expect(actualDynamicIdentities).toEqual([...EXPECTED_DYNAMIC_CALL_SITES].sort());
+  });
+
+  // T-0101.10 (CP): the copy pass swept every key that was ever in this
+  // allowlist, so it is empty now - any em dash in either catalog fails the
+  // build immediately rather than waiting for review.
+  const ALLOWED_EM_DASH_KEYS = new Set<string>([]);
+
+  it("has no em dash (U+2014) outside the known allowlist, in either catalog", () => {
+    const { ctx } = loadI18n("en");
+    const EM_DASH = "—";
+    const catalogs = {
+      en: flattenCatalog(vm.runInContext("I18N_EN", ctx)),
+      it: flattenCatalog(vm.runInContext("I18N_IT", ctx)),
+    };
+    const unexpected: string[] = [];
+    for (const [locale, flat] of Object.entries(catalogs)) {
+      for (const [key, value] of Object.entries(flat)) {
+        if (typeof value !== "string" || !value.includes(EM_DASH)) continue;
+        if (!ALLOWED_EM_DASH_KEYS.has(`${locale}:${key}`)) unexpected.push(`${locale}:${key}`);
+      }
+    }
+    expect(unexpected, "new em dash outside ALLOWED_EM_DASH_KEYS").toEqual([]);
   });
 });

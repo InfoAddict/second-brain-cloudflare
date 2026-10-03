@@ -4,6 +4,7 @@ import { initializeDatabase } from "../db/init";
 import { embed } from "../lib/ai";
 import { inferEdgesOnWrite } from "./edges";
 import { neighborsFromVectorQuery } from "./traverse";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 
 const GRAPH_PASS_BACKFILL_LIMIT = 25;
 
@@ -90,7 +91,8 @@ export async function runGraphPass(
       `SELECT id, content FROM entries
        WHERE id NOT IN (SELECT source_id FROM edges) AND id NOT IN (SELECT target_id FROM edges)
          AND tags NOT LIKE '%"status:deprecated"%'
-         AND tags NOT LIKE '%"duplicate-candidate"%'${sliceSql}
+         AND tags NOT LIKE '%"duplicate-candidate"%'
+         AND ${NOT_HELD_SQL}${sliceSql}
        ORDER BY created_at DESC LIMIT ${GRAPH_PASS_BACKFILL_LIMIT}`
     );
     const { results } = await (workspaceId != null ? stmt.bind(workspaceId) : stmt)

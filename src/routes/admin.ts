@@ -1,37 +1,40 @@
 import { hasCapsuleTag } from "../tags/system";
-import { deleteVectorIds } from "../vectorize/batch";
+import { deleteEntryVectors, persistPendingVectorDeletes } from "../vectorize/batch";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from "../compression/eligibility";
 import { intParam, json } from "../lib/http";
-import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
+import { D1_MAX_BOUND_PARAMS, VECTORIZE_DELETE_MAX_IDS_PER_CALL, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
 import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere, scopeWhereForIdRead } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { graceMs } from "../lib/ai";
 import { classifyEntry } from "../capture/classify";
-import { storeEntry } from "../capture/store";
+import { PENDING_WHERE, indexPendingRow, type PendingRow } from "../vectorize/pending";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
-import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
-import { OPEN_LOOP_SQL, withTaskDone, withoutTask } from "../memory/loops";
+import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf, staleReasonFor } from "../memory/stale";
+import { openLoopSql, withTaskDone, withoutTask } from "../memory/loops";
+import { openOutboundSql, openInboundSql, directionOf, counterpartyOf, dueKindOf } from "../commitments/direction";
 import { getStatus, withStatus } from "../memory/status";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
 import { vectorizeFilterState } from "../vectorize/scope";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { notHeldSqlFor } from "../quarantine/tags";
 import { reasonOverPair, restatesRecent } from "../insight/reason";
 import { MAX_INSIGHTS_PER_RUN, RECENT_INSIGHT_WINDOW, rawInsightText } from "../insight/weekly";
 import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candidates";
 import { adminAuditEvent } from "../lib/admin-audit";
 import { auditEvent, auditEvents, type AuditEventInput } from "../lib/audit";
+import { resolveEntryAction, applyInsightResolution } from "../memory/actions";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
 import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 import { readWhenCursor, fetchWhenCandidates, judgeCommitment } from "../when/pass";
-import { DUE_WITHIN_MS, DUE_SQL, parseExplicitWhen } from "../when/input";
+import { DUE_WITHIN_MS, dueSql, parseExplicitWhen } from "../when/input";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -252,6 +255,14 @@ export async function handleAdminRoutes(
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     try {
       const result = await removeMember(env, auth.userId, body.id.trim());
+      // History remains: nothing is audited or deleted from the index yet. The dashboard calls
+      // again, and the nightly run resumes it if nobody does.
+      // FX3 finding 7: keeps the 3.7 removedEntries/removedVectors fields on the 202 too, rather
+      // than omitting them — both are genuinely 0 at this stage, since removeMember touches
+      // neither D1 rows nor vectors until the history cleanup finishes and done flips true.
+      if (!result.done) {
+        return json({ ok: true, done: false, id: body.id.trim(), remaining: result.remaining, removedEntries: 0, removedVectors: 0 }, 202);
+      }
       // Audited before the Vectorize delete, not after: the D1 rows are already
       // gone by here, so a Vectorize failure must not also cost the record of the
       // destruction. The counts, never the content, this is the one
@@ -263,9 +274,19 @@ export async function handleAdminRoutes(
         event: "member_removed",
         payload: { removedEntries: result.removedEntries, removedVectors: result.vectorIds.length },
       });
+      // Capped (FX3 finding 2): a removed member's vectors can run into the tens of thousands, and
+      // an uncapped delete can exceed the platform's subrequest ceiling before anything is deleted.
+      // removedVectors defaults to the full intended count (unchanged on success or on a Vectorize
+      // failure, matching the existing "report the truth about the D1-side removal" contract below)
+      // and is trimmed only when the cap left something for the nightly drain to queue and finish.
+      let removedVectors = result.vectorIds.length;
       if (result.vectorIds.length) {
         try {
-          await deleteVectorIds(env, result.vectorIds);
+          const deletion = await deleteEntryVectors(env, result.ownedVectors, { maxIds: VECTORIZE_DELETE_MAX_IDS_PER_CALL });
+          if (!deletion.done) {
+            removedVectors -= deletion.remaining.reduce((n, o) => n + o.vectorIds.length, 0);
+            await persistPendingVectorDeletes(env, deletion.remaining);
+          }
         } catch (e) {
           // The D1 rows and the audit row are already committed: the removal
           // succeeded. A failed index delete only leaves dead vectors behind,
@@ -274,7 +295,7 @@ export async function handleAdminRoutes(
           console.error("Vectorize deleteByIds failed during member removal (non-fatal):", e);
         }
       }
-      return json({ ok: true, id: body.id.trim(), removedEntries: result.removedEntries, removedVectors: result.vectorIds.length });
+      return json({ ok: true, done: true, id: body.id.trim(), removedEntries: result.removedEntries, removedVectors });
     } catch (e) {
       if (e instanceof TeamAdminError) return json({ ok: false, error: e.message }, e.status);
       throw e;
@@ -524,6 +545,14 @@ export async function handleAdminRoutes(
     // total order, arbitrary within a tie, but the SAME arbitrary order for
     // every page of the same data, which is the whole requirement. It is
     // projected only to be sorted on; the response does not carry it.
+    //
+    // Round 3 re-review MAJOR: a reused id's earlier life always ends with a "purged" event or a
+    // "deleted" event with payload.trash false (tier 3) -- everything at or before the LATEST such
+    // end event for this id belongs to whoever's row is now gone, not the live row just joined in
+    // below. The extra AND clause is rowid, not created_at: insertion order is the true order this
+    // Worker wrote these two events in, whatever either one's own created_at claims.
+    // First conjunct matches idx_entry_events_life_end's own WHERE syntactically (no json_extract
+    // in the index) -- see src/brief/changes.ts's lifeFilter for the full reasoning.
     const { results } = await env.DB.prepare(
       `SELECT 'admin' AS kind, ae.id AS event_id, ae.event AS event, ae.actor_id AS actor_id,
               ae.target_user_id AS subject_id, '' AS entry_id, NULL AS title,
@@ -536,6 +565,8 @@ export async function handleAdminRoutes(
          FROM entry_events ev
          JOIN entries m ON m.id = ev.entry_id AND m.${scope.clause}
         WHERE ev.event IN ('shared', 'unshared', 'insight_confirmed', 'insight_dismissed')
+          AND ev.rowid > COALESCE((SELECT MAX(g.rowid) FROM entry_events g WHERE g.entry_id = ev.entry_id
+                AND g.event IN ('purged', 'deleted') AND (g.event = 'purged' OR json_extract(g.payload, '$.trash') = 0)), 0)
        ORDER BY created_at DESC, event_id DESC
        LIMIT ? OFFSET ?`,
     ).bind(...scope.bindings, limit, offset).all();
@@ -939,11 +970,15 @@ export async function handleAdminRoutes(
     // written.
     const latchedAtRaw = await env.OAUTH_KV.get(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY).catch(() => null);
     const latchedAt = latchedAtRaw ? Number(latchedAtRaw) : null;
+    // T-0101.8.5: the KV marker set once history starts being recorded (T-0089.1.1),
+    // read here only — no D1 fallback. Omitted, not null, when it has never been set.
+    const historySinceRaw = await env.OAUTH_KV.get(VERSIONS_SINCE_KV_KEY).catch(() => null);
     return json({
       ok: vectorize.ok,
       version: SB_VERSION,
       vectorize: { ...vectorize, workspaceFilter: { supported, degradedQueries, latchedAt } },
       team,
+      ...(historySinceRaw ? { history_since: Number(historySinceRaw) } : {}),
     });
   }
 
@@ -1109,9 +1144,10 @@ export async function handleAdminRoutes(
     // and an admin gets a 404 from GET /entry for a member's personal row. The
     // reviewer confirms or corrects their own claims, not a colleague's.
     const scope = scopeWhere(auth);
+    const now = Date.now();
     const [rows, countRow] = await Promise.all([
       env.DB.prepare(
-        `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated
+        `SELECT id, content, tags, source, created_at, when_at, valid_until, COALESCE(updated_at, created_at) AS last_updated
          FROM entries
          WHERE ${STALE_REVIEW_SQL} AND ${scope.clause}
          ORDER BY COALESCE(updated_at, created_at) ASC LIMIT ? OFFSET ?`,
@@ -1126,14 +1162,19 @@ export async function handleAdminRoutes(
       // Oldest-touched first: the least recently confirmed claim is the one most
       // worth a human's attention, and it keeps paging stable while entries drop
       // out of the queue as they are edited.
-      entries: (rows.results as Record<string, any>[]).map(r => ({
-        id: r.id as string,
-        content: r.content as string,
-        tags: JSON.parse((r.tags as string) ?? "[]") as string[],
-        source: r.source as string,
-        created_at: r.created_at as number,
-        last_updated: r.last_updated as number,
-      })),
+      entries: (rows.results as Record<string, any>[]).map(r => {
+        const tags = JSON.parse((r.tags as string) ?? "[]") as string[];
+        return {
+          id: r.id as string,
+          content: r.content as string,
+          tags,
+          source: r.source as string,
+          created_at: r.created_at as number,
+          last_updated: r.last_updated as number,
+          valid_until: r.valid_until as number | null,
+          reason: staleReasonFor(tags, r.when_at as number | null, now),
+        };
+      }),
       total: (countRow?.n as number) ?? 0,
       limit,
       offset,
@@ -1141,8 +1182,8 @@ export async function handleAdminRoutes(
   }
 
   // POST /stale/keep, confirm a flagged memory is still true without editing it.
-  // Dashboard-only, no MCP twin: like insight review, this is a human curation
-  // act on the out-of-date queue. Clears stale:as-of and bumps updated_at so the
+  // Agents may settle this on the user's word through MCP resolve. The audit
+  // event records the prior values. Clears stale:as-of and bumps updated_at so the
   // nightly pass does not immediately re-flag the same claim.
   if (url.pathname === "/stale/keep" && request.method === "POST") {
     const auth = await requireIdentity(request, env);
@@ -1152,25 +1193,9 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const id = body.id.trim();
-    const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags");
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-    const denied = assertCanEditContent(auth, row);
-    if (denied) return json({ ok: false, error: denied.message }, 403);
-
-    const tags: string[] = JSON.parse(row.tags ?? "[]");
-    if (!hasStaleAsOf(tags)) {
-      return json({ ok: false, error: "Entry is not flagged as out of date" }, 400);
-    }
-
-    const now = Date.now();
-    await env.DB.prepare(
-      `UPDATE entries SET tags = ?, updated_at = ?, staleness_checked_at = ? WHERE id = ?`,
-    ).bind(JSON.stringify(withoutStaleAsOf(tags)), now, now, id).run();
-
-    auditEvents(env, ctx, [{ entryId: id, actorId: auth.userId, event: "updated", payload: { stale_confirmed: true } }]);
-
-    return json({ ok: true, id });
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "still_true", undefined, { actorId: auth.userId, channel: "rest" });
+    if (!result.ok) return json({ ok: false, error: result.error }, result.status);
+    return json({ ok: true, id: result.id });
   }
 
   // GET /loops, the open-commitments review queue. Mirrors GET /stale: the
@@ -1186,28 +1211,44 @@ export async function handleAdminRoutes(
     if (limit instanceof Response) return limit;
     const offset = intParam(url, "offset", { fallback: 0, min: 0 });
     if (offset instanceof Response) return offset;
+    // P7.8: defaults to "out" so every existing client (none of which send
+    // direction) keeps today's meaning, "things I owe". The dashboard asks
+    // for both explicitly.
+    const direction = url.searchParams.get("direction") ?? "out";
+    if (direction !== "out" && direction !== "in" && direction !== "all") {
+      return json({ ok: false, error: 'direction must be "out", "in" or "all"' }, 400);
+    }
+    const now = Date.now();
+    const directionSql = direction === "out" ? openOutboundSql(now) : direction === "in" ? openInboundSql(now) : openLoopSql(now);
 
     const scope = scopeWhere(auth);
+    // validity: current: a replaced loop is not open (5.5)
     const [rows, countRow] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, tags, source, created_at FROM entries
-         WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
+         WHERE ${directionSql} AND ${scope.clause}
          ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       ).bind(...scope.bindings, limit, offset).all(),
+      // validity: current: the pager's total must match the same replaced-loop exclusion as the rows above (5.5)
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${directionSql} AND ${scope.clause}`,
       ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
     ]);
 
     return json({
       ok: true,
-      entries: (rows.results as Record<string, any>[]).map(r => ({
-        id: r.id as string,
-        content: r.content as string,
-        source: r.source as string,
-        tags: parseTags(r.tags as string),
-        created_at: r.created_at as number,
-      })),
+      entries: (rows.results as Record<string, any>[]).map(r => {
+        const tags = parseTags(r.tags as string);
+        return {
+          id: r.id as string,
+          content: r.content as string,
+          source: r.source as string,
+          tags,
+          created_at: r.created_at as number,
+          direction: directionOf(tags),
+          ...(counterpartyOf(tags) ? { counterparty: counterpartyOf(tags) } : {}),
+        };
+      }),
       total: (countRow?.n as number) ?? 0,
       limit,
       offset,
@@ -1235,33 +1276,9 @@ export async function handleAdminRoutes(
       return json({ ok: false, error: `action must be "done" or "not-task"` }, 400);
     }
 
-    const id = body.id.trim();
-    const action = body.action;
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
-      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-      const denied = assertCanEditContent(auth, row);
-      if (denied) return json({ ok: false, error: denied.message }, 403);
-
-      const tags: string[] = parseTags(row.tags as string);
-      const nextTags = action === "done" ? withTaskDone(tags) : withoutTask(tags);
-
-      const result = await env.DB.prepare(
-        `UPDATE entries SET tags = ? WHERE id = ? AND tags = ? AND content = ?`,
-      ).bind(JSON.stringify(nextTags), id, row.tags, row.content).run();
-
-      // meta.changes is D1's field; the SQLite test double reports rows_written
-      // instead (see test/helpers/sqlite-d1.ts), same fallback as team-admin.ts.
-      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
-        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { loop_action: action } });
-        return json({ ok: true, id, action });
-      }
-      // Lost the race — someone else wrote this row between the read and the
-      // write above. Loop back and re-read rather than retrying the stale tags.
-    }
-
-    return json({ ok: false, error: "Could not resolve — try again" }, 409);
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), body.action === "done" ? "done" : "not_a_task", undefined, { actorId: auth.userId, channel: "rest" });
+    if (!result.ok) return json({ ok: false, error: result.error }, result.status);
+    return json({ ok: true, id: result.id, action: body.action });
   }
 
   // GET /due, the time-anchored feed: overdue commitments (when_at already
@@ -1278,35 +1295,44 @@ export async function handleAdminRoutes(
     const now = Date.now();
     const upcomingBefore = now + DUE_WITHIN_MS;
 
-    const rowShape = (r: Record<string, any>) => ({
-      id: r.id as string,
-      content: (r.content as string).slice(0, DUE_CONTENT_CHARS),
-      // The nightly pass's short label when it set the when (src/when/pass.ts),
-      // else the first 80 characters of content as a fallback for the
-      // explicit/regex paths, which never generate one.
-      label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
-      tags: parseTags(r.tags as string),
-      when_at: r.when_at as number,
-      when_kind: r.when_kind as string,
-      when_source: r.when_source as string,
-    });
+    const rowShape = (r: Record<string, any>) => {
+      const tags = parseTags(r.tags as string);
+      return {
+        id: r.id as string,
+        content: (r.content as string).slice(0, DUE_CONTENT_CHARS),
+        // The nightly pass's short label when it set the when (src/when/pass.ts),
+        // else the first 80 characters of content as a fallback for the
+        // explicit/regex paths, which never generate one.
+        label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
+        tags,
+        when_at: r.when_at as number,
+        when_kind: r.when_kind as string,
+        when_source: r.when_source as string,
+        // Design 5.3: derived from tags in JS, no SQL change — rows already carry tags.
+        kind: dueKindOf(tags),
+      };
+    };
 
+    // validity: current: a replaced "dentist Tuesday" must not appear in GET /due (5.5)
     const [overdueRows, overdueCount, upcomingRows, upcomingCount] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
-         WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}
+         WHERE ${dueSql(now)} AND when_at < ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      // validity: current: the overdue pager's total must match the same replaced-fact exclusion as the rows above (5.5)
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${dueSql(now)} AND when_at < ? AND ${scope.clause}`,
       ).bind(now, ...scope.bindings).first() as Promise<Record<string, any> | null>,
+      // validity: current: a replaced "dentist Tuesday" must not appear in the upcoming feed either (5.5)
       env.DB.prepare(
         `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
-         WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}
+         WHERE ${dueSql(now)} AND when_at >= ? AND when_at <= ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, upcomingBefore, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      // validity: current: the upcoming pager's total must match the same replaced-fact exclusion as the rows above (5.5)
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${dueSql(now)} AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
       ).bind(now, upcomingBefore, ...scope.bindings).first() as Promise<Record<string, any> | null>,
     ]);
 
@@ -1338,31 +1364,9 @@ export async function handleAdminRoutes(
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     if (!body.until?.trim()) return json({ ok: false, error: "until is required" }, 400);
 
-    const parsed = parseExplicitWhen(body.until, undefined, undefined, (await resolveConfig(env)).TIMEZONE);
-    if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
-    const until = parsed.value!.at;
-    if (until <= Date.now()) return json({ ok: false, error: "until must be in the future" }, 400);
-
-    const id = body.id.trim();
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
-      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-      const denied = assertCanEditContent(auth, row);
-      if (denied) return json({ ok: false, error: denied.message }, 403);
-
-      const result = await env.DB.prepare(
-        `UPDATE entries SET when_at = ? WHERE id = ? AND tags = ? AND content = ?`,
-      ).bind(until, id, row.tags, row.content).run();
-
-      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
-        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "snooze", until } });
-        return json({ ok: true, id, when_at: until });
-      }
-      // Lost the race — loop back and re-read rather than retrying stale tags/content.
-    }
-
-    return json({ ok: false, error: "Could not snooze — try again" }, 409);
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "snooze", body.until, { actorId: auth.userId, channel: "rest" });
+    if (!result.ok) return json({ ok: false, error: result.error }, result.status);
+    return json({ ok: true, id: result.id, when_at: result.when_at });
   }
 
   // POST /due/clear, drop the time anchor entirely: not a commitment, or
@@ -1380,26 +1384,9 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const id = body.id.trim();
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
-      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-      const denied = assertCanEditContent(auth, row);
-      if (denied) return json({ ok: false, error: denied.message }, 403);
-
-      const result = await env.DB.prepare(
-        `UPDATE entries SET when_at = NULL, when_kind = NULL, when_label = NULL, when_source = 'cleared' WHERE id = ? AND tags = ? AND content = ?`,
-      ).bind(id, row.tags, row.content).run();
-
-      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
-        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "clear" } });
-        return json({ ok: true, id });
-      }
-      // Lost the race — loop back and re-read rather than retrying stale tags/content.
-    }
-
-    return json({ ok: false, error: "Could not clear — try again" }, 409);
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "clear_date", undefined, { actorId: auth.userId, channel: "rest" });
+    if (!result.ok) return json({ ok: false, error: result.error }, result.status);
+    return json({ ok: true, id: result.id });
   }
 
   // GET /extract/dry-run, a preview of the nightly when-extraction pass
@@ -1442,8 +1429,8 @@ export async function handleAdminRoutes(
   }
 
   // POST /patterns/resolve, confirm or dismiss a proposed insight.
-  // Dashboard-only, no MCP twin: insight review is a human curation act, not
-  // an agent capability. Confirm promotes an insight into a real recallable
+  // Agents may settle one insight on the user's word through MCP resolve;
+  // the audit event records each prior value. Confirm promotes it into a real recallable
   // memory; dismiss deprecates it (audit row kept, vectors removed).
   //
   // Takes `id` for one or `ids` for many. Ruling on a backlog one at a time is
@@ -1495,96 +1482,26 @@ export async function handleAdminRoutes(
 
     const placeholders = ids.map(() => "?").join(", ");
     const { results } = await env.DB.prepare(
-      `SELECT id, tags, vector_ids FROM entries WHERE id IN (${placeholders}) AND ${scopeWhereForIdRead(scope).clause}`,
+      `SELECT id, tags, vector_ids, workspace_id FROM entries WHERE id IN (${placeholders}) AND ${scopeWhereForIdRead(scope).clause}`,
     ).bind(...ids, ...scope.bindings).all();
     const found = results as Record<string, any>[];
 
     // The single-id form keeps its precise errors, because a client asking about
     // one pattern can act on "not found" and the bulk form cannot.
     if (body.ids === undefined) {
-      if (!found.length) return json({ ok: false, error: `No entry found with ID: ${ids[0]}` }, 404);
+      if (!found.length) return json({ ok: false, error: `No memory found with ID: ${ids[0]}` }, 404);
       if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-insight")) {
         return json({ ok: false, error: "Entry is not a derived insight" }, 400);
       }
     }
 
-    const statements: D1PreparedStatement[] = [];
-    const vectorsToDrop: string[] = [];
-    const resolved: string[] = [];
-    // The record of who ruled on what. There is deliberately NO author lock on
-    // this route, an insight has actor_id "" and no author, so it is a shared
-    // suggestion and any member acting on one is the feature working. That is
-    // precisely why the record matters: without it, a member dismissing a
-    // company-layer insight for everyone leaves no trace, and GET /team/activity
-    // is blind to the one action on this surface that is invisible by design.
-    //
-    // Two names rather than one plus a payload flag, for the reason
-    // member_suspended and member_unsuspended are two names.
-    const auditRows: AuditEventInput[] = [];
-
-    for (const row of found) {
-      const tags: string[] = JSON.parse(row.tags ?? "[]");
-      // Anything that is not an unresolved pattern is skipped rather than
-      // rejected: a bulk request built from a list the user was looking at can
-      // legitimately race a nightly pass or a second tab.
-      if (!tags.includes("auto-insight") || getStatus(tags) === "deprecated") continue;
-
-      if (action === "confirm") {
-        // Losing the auto-insight tag is what exits the recall exclusion, it is
-        // enforced at D1 hydration, not vector metadata, so this tag update alone
-        // makes the entry recallable. No re-embed: content is unchanged and vectors
-        // already exist (the stale auto-insight flag in vector metadata is harmless).
-        const promoted = withStatus(withKind(tags.filter(t => t !== "auto-insight"), "semantic"), "canonical");
-        statements.push(
-          env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(promoted), row.id),
-        );
-      } else {
-        // Inlined rather than calling deprecateEntry per id: that reads the row
-        // again and issues its own UPDATE and its own Vectorize delete, so a
-        // hundred dismissals would be three hundred subrequests. Same effect,
-        // status:deprecated, vectors emptied, vectors deleted, in a fixed three.
-        statements.push(
-          env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?`)
-            .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", row.id),
-        );
-        vectorsToDrop.push(...(JSON.parse(row.vector_ids ?? "[]") as string[]));
-      }
-      resolved.push(row.id as string);
-      auditRows.push({
-        entryId: row.id as string,
-        actorId: auth.userId,
-        event: action === "confirm" ? "insight_confirmed" : "insight_dismissed",
-      });
-    }
-
-    // One subrequest however many statements it holds, which is the whole reason
-    // the loop above builds them instead of running them.
-    if (statements.length) await env.DB.batch(statements);
-    // After the state change and off the critical path: one batch however many
-    // ids the request carried, so the route's cost stays flat in the id count,
-    // and fire-and-forget so a lost row can never cost a resolution. Only rows
-    // actually ruled on are recorded, a skipped or out-of-scope id was not
-    // resolved, and a false entry in an INSERT-only trail cannot be corrected.
-    auditEvents(env, ctx, auditRows);
-
-    if (vectorsToDrop.length) {
-      try {
-        await deleteVectorIds(env, vectorsToDrop);
-      } catch (e) {
-        // D1 already says deprecated and recall filters on that, so the entries
-        // are out of recall either way; the index just keeps some dead vectors.
-        console.error("Vectorize deleteByIds failed during bulk dismiss (non-fatal):", e);
-      }
-    }
-
+    const result = await applyInsightResolution(env, ctx, { actorId: auth.userId, channel: "rest" }, found, ids.length, action);
     return json({
       ok: true,
       action,
-      resolved: resolved.length,
-      // Named, so a client that showed the user N rows can tell which survived a
-      // race rather than assuming all of them were ruled on.
-      ids: resolved,
-      skipped: ids.length - resolved.length,
+      resolved: result.resolved.length,
+      ids: result.resolved,
+      skipped: result.skipped,
       ...(body.ids === undefined ? { id: ids[0] } : {}),
     });
   }
@@ -1604,48 +1521,43 @@ export async function handleAdminRoutes(
     // discards at hydration anyway.
     const { results: toProcess } = await env.DB.prepare(
       // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
+      // validity: any: a replaced row keeps its vectors and must stay re-indexable here (5.5)
       `SELECT id, content, tags, source, created_at, workspace_id, actor_id FROM entries
-       WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}
+       WHERE ${PENDING_WHERE}
        ORDER BY created_at DESC LIMIT 25`
-    ).bind(graceCutoff).all();
+    ).bind(graceCutoff).all<PendingRow>();
 
     let processed = 0;
     let failed = 0;
 
-    for (const row of toProcess as Record<string, any>[]) {
+    for (const row of toProcess) {
       try {
-        await storeEntry(
-          env,
-          row.id as string,
-          row.content as string,
-          JSON.parse(row.tags as string),
-          row.source as string,
-          row.created_at as number,
-          // Without this the backfill embeds with DEFAULTS.EMBEDDING_MODEL while
-          // capture and recall use the configured one, writing vectors from the
-          // wrong model into the index, scores go quietly wrong, nothing throws.
-          cfg,
-          // This route repairs OTHER members' rows by design, the context comes
-          // from the row, never from `auth`. Stamping the admin's workspace here
-          // would move every repaired vector into the admin's own space.
-          { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
-        );
-        processed++;
+        // cfg carries the configured embedding model; indexPendingRow stamps the ROW's own
+        // workspace and author, never the admin's.
+        // False: the row changed content or workspace mid-embed; it stays pending for the next call.
+        if (await indexPendingRow(env, row, cfg)) processed++; else failed++;
       } catch (e) {
         console.error("Re-embed failed for entry", row.id, e);
         failed++;
       }
     }
 
-    // Same filter as the select above, or the loop never reaches zero: the
-    // dashboard presses this until `remaining` is 0, so counting rows the select
-    // refuses to process would spin until the batch-made-no-progress guard.
+    // Every still-unindexed row, not just the past-grace ones the select above can touch (adv-final
+    // MAJOR 2): a row inside its grace window is genuinely pending, not done, so reporting
+    // `remaining: 0` while it sits there would tell a caller — including the undo reply this
+    // backs — that indexing finished when it has not even started. oldest, of that same set,
+    // drives retryAfterMs: 0 once nothing is left, otherwise how long until the longest-waiting
+    // row leaves its grace window and this endpoint can actually make progress on it.
     const remaining = await env.DB.prepare(
-      // scope-exempt: admin repair backlog: must match the SELECT above or the loop never reaches zero
-      `SELECT COUNT(*) as count FROM entries WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}`
-    ).bind(graceCutoff).first() as Record<string, any> | null;
+      // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
+      // validity: any: must match the toProcess selection above, replaced rows included (5.5)
+      `SELECT COUNT(*) as count, MIN(created_at) as oldest FROM entries WHERE vector_ids = '[]' AND ${INDEXABLE_SQL}`
+    ).first() as Record<string, any> | null;
+    const remainingCount = (remaining?.count as number) ?? 0;
+    const oldestCreatedAt = remaining?.oldest as number | null;
+    const retryAfterMs = remainingCount === 0 ? 0 : Math.max(0, (oldestCreatedAt as number) + graceMs(env) - Date.now());
 
-    return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+    return json({ processed, failed, remaining: remainingCount, retryAfterMs });
   }
 
   // POST /classify-pending
@@ -1668,17 +1580,21 @@ export async function handleAdminRoutes(
 
     let processed = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const row of toProcess as Record<string, any>[]) {
       try {
         // cfg carries the user's LLM_MODEL choice; without it this backfill
         // classifies with the shipped default and ignores their setting.
         const { canonical, kind } = await classifyEntry(row.content as string, env, cfg);
-        let tags: string[] = JSON.parse(row.tags as string);
+        const readTags: string = row.tags as string;
+        let tags: string[] = JSON.parse(readTags);
         if (kind) tags = withKind(tags, kind);
         if (canonical && getStatus(tags) === null && !hasCapsuleTag(tags)) tags = withStatus(tags, "canonical");
-        await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(tags), row.id).run();
-        processed++;
+        // versioning: exempt: hygiene, compare-and-set on the tags read (T-0089.10); a miss is skipped, not overwritten
+        const res = await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ? AND tags = ?`).bind(JSON.stringify(tags), row.id, readTags).run();
+        if ((res.meta.changes ?? res.meta.rows_written ?? 0) === 0) skipped++;
+        else processed++;
       } catch (e) {
         console.error("Classification backfill failed for entry", row.id, e);
         failed++;
@@ -1690,7 +1606,7 @@ export async function handleAdminRoutes(
       `SELECT COUNT(*) as count FROM entries WHERE ${UNCLASSIFIED_WHERE}`
     ).first() as Record<string, any> | null;
 
-    return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+    return json({ processed, failed, skipped, remaining: (remaining?.count as number) ?? 0 });
   }
 
   // POST /insights/accrue, run one accrual pass on demand, right now.
@@ -1767,6 +1683,10 @@ export async function handleAdminRoutes(
     // which is how it stayed unscoped while every sibling query was fixed.
     const aScope = scopeWhere(auth, undefined, "a.workspace_id");
     const bScope = scopeWhere(auth, undefined, "b.workspace_id");
+    const dryRunNow = Date.now();
+    // validity: current: a replaced side of a candidate pair is not insight material (5.5)
+    // Codex review class E (T-0089.4.2): same gap and same fix as src/insight/weekly.ts's own
+    // draw query — a candidate accrued clean can be held by the time this preview reads it.
     const { results } = await env.DB.prepare(
       `SELECT c.id, c.a_id, c.b_id, c.score, a.content AS a_content, b.content AS b_content,
               a.tags AS a_tags, b.tags AS b_tags
@@ -1776,6 +1696,10 @@ export async function handleAdminRoutes(
        WHERE c.status = 'pending'
          AND a.tags NOT LIKE '%"status:deprecated"%'
          AND b.tags NOT LIKE '%"status:deprecated"%'
+         AND (a.valid_until IS NULL OR a.valid_until > ${dryRunNow})
+         AND (b.valid_until IS NULL OR b.valid_until > ${dryRunNow})
+         AND ${notHeldSqlFor("a")}
+         AND ${notHeldSqlFor("b")}
          AND ${aScope.clause} AND ${bScope.clause}
        ORDER BY c.score DESC
        LIMIT ?`,

@@ -93,7 +93,13 @@ export const MIRRORED_SOURCES: ReadonlySet<string> = new Set([
 //
 // Not MIRRORED_SOURCES: those index the first chunk only because the record
 // leads with signal and trails with boilerplate; a transcript is the inverse.
-export const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set(["claude-code"]);
+// codex-session and cursor-session are the Codex CLI / Cursor session-end
+// hooks (integrations/codex-cli-hooks, integrations/cursor-hooks). Deliberate
+// MCP writes from those same clients use the plain "codex" / "cursor" source
+// and are NOT in this set: sharing a label with the automatic hook would let
+// an unattended transcript capture supersede a deliberate memory under the
+// same-source exemption below.
+export const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set(["claude-code", "codex-session", "cursor-session"]);
 
 // ── Embedding migration (#248) ───────────────────────────────────────────────
 // Budgeted in chunks rather than entries because storeEntry fires one model call
@@ -277,3 +283,87 @@ export const CJK_STOPWORDS = new Set([
   "什么", "怎么", "为什么", "没有", "可以", "一个", "我们", "你们", "他们", "这个", "那个", "这些", "那些",
   "因为", "所以", "但是", "如果", "已经", "还是", "或者", "以及", "关于",
 ]);
+
+/** The `source` the digest and weekly-insight jobs write; with an empty actor it is how their rows are told from a client's. */
+export const SYSTEM_SOURCE = "system";
+
+// ── Sampled recall log (T-0089.5.2 Part A, src/recall/log.ts) ──
+// Opt-in via config RECALL_LOG, off by default everywhere (D5.2). At most this many
+// recall_log rows written per workspace per day, enforced inside the INSERT's own WHERE
+// clause (no KV counter — R12, budget auditor). At 2 D1 rows written per logged recall
+// (the insert plus its lazy purge), 200/day is about 400 rows, 0.4% of the 100k/day
+// free-plan write cap.
+export const RECALL_LOG_PER_DAY = 200;
+// How long a logged query is kept before its lazy purge deletes it.
+export const RECALL_LOG_RETENTION_DAYS = 30;
+// Oldest-expired rows deleted per insert (bounded, not a full-table scan).
+export const RECALL_LOG_PURGE_BATCH = 20;
+// Part B: a get/append/update/link on an id within this long of a recall that returned it
+// counts as implicit feedback on that recall (feeds the golden set only, D5.4).
+export const RECALL_LOG_FOLLOW_WINDOW_MS = 30 * 60 * 1000;
+// Part C (05-proof.md, T-0089.5.3): the receipt's fallback hash buckets `now` to this width,
+// so the same query cited moments apart still hashes to the same short receipt.
+export const RECEIPT_TIME_BUCKET_MS = 60 * 1000;
+
+// ── Content versions and trash (4.0, Track 1) ──
+/** KV key holding when entry_versions came into being; history before it does not exist. Read through getVersionsSince. */
+export const VERSIONS_SINCE_KV_KEY = "versions:since";
+/** Versions kept for a mirrored (integration-synced) row that no user has edited. */
+export const MIRROR_VERSION_KEEP = 3;
+/** Ceiling on trash rows purged after one forget; the version-count read may choose fewer. */
+export const TRASH_PURGE_ON_FORGET = 10;
+/** Ceiling on trash rows in one nightly purge batch. */
+export const TRASH_PURGE_NIGHTLY = 400;
+export const TRASH_PURGE_NIGHTLY_MAX_BATCHES = 5;
+/** Rows-written target for one purge batch. */
+export const TRASH_PURGE_BATCH_ROWS = 5000;
+/** Rows-written target for the one purge batch a forget runs. */
+export const FORGET_PURGE_ROWS = 1000;
+/** One rows-written budget per night, shared by the trash purge and the member-removal resume. */
+export const NIGHTLY_CLEANUP_ROWS = 15000;
+/** The purge's share of NIGHTLY_CLEANUP_ROWS; the resume gets the rest. */
+export const TRASH_PURGE_NIGHTLY_ROWS = 10000;
+/** Bottom-up version deletes per chunk for one oversized trash row. */
+export const VERSION_DELETE_CHUNK = 2000;
+/** Compare-and-set retries for content writers. */
+export const WRITE_CAS_ATTEMPTS = 3;
+/** Disconnect purge: ids per call, and ids per batch. */
+export const DISCONNECT_PURGE_PAGE = 200;
+export const DISCONNECT_PURGE_CHUNK = 50;
+/** D1's hard row limit, and the budgets that leave 200 KB for growth between a size read and its batch. */
+export const D1_ROW_MAX_BYTES = 2_000_000;
+export const VERSION_ROW_BUDGET_BYTES = 1_800_000;
+export const TRASH_ROW_BUDGET_BYTES = 1_800_000;
+/** Member removal: history rows deleted per chunk, chunks per call, removals resumed per night. */
+export const MEMBER_HISTORY_CHUNK = 1000;
+/** Entry ids per history delete during member removal. */
+export const MEMBER_HISTORY_SLICE = 1000;
+export const MEMBER_HISTORY_MAX_CHUNKS = 10;
+export const MEMBER_REMOVAL_NIGHTLY_MAX = 1;
+/**
+ * Vector ids deleteEntryVectors checks and deletes in one call, when a caller opts into the cap
+ * (FX3 finding 2). At VECTORIZE_GET_BY_IDS_BATCH that is at most 30 getByIds calls plus one
+ * deleteByIds — comfortably under the platform's 1,000-subrequest ceiling with room left for
+ * everything else the same invocation does, for a removed member's vectors that can run into the
+ * tens of thousands.
+ */
+export const VECTORIZE_DELETE_MAX_IDS_PER_CALL = 600;
+/** Undo: a to_version rollback re-creates one row per merge it crosses, but only re-embeds this
+ * many inline (AI + Vectorize, one call each) — at VERSION_KEEP's ceiling that could otherwise be
+ * hundreds of merges in one request, over the platform's per-invocation service subrequest limit.
+ * The rest are written with vector_ids = '[]' for POST /vectorize-pending to backfill. */
+export const UNDO_MERGE_REEMBED_INLINE = 25;
+
+// ── Standing memory (4.0, Track 7, T-0089.7.1) ──
+// Fixed caps (never user tunables — see src/config.ts for STANDING_THRESHOLD and STANDING_MAX,
+// which are eval-tuned / capacity settings and belong in DEFAULTS instead).
+/** Firing selection keeps at most this many results (Design 2.7, 2.9). */
+export const STANDING_MAX_FIRES = 2;
+/** A longer instruction is saved as an ordinary memory instead (Design 2.1, P7.10). */
+export const STANDING_MAX_CHARS = 500;
+/** A cache older than this is served stale and a rebuild is scheduled (Design 2.4 "Revalidation"). */
+export const STANDING_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** KV key prefix; "-" stands for the pre-tenancy "" workspace (Design 2.3). */
+export const STANDING_KV_PREFIX = "standing:v1:";
+/** Isolate-level read memo and rebuild-scheduling throttle, both windowed the same (Design 2.5). */
+export const STANDING_ISOLATE_MEMO_MS = 60_000;

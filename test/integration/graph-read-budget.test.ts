@@ -49,6 +49,9 @@ afterEach(() => { sqlite?.close(); sqlite = null; });
  * CTE — a per-row INSERT from JS is the slow part of a 20,000-edge fixture, not SQLite.
  */
 function seedGraph(db: SqliteD1, n: number, withNodes = true): void {
+  // valid_until is one of the columns src/db/init.ts adds by ALTER at runtime
+  // rather than in schema.sql; buildGraph's node hydration selects it.
+  db.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
   const nodes = Math.max(2, Math.floor(n / 4));
   db.db.prepare(
     `WITH RECURSIVE seq(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM seq WHERE i + 1 < ${n})
@@ -139,6 +142,7 @@ describe("GET /graph read budget", () => {
     // The cheap alternative to the index was dropping ORDER BY entirely. It is not what
     // shipped, so the ordering it would have cost has to stay observable.
     sqlite = makeSqliteD1();
+    await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN valid_until INTEGER`).run();
     for (let i = 0; i < 6; i++) sqlite.seed({ id: `n${i}`, content: `Memory ${i}`, createdAt: 1000 + i });
     const weights: [string, string, number][] = [["n0", "n1", 0.95], ["n2", "n3", 0.10], ["n4", "n5", 0.60]];
     for (const [source, target, weight] of weights) {

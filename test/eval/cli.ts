@@ -17,7 +17,9 @@ import { producerFromCache, stampCache } from "./stamp";
 import { COMMITTED_LAYER_VARIANTS, dryReranker, exportCache, prepare } from "./prepare";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { readReport, runVariant } from "./runner";
-import { QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
+import { syntheticLines } from "./synthetic-report";
+import { MONTH_DAY_CONTROL_ACCEPTANCE_MRR, MONTH_DAY_CONTROL_GAP_TAG } from "./corpus/synthetic-temporal";
+import { ALL_QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
 import { excludeNeedles } from "./corpus/exclude";
 import { VARIANTS, getVariant, type VariantSpec } from "./variants";
 
@@ -26,7 +28,7 @@ export class UsageError extends Error {}
 interface Common { llmTags: LlmTagsArm; corpus: string; d1: "sqlite" | "workerd"; isolate: "warm" | "cold"; model: string; hash: boolean; limit?: number; json?: string }
 export type CliCommand =
   | ({ kind: "run"; variant: string } & Common)
-  | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; targetGaps: string[]; allowUnmeasuredRows: boolean; excludeNeedles: string[] } & Common)
+  | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; targetGaps: string[]; targetSubsets: string[]; allowUnmeasuredRows: boolean; excludeNeedles: string[] } & Common)
   | ({ kind: "prepare"; variant: string; maxNeurons: number; concurrency: number; excludeNeedles: string[] } & Common)
   | ({ kind: "lock"; acceptDataChange?: string } & Common)
   | ({ kind: "export-cache" } & Common)
@@ -112,10 +114,11 @@ export function parseCli(argv: string[]): CliCommand {
     const parts = values.compare.split(",").map(s => s.trim()).filter(Boolean);
     if (parts.length !== 2) throw new UsageError("--compare needs two comma-separated entries: <baseline>,<candidate>");
     const target = (values.target ?? "").split(",").filter(Boolean);
-    for (const t of target) if (!(QUERY_CATEGORIES as readonly string[]).includes(t)) throw new UsageError(`--target: unknown category "${t}"`);
+    for (const t of target) if (!(ALL_QUERY_CATEGORIES as readonly string[]).includes(t)) throw new UsageError(`--target: unknown category "${t}"`);
     const targetGaps = (values["target-gaps"] ?? "").split(",").map(x => x.trim()).filter(Boolean);
+    const targetSubsets = (values["target-subsets"] ?? "").split(",").map(x => x.trim()).filter(Boolean);
     const excludeNeedles = parseExcludeNeedles(values["exclude-needles"]);
-    return { kind: "compare", variants: [parts[0], parts[1]], target: target as QueryCategory[], targetGaps, allowUnmeasuredRows: values["allow-unmeasured-rows"]!, excludeNeedles, ...common };
+    return { kind: "compare", variants: [parts[0], parts[1]], target: target as QueryCategory[], targetGaps, targetSubsets, allowUnmeasuredRows: values["allow-unmeasured-rows"]!, excludeNeedles, ...common };
   }
   if (values.variant) return { kind: "run", variant: values.variant, ...common };
   throw new UsageError("nothing to do: pass --variant, --compare, prepare, lock, export-cache, stamp-cache, or --list");
@@ -129,7 +132,7 @@ function parse(argv: string[]) {
       variant: { type: "string" }, compare: { type: "string" }, corpus: { type: "string", default: "core-1k" },
       json: { type: "string" }, d1: { type: "string", default: "sqlite" }, isolate: { type: "string", default: "warm" },
       "embedding-model": { type: "string" }, "llm-tags": { type: "string", default: "stand-in" }, model: { type: "string" }, "producer-from": { type: "string" }, layer: { type: "string", default: "local" }, "i-recorded-this": { type: "boolean", default: false }, "hash-embeddings": { type: "boolean", default: false },
-      limit: { type: "string" }, target: { type: "string" }, "exclude-needles": { type: "string" }, "target-gaps": { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
+      limit: { type: "string" }, target: { type: "string" }, "exclude-needles": { type: "string" }, "target-gaps": { type: "string" }, "target-subsets": { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
       "max-neurons": { type: "string", default: "4000" }, concurrency: { type: "string", default: "8" }, list: { type: "boolean", default: false }, "accept-data-change": { type: "string" },
     },
   });
@@ -141,6 +144,12 @@ const f = (n: number) => n.toFixed(3);
 const dist = (d: { mean: number; p50: number; p95: number }, digits = 1) => `mean ${d.mean.toFixed(digits)}  p50 ${d.p50.toFixed(digits)}  p95 ${d.p95.toFixed(digits)}`;
 const metricsLine = (s: Summary) => `recall@5 ${f(s.metrics.recall5)}  recall@10 ${f(s.metrics.recall10)}  MRR@10 ${f(s.metrics.mrr10)}  nDCG@10 ${f(s.metrics.ndcg10)}`;
 const row = (name: string, s: Summary) => `  ${name.padEnd(14)} n=${String(s.n).padEnd(4)} ${metricsLine(s)}`;
+/** T-0089.2.5's acceptance floor is an absolute bar the mechanical target-gaps rule cannot express from a delta
+ * alone (round 4: a parser fixing only 60% of the controls still passes it). Printed on the row itself so it is
+ * never read only from a passing gate check. */
+const acceptanceNote = (key: string, s: Summary) => key === MONTH_DAY_CONTROL_GAP_TAG
+  ? `  acceptance floor MRR@10 ${MONTH_DAY_CONTROL_ACCEPTANCE_MRR} (T-0089.2.5): ${s.metrics.mrr10 >= MONTH_DAY_CONTROL_ACCEPTANCE_MRR ? "met" : "not met"}`
+  : "";
 
 /** Why rows_read is absent: an unmeasured backend, or a workerd run where some statements reported none. */
 function rowsReadMissing(report: VariantReport): string {
@@ -159,17 +168,17 @@ export function formatReport(report: VariantReport): string {
     ...(report.embeddingModel === HASH_MODEL ? ["  WARNING: hash embeddings are a harness smoke test; dense results are meaningless and not comparable."] : []),
     ...(gapKeys.length ? ["  (known-gap queries are excluded from the headline, as the gate excludes them; see below)"] : []),
     row("overall", overall),
-    ...QUERY_CATEGORIES.filter(c => byCategory[c]).map(c => row(c, byCategory[c]!)),
+    ...ALL_QUERY_CATEGORIES.filter(c => byCategory[c]).map(c => row(c, byCategory[c]!)),
     ...(overall.pool ? [
       "  candidate pool (diagnostic, not gated): share of queries with a gold anywhere in the fused pool, and recall@30; recall@30 minus recall@10 is a reranker's headroom",
-      ...["overall", ...QUERY_CATEGORIES.filter(c => byCategory[c])].map(name => {
+      ...["overall", ...ALL_QUERY_CATEGORIES.filter(c => byCategory[c])].map(name => {
         const s = name === "overall" ? overall : byCategory[name as QueryCategory]!;
         return `    ${name.padEnd(14)} gold in pool ${f(s.pool?.goldInPool ?? 0)}  recall@30 ${f(s.pool?.recall30 ?? 0)}  headroom ${f((s.pool?.recall30 ?? 0) - s.metrics.recall10)}${name === "multi-hop" ? "  (not reranker headroom: the answer arrives by graph expansion, and recall counts the root too)" : ""}`;
       }),
     ] : []),
     ...(gapKeys.length ? [
       "  known gaps:",
-      ...gapKeys.map(k => row(k, knownGaps.byGap[k])),
+      ...gapKeys.map(k => row(k, knownGaps.byGap[k]) + acceptanceNote(k, knownGaps.byGap[k])),
       row("all queries", allQueries),
     ] : []),
     "  cost per query (all queries):",
@@ -183,6 +192,7 @@ export function formatReport(report: VariantReport): string {
     `    AI calls       mean ${allQueries.aiCalls.mean.toFixed(2)}   neurons mean ${allQueries.neurons.mean.toFixed(1)}${allQueries.estimatedNeuronQueries ? ` (estimated for ${allQueries.estimatedNeuronQueries} quer${allQueries.estimatedNeuronQueries === 1 ? "y" : "ies"})` : ""}`,
     `    wall ms        p50 ${allQueries.wallMs.p50.toFixed(0)}  p95 ${allQueries.wallMs.p95.toFixed(0)}  (reported, never gated)`,
     `  leaks ${allQueries.leaks}   errors ${allQueries.errors}   degraded ${allQueries.degraded}`,
+    ...syntheticLines(report),
   ].join("\n");
 }
 
@@ -327,7 +337,7 @@ async function runWithoutNeedles(cmd: CliCommand & { kind: "compare" }, spec: Co
     throw new UsageError(`the reduced-corpus run is not clean, so its deltas would be meaningless:\n  ${unclean.join("\n  ")}\nRecord the missing rows with: npm run eval:recall -- prepare --variant <name> --corpus ${cmd.corpus} --exclude-needles ${cmd.excludeNeedles.join(",")}`);
   }
   const gate = evaluateGate(base, cand, { allowUnmeasuredRowsRead: true });
-  const rows = ["overall", ...QUERY_CATEGORIES].flatMap(scope => (["recall10", "mrr10"] as const).flatMap(metric => {
+  const rows = ["overall", ...ALL_QUERY_CATEGORIES].flatMap(scope => (["recall10", "mrr10"] as const).flatMap(metric => {
     const d = gate.deltas.find(x => x.scope === scope && x.metric === metric);
     return d ? [`    ${scope.padEnd(14)} ${metric.padEnd(9)} ${f(d.base)} -> ${f(d.candidate)}  ${d.ci.mean >= 0 ? "+" : ""}${d.ci.mean.toFixed(4)}  [${d.ci.lo.toFixed(4)}, ${d.ci.hi.toFixed(4)}]`] : [];
   }));
@@ -348,7 +358,7 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
   const declared = (() => { try { return getVariant(candidate.variant); } catch { return undefined; } })();
   const targets = cmd.target.length ? cmd.target : [...(declared?.targetCategories ?? [])];
   const targetGaps = cmd.targetGaps.length ? cmd.targetGaps : [...(declared?.targetGaps ?? [])];
-  const gate = evaluateGate(baseline, candidate, { targetCategories: targets, targetGaps, allowUnmeasuredRowsRead: cmd.allowUnmeasuredRows });
+  const gate = evaluateGate(baseline, candidate, { targetCategories: targets, targetGaps, targetSubsets: cmd.targetSubsets, floors: spec.floors, allowUnmeasuredRowsRead: cmd.allowUnmeasuredRows });
   console.log(`${describeVerdict(gate)}\n${formatGate(gate)}`);
   const without = cmd.excludeNeedles.length ? await runWithoutNeedles(cmd, spec) : undefined;
   if (without) console.log(`\n${without.text}`);

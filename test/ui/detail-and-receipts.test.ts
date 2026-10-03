@@ -145,7 +145,20 @@ describe("memory detail — what the brain knows", () => {
   it("warns when recall cannot see the memory at all", () => {
     const ctx = load();
     ctx.renderViewBrain({ tags: [], indexed: false });
-    expect(ctx.__els.get("view-brain").innerHTML).toContain("Not indexed");
+    expect(ctx.__els.get("view-brain").innerHTML).toContain("Not searchable by meaning");
+  });
+
+  // Director, copywriter decision (deck section 15): a held memory is already out of search by
+  // policy (the held banner says so); "not indexed yet" beside it reads as a second, conflicting
+  // reason. Same heldReason(entry.tags) check the held banner itself uses.
+  it("hides the not-indexed-yet note when the memory is held", () => {
+    const ctx = load();
+    // importance_score gives the row content besides the note, so this proves the note itself is
+    // suppressed, not that the whole block went empty and hid itself for an unrelated reason.
+    ctx.renderViewBrain({ tags: ["quarantine:instruction"], indexed: false, importance_score: 3 });
+    const html = ctx.__els.get("view-brain").innerHTML;
+    expect(html).not.toBe("");
+    expect(html).not.toContain("Not searchable by meaning");
   });
 
   it("keeps the facts together and the caveats after them", () => {
@@ -166,6 +179,39 @@ describe("memory detail — what the brain knows", () => {
     const ctx = load();
     ctx.renderViewBrain({ tags: [] });
     expect(ctx.__els.get("view-brain").style.display).toBe("none");
+  });
+});
+
+// Director addition: a quiet note on the sheet (not the card) for a memory an
+// AI coding session saved on its own, so a session capture reads differently
+// from something the user typed themselves.
+describe("the auto-save note (sheet only)", () => {
+  it("names the tool for each session-capture source", () => {
+    const ctx = load();
+    ctx.renderViewAutoSaveNote({ source: "claude-code" });
+    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Saved automatically at the end of a Claude Code session.");
+    expect(ctx.__els.get("view-auto-save-note").style.display).toBe("");
+
+    ctx.renderViewAutoSaveNote({ source: "codex-session" });
+    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Saved automatically at the end of a Codex session.");
+
+    ctx.renderViewAutoSaveNote({ source: "cursor-session" });
+    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Saved automatically at the end of a Cursor session.");
+  });
+
+  it("stays hidden for every other source", () => {
+    const ctx = load();
+    ctx.renderViewAutoSaveNote({ source: "web-ui" });
+    expect(ctx.__els.get("view-auto-save-note").style.display).toBe("none");
+    ctx.renderViewAutoSaveNote({ source: undefined });
+    expect(ctx.__els.get("view-auto-save-note").style.display).toBe("none");
+  });
+
+  it("both locales", () => {
+    const ctx = load();
+    ctx.initI18n("it");
+    ctx.renderViewAutoSaveNote({ source: "cursor-session" });
+    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Salvato automaticamente alla fine di una sessione di Cursor.");
   });
 });
 
@@ -273,7 +319,7 @@ describe("capture receipts", () => {
 
   it("explains an outcome rather than only labelling it", () => {
     expect(headline({ action: "merged" })).toContain("You had written about this before");
-    expect(headline({ kept_canonical: "abc" })).toContain("kept unconfirmed");
+    expect(headline({ kept_canonical: "abc" })).toContain("saved as unconfirmed");
   });
 });
 
@@ -372,6 +418,19 @@ it("gives the view sheet's close button an accessible name", () => {
   expect(btn).toContain('aria-label="Close"');
 });
 
+// SH-4 (T-0101.2.3): Delete forever lives in the trash view only (Q11). The
+// memory sheet's action row must not carry a way to reach it.
+it("the memory sheet has no Delete forever control", () => {
+  const html = readFileSync(resolve(ROOT, "public/index.html"), "utf8");
+  expect(html).not.toContain("view-btn-delete-forever");
+  expect(html).not.toContain("deleteForever");
+});
+
+it("openDeleteForeverConfirm still exists, for the trash view to call", () => {
+  const ctx = load();
+  expect(typeof ctx.openDeleteForeverConfirm).toBe("function");
+});
+
 /**
  * The history line on a shared memory, and who is allowed to change it.
  *
@@ -407,8 +466,8 @@ describe("the history of a shared memory", () => {
     expect(labels).toEqual([
       "Captured",
       "Edited",
-      "Added to",
-      "Deleted",
+      "Text added",
+      "Moved to the trash",
       "Status changed",
       "Shared with the team",
       "Made personal again",
@@ -438,25 +497,20 @@ describe("the history of a shared memory", () => {
     expect(el.innerHTML).toBe("");
   });
 
-  // Regression: renderViewTimeline hid the whole History section whenever
-  // entry.timeline was empty, before it ever looked at can_edit, so a shared
-  // memory nobody had edited or appended yet (an empty timeline is the common
-  // case) showed two greyed-out buttons with no explanation anywhere on the
-  // screen for why they were disabled.
-  it("still shows History for the lock note alone, on a shared memory with no timeline events yet", () => {
+  // History used to keep itself visible on an empty timeline just to carry
+  // the lock note explaining two greyed-out buttons. A UI review moved that
+  // note next to the status control instead (renderViewStatus), so it reads
+  // once, not once here and once in Status; History now hides on an empty
+  // timeline unconditionally, locked or not.
+  it("hides History on an empty timeline even when the memory is locked", () => {
     const ctx = load();
     ctx.renderViewTimeline({ workspace: "company", actor_name: "Bob", can_edit: false, timeline: [] });
     const el = ctx.__els.get("view-timeline");
-    expect(el.style.display).toBe("");
-    expect(el.innerHTML).toContain("Author: Bob");
-    expect(el.innerHTML).toContain("Shared by Bob — only they can edit or delete it");
+    expect(el.style.display).toBe("none");
+    expect(el.innerHTML).not.toContain("Shared by Bob");
   });
 
   it("still hides History on an empty timeline when the memory is not locked", () => {
-    // can_edit: false alone is not the signal: an entry can report that
-    // before it has resolved actor_name too (memory-crud.js sets can_edit
-    // only once /entry has actually answered), and a lock note attributed to
-    // nobody is worse than no note.
     const ctx = load();
     ctx.renderViewTimeline({ workspace: "company", can_edit: false, timeline: [] });
     const el = ctx.__els.get("view-timeline");
@@ -514,12 +568,16 @@ describe("who may change a shared memory", () => {
     }
   });
 
-  it("says why, rather than leaving two buttons mysteriously grey", () => {
+  // The lock note explaining why the buttons are grey moved to the status
+  // control (renderViewStatus, see test/ui/status-control.test.ts); History
+  // shows the events themselves and nothing about why editing is locked.
+  it("shows events on a locked shared memory without repeating the lock note", () => {
     const ctx = load();
     ctx.renderViewTimeline(shared({ can_edit: false, timeline: [{ event: "created", actor_name: "Bob", created_at: 1 }] }));
     const html = ctx.__els.get("view-timeline").innerHTML as string;
-    expect(html).toContain("Shared by Bob");
-    expect(html).toContain("view-timeline-note");
+    expect(html).toContain("Captured");
+    expect(html).not.toContain("Shared by Bob");
+    expect(html).not.toContain("view-timeline-note");
   });
 
   it("says nothing of the sort when the memory is yours to change", () => {

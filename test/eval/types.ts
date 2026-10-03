@@ -1,7 +1,10 @@
 export const QUERY_CATEGORIES = [
   "identifier", "cjk", "rare-word", "common-word", "short-word", "paraphrase", "multi-hop", "long-context", "agent-framed",
 ] as const;
-export type QueryCategory = (typeof QUERY_CATEGORIES)[number];
+/** Categories of the opt-in synthetic corpora (T-0089.1.8); the core categories above stay what the core gate and audits iterate. */
+export const SYNTHETIC_QUERY_CATEGORIES = ["temporal", "temporal-during", "knowledge-update", "noise", "injection", "standing"] as const;
+export const ALL_QUERY_CATEGORIES = [...QUERY_CATEGORIES, ...SYNTHETIC_QUERY_CATEGORIES] as const;
+export type QueryCategory = (typeof ALL_QUERY_CATEGORIES)[number];
 export type ViewerId = "avery" | "blake" | "outsider";
 
 export const METRIC_NAMES = ["recall5", "recall10", "mrr10", "ndcg10"] as const;
@@ -25,6 +28,17 @@ export interface GoldenQuery {
   tags?: string[];
   /** Audit only: the substring of the gold memory that answers the query (long-context queries). */
   answerSpan?: string;
+  /** Question time for temporal evaluation; the runner restores its fixed clock after this query. */
+  asOf?: number;
+  /**
+   * The date a question is about when the text carries it and the runner must NOT pre-filter (a date phrase in the query,
+   * or a vague "back in April"). Read by the supersession oracle and audits only; never passed to recall.
+   */
+  expectedAsOf?: number;
+  /** Passed to recall as `asOf` (the agent-supplied path, T-0089.2.6): the runner's as-of gate, unlike `asOf`. */
+  asOfParam?: number;
+  /** Ids that must not rank above the first gold id. scoreQuery cuts the ranking at the first one seen. */
+  forbidden?: string[];
 }
 
 export interface CostSample {
@@ -108,6 +122,31 @@ export const producersKey = (m: Record<string, EmbeddingProducer> | undefined): 
  */
 export type NeuronSource = "projected" | "provider";
 
+export interface StandingFiringPoint {
+  threshold: number; precision: number; recall: number; truePositive: number; falsePositive: number; falseNegative: number;
+  /** Queries (same subject, different intent) where a memory fired; reported apart, never part of precision. */
+  intentFired: number; intentQueries: number;
+}
+export interface StandingInputReport {
+  curve: StandingFiringPoint[];
+  /** Threshold chosen on the dev split only; dev and held-out test numbers at it, with 95% Wilson intervals on test. */
+  chosen: {
+    threshold: number; meetsPrecisionTarget: boolean; dev: StandingFiringPoint;
+    test: StandingFiringPoint & {
+      precisionCi: [number, number]; recallCi: [number, number];
+      /** Same intervals, using the count of distinct standing memories in play instead of query count: true positives cluster by memory (five phrasings are not independent trials), so these are wider and less optimistic. */
+      precisionCiClustered: [number, number]; recallCiClustered: [number, number];
+    };
+    /** Same-subject-different-intent fires, scored the other way (Q1): counted as false positives instead of excluded. */
+    intentCountedAsFalsePositive: { dev: StandingFiringPoint; test: StandingFiringPoint };
+  };
+}
+export interface StandingReport {
+  groups: Record<"yes" | "overlap" | "intent" | "unrelated", number>;
+  memories: number;
+  inputs: { distilled: StandingInputReport; raw: StandingInputReport };
+}
+
 export interface VariantReport {
   schema: 1;
   variant: string;
@@ -130,6 +169,8 @@ export interface VariantReport {
   /** Set when the run covered only the first N queries; such a report is never gate-eligible. */
   limit?: number;
   results: QueryResult[];
+  /** Report-only cosine firing measurement for the synthetic standing corpus. */
+  standing?: StandingReport;
 }
 
 /** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. 6: neuronSource from actual calls and per-row provenance, plus the llmTags arm (query-tag LLM calls answered by a priced embedding stand-in by default). 7: recall diagnostics count first() statements (run as all()), so workerd rows_read is no longer null for queries that ran one. 8: each result carries the candidate-pool diagnostic (pool). */

@@ -1,4 +1,6 @@
 import { withoutVolatility } from "./volatility";
+import { currentValidityAt, SQL_NOW_MS } from "./validity";
+import { RETRACTED_SOURCE_TAG } from "../tags/system";
 
 export const STALE_AS_OF = "stale:as-of";
 
@@ -10,10 +12,32 @@ export const STALE_AS_OF = "stale:as-of";
  * JSON member rather than a bare substring, the same way PENDING_INSIGHT_SQL does.
  *
  * Deprecated entries are excluded: deprecation retires a memory from recall, and
- * asking someone to re-verify something already out of circulation is make-work.
+ * asking someone to re-verify something already out of circulation is make-work. So are
+ * replaced and ended ones (T-0089.2.1): a closed window is history, not a claim to re-check.
+ * The fragment has no binding of its own, so "current" is read against the database clock.
+ *
+ * A `retracted-source` row (T-0089.2.4/spec 14 5.8) also belongs in this queue: the memory
+ * itself was never marked wrong, but something it was built on later was, so it is worth a
+ * second look the same as an aged fact is.
  */
 export const STALE_REVIEW_SQL =
-  `tags LIKE '%"${STALE_AS_OF}"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+  `(tags LIKE '%"${STALE_AS_OF}"%' OR tags LIKE '%"${RETRACTED_SOURCE_TAG}"%') AND tags NOT LIKE '%"status:deprecated"%' AND ${currentValidityAt("", SQL_NOW_MS)}`;
+
+export type StaleReason = "not_confirmed" | "date_passed" | "retracted_source";
+
+/**
+ * Why a row sits in the review queue (spec 14 5.9's `GET /stale` contract; director, 2026-09-28,
+ * on the dashboard lane's contract: `not_confirmed`/`date_passed`/`retracted_source`), derived
+ * from its current tags and `when_at` rather than stored, so it always reflects the row as it
+ * reads now. `retracted-source` wins over a volatile row's own passed date: being built on a
+ * retracted source is a different claim than "this is old", and the more specific one is worth
+ * naming.
+ */
+export function staleReasonFor(tags: readonly string[], whenAt: number | null, now: number): StaleReason {
+  if (tags.includes(RETRACTED_SOURCE_TAG)) return "retracted_source";
+  if (whenAt !== null && whenAt < now) return "date_passed";
+  return "not_confirmed";
+}
 
 export function hasStaleAsOf(tags: string[]): boolean {
   return tags.includes(STALE_AS_OF);

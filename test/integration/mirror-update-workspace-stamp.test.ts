@@ -54,14 +54,14 @@ describe("#351: mirror updateEntry stamps vectors from the row's own workspace",
 
     const moveResult = await moveEntry(id!, "company", env, {
       userId: roots.ownerUserId, role: "admin", personalWorkspaceId: roots.ownerPersonalWorkspaceId, companyWorkspaceIds: [roots.companyWorkspaceId],
-    } as any);
+    } as any, { actorId: roots.ownerUserId, channel: "rest" });
     expect(moveResult.status).toBe("shared");
     await restampVectorWorkspace(env, (moveResult as any).vectorIds, roots.companyWorkspaceId);
 
     // The connection still says personal, as a scheduled sync would resolve it.
     const staleWriteCtx = { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId };
     const mirrorStore = makeMirrorStore(env, staleWriteCtx);
-    expect(await mirrorStore.updateEntry(id!, "Mirrored page, edited upstream after the move")).toBe(true);
+    expect(await mirrorStore.updateEntry(id!, "Mirrored page, edited upstream after the move")).toBe("updated");
 
     const row = await env.DB.prepare(`SELECT workspace_id, vector_ids FROM entries WHERE id = ?`).bind(id!).first<{ workspace_id: string; vector_ids: string }>();
     expect(row!.workspace_id).toBe(roots.companyWorkspaceId);

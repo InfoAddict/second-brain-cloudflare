@@ -60,13 +60,14 @@ describe("POST /vectorize-pending", () => {
     expect(ids.length).toBeGreaterThan(0);
   });
 
-  it("skips entries within the grace window (vector_ids=[] but recent)", async () => {
+  it("does not process entries within the grace window, but still reports them as remaining with a retry hint (adv-final MAJOR 2)", async () => {
+    const createdAt = Date.now();
     db.entries.push({
       id: "pending",
       content: "Just captured",
       tags: "[]",
       source: "api",
-      created_at: Date.now(), // within grace window
+      created_at: createdAt, // within grace window
       vector_ids: "[]",
       recall_count: 0,
       importance_score: 0,
@@ -74,7 +75,11 @@ describe("POST /vectorize-pending", () => {
     const res = await worker.fetch(req("POST", "/vectorize-pending"), env, ctx);
     const data = await res.json() as any;
     expect(data.processed).toBe(0);
-    expect(data.remaining).toBe(0);
+    // Still genuinely unindexed: reporting 0 here would tell the caller indexing is done when
+    // this row has not even been attempted yet, just because it is too new to touch so far.
+    expect(data.remaining).toBe(1);
+    expect(data.retryAfterMs).toBeGreaterThan(0);
+    expect(data.retryAfterMs).toBeLessThanOrEqual(300000); // the default 5-minute grace
   });
 
   it("skips entries that already have vector_ids populated", async () => {

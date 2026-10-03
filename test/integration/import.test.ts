@@ -139,7 +139,7 @@ describe("POST /import", () => {
     expect(db.entries).toHaveLength(1);
   });
 
-  it("fails edges with missing endpoints but still imports entries", async () => {
+  it("skips edges with missing endpoints, without saying why, but still imports entries", async () => {
     const payload = {
       version: 2,
       entries: [{ id: "a", content: "Only A", created_at: 1 }],
@@ -150,13 +150,10 @@ describe("POST /import", () => {
     const data = await res.json() as any;
     expect(data.imported).toBe(1);
     expect(data.edges_imported).toBe(0);
-    expect(data.edges_failed).toBe(1);
-    expect(data.results).toContainEqual(expect.objectContaining({
-      source_id: "a",
-      target_id: "missing",
-      status: "failed",
-      reason: "missing_endpoint",
-    }));
+    // A missing endpoint and another member's private one look the same (T-0089.1.1): a plain skip.
+    expect(data.edges_skipped).toBe(1);
+    expect(data.edges_failed).toBe(0);
+    expect(JSON.stringify(data.results)).not.toMatch(/missing/);
   });
 
   it("does not trigger capture duplicate detection for similar content with a new id", async () => {
@@ -467,5 +464,38 @@ describe("POST /import", () => {
     expect(data.edges_imported).toBe(51);
     expect(data.edges_failed).toBe(0);
     expect(db.edges).toHaveLength(51);
+  });
+
+  describe("Rahil's decision: 128 KB per note (18-copy-deck.md 6.8)", () => {
+    // Codex review, T-0102 B2: skipping an oversize row here silently lost real 3.7 data on an
+    // upgrade (the note existed, and now does not, with no record of it). It is imported instead,
+    // forced held too_long -- the same state a too-long note reaches on a fresh 4.0 write.
+    it("imports an oversize record held too_long, rather than skipping it and losing it", async () => {
+      // D1Mock does not model holdStatements' own SQL (snapshotStatement's meta JSON), so the held
+      // tags this row ends up with are verified against real SQLite instead, in
+      // import-quarantine-hold.test.ts ("holds an oversize row too_long, with a real hold version
+      // and event"). This test stays on D1Mock for the structural, non-hold assertions below.
+      const entries = [
+        { id: "ok", content: "a normal memory", created_at: 1000 },
+        { id: "too-big", content: "a".repeat(131_073), created_at: 2000 },
+      ];
+      const res = await worker.fetch(req("POST", "/import", { body: { version: 2, entries } }), env, ctx);
+      expect(res.status).toBe(200);
+      const data = await res.json() as any;
+      expect(data.ok).toBe(true);
+      expect(data.imported).toBe(2);
+      expect(data.skipped_too_large).toBe(0);
+      expect(db.entries.map((e: any) => e.id).sort()).toEqual(["ok", "too-big"]);
+      const importedResult = data.results.find((r: any) => r.id === "too-big");
+      expect(importedResult).toMatchObject({ id: "too-big", status: "imported" });
+    });
+
+    it("accepts a record at exactly the limit", async () => {
+      const entries = [{ id: "at-limit", content: "a".repeat(131_072), created_at: 1000 }];
+      const res = await worker.fetch(req("POST", "/import", { body: { version: 2, entries } }), env, ctx);
+      const data = await res.json() as any;
+      expect(data.imported).toBe(1);
+      expect(data.skipped_too_large).toBe(0);
+    });
   });
 });

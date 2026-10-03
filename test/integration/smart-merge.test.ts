@@ -135,7 +135,8 @@ describe("POST /capture — smart merge (flagged band 0.85–0.95)", () => {
 
     expect(insertMock).toHaveBeenCalledOnce();
     // Only the stale chunk is deleted; the reused "existing-id" vector survives.
-    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing-id-chunk-1"]);
+    // Per-upload vector ids (T-0089.1.1): the re-embed never reuses an old id, so every old one is retired.
+    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing-id", "existing-id-chunk-1"]);
   });
 
   it("replace: new vector is inserted before old ones are deleted (safe ordering)", async () => {
@@ -255,7 +256,7 @@ describe("POST /capture — smart merge (flagged band 0.85–0.95)", () => {
 
   // ── Contradiction via combined prompt ─────────────────────────────────────────
 
-  it("contradiction detected via combined prompt in flagged band — new entry stored, conflicting DEPRECATED (not deleted)", async () => {
+  it("contradiction detected via combined prompt in flagged band: new entry stored, conflicting row superseded (kept as history)", async () => {
     seedEntry(db, "old-id", "I live in NYC");
     const deleteByIdsMock = vi.fn().mockResolvedValue({ mutationId: "m" });
     env = makeTestEnv(db, {
@@ -277,15 +278,16 @@ describe("POST /capture — smart merge (flagged band 0.85–0.95)", () => {
     expect(data.ok).toBe(true);
     expect(data.resolved_conflict).toBe("old-id");
     expect(data.reason).toBe("different city");
-    // Conflicting row is deprecated (kept in D1), not deleted
+    // T-0089.2.1: the conflicting row is superseded, not deprecated: it keeps its status and its
+    // vectors, and its validity window closes.
     const conflictRow = db.entries.find((e: any) => e.id === "old-id");
     expect(conflictRow).toBeDefined();
     const conflictTags: string[] = JSON.parse(conflictRow!.tags);
-    expect(conflictTags).toContain("status:deprecated");
-    expect(conflictRow!.vector_ids).toBe("[]");
-    // Vectors deleted from Vectorize
-    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing-id"]);
-    // New entry also stored (total: old deprecated + new = 2)
+    expect(conflictTags).not.toContain("status:deprecated");
+    expect(conflictRow!.valid_until).toBeTypeOf("number");
+    expect(deleteByIdsMock).not.toHaveBeenCalled();
+    expect(data.supersede).toMatchObject({ closed_id: "old-id", direction: "older" });
+    // New entry also stored (total: old superseded + new = 2)
     expect(db.entries).toHaveLength(2);
   });
 

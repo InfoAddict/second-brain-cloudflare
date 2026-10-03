@@ -1323,6 +1323,19 @@ body.settings-page #app {
   margin: 0;
 }
 
+/* A disabled <input> alone leaves its label's own `cursor: pointer` and hover
+   fill in place, so a read-only member's pills still looked clickable (they
+   are not: the disabled input blocks the change event). This overrides both,
+   and drops opacity so the whole pill reads as unavailable at a glance. */
+.settings-level-readonly {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.settings-level-readonly:hover {
+  background: transparent;
+}
+
 /* Reserves two lines so swapping level does not reflow the card under the
    cursor mid-click. */
 .settings-notice {

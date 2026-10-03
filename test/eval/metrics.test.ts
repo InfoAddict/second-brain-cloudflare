@@ -29,6 +29,23 @@ describe("metrics", () => {
     expect(scoreQuery(["a", "b"], gold)).toEqual({ recall5: 1, recall10: 1, mrr10: 1, ndcg10: 1 });
   });
 
+  it("a forbidden id above the gold zeroes mrr and cuts recall (T-0089.2.6)", () => {
+    // "z" (forbidden) ranks above both gold ids: neither counts.
+    expect(scoreQuery(["z", "a", "b"], gold, ["z"])).toEqual({ recall5: 0, recall10: 0, mrr10: 0, ndcg10: 0 });
+    // Gold before the cut still counts at its real rank; only gold after the forbidden id is dropped.
+    expect(scoreQuery(["a", "z", "b"], gold, ["z"])).toEqual({ recall5: 0.5, recall10: 0.5, mrr10: 1, ndcg10: expect.any(Number) });
+    // No forbidden id present: unaffected.
+    expect(scoreQuery(["a", "b"], gold, ["z"])).toEqual({ recall5: 1, recall10: 1, mrr10: 1, ndcg10: 1 });
+  });
+
+  it("queries without forbidden score byte-identically (T-0089.2.6)", () => {
+    const rankings = [["a", "b"], ["b", "a"], ["x", "y", "a"], [], ["a", "a", "b"]];
+    for (const ranked of rankings) {
+      expect(scoreQuery(ranked, gold, undefined)).toEqual(scoreQuery(ranked, gold));
+      expect(scoreQuery(ranked, gold, [])).toEqual(scoreQuery(ranked, gold));
+    }
+  });
+
   it("percentile is nearest-rank and mean of empty is 0", () => {
     expect(percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 50)).toBe(5);
     expect(percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 95)).toBe(10);

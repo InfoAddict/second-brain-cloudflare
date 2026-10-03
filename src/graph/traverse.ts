@@ -11,6 +11,7 @@ import { projectFilterSql } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
 import { edgeLabel } from "./edges";
 import type { Connection, EdgeProvenance, GraphNeighbor, GraphView } from "./types";
+import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
 
 export const GRAPH_MAX_HOPS = 3;
 const GRAPH_FANOUT_CAP = 8;
@@ -115,26 +116,35 @@ async function readableAndDeprecatedAmong(
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
-): Promise<{ readable: Set<string>; deprecated: Set<string> }> {
+): Promise<{ readable: Set<string>; deprecated: Set<string>; held: Set<string>; validUntil: Map<string, number | null>; effectiveFrom: Map<string, number> }> {
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
   const scopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
   // Scope bindings share the statement's bound-parameter budget with the ids.
   const take = D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0);
   const readable = new Set<string>();
   const deprecated = new Set<string>();
+  const held = new Set<string>();
+  const validUntil = new Map<string, number | null>();
+  const effectiveFrom = new Map<string, number>();
   for (let i = 0; i < ids.length; i += take) {
     const batch = ids.slice(i, i + take);
     const ph = batch.map(() => "?").join(", ");
+    // This verdict feeds both recall's current-only hops and connections/graph's include-everything view; the caller decides which to keep
     // scope-checked: scopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
+    // validity: any: valid_until and valid_from ride along for whichever caller wants them; expandGraph itself decides current, as-of or any
     const { results } = await env.DB.prepare(
-      `SELECT id, tags FROM entries WHERE id IN (${ph})${scopeSql}`
+      `SELECT id, tags, valid_from, valid_until, created_at FROM entries WHERE id IN (${ph})${scopeSql}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
     for (const r of results) {
       readable.add(r.id as string);
-      if (getStatus(JSON.parse(r.tags ?? "[]")) === "deprecated") deprecated.add(r.id as string);
+      const tags = JSON.parse(r.tags ?? "[]");
+      if (getStatus(tags) === "deprecated") deprecated.add(r.id as string);
+      if (isHeld(tags)) held.add(r.id as string);
+      validUntil.set(r.id as string, (r.valid_until as number | null | undefined) ?? null);
+      effectiveFrom.set(r.id as string, (r.valid_from as number | null | undefined) ?? (r.created_at as number));
     }
   }
-  return { readable, deprecated };
+  return { readable, deprecated, held, validUntil, effectiveFrom };
 }
 
 /**
@@ -157,13 +167,32 @@ async function readableAndDeprecatedAmong(
  */
 export async function expandGraph(
   seedIds: string[],
-  opts: { hops: number; fanoutCap?: number; maxNodes?: number; includeDeprecated?: boolean; only?: "personal" | "company"; teamId?: string },
+  opts: {
+    hops: number; fanoutCap?: number; maxNodes?: number; includeDeprecated?: boolean;
+    /**
+     * T-0089.2.1: false drops a hop candidate whose validity window already
+     * ended. Defaults to includeDeprecated's own value when absent — the two
+     * are the same "show it anyway" request for every caller today (a graph
+     * or connections view wants both; recall and the cron/backfill callers
+     * that pre-date validity want neither) — so an existing caller that only
+     * ever set includeDeprecated keeps its old behavior and its old D1 cost.
+     */
+    includeSuperseded?: boolean;
+    only?: "personal" | "company"; teamId?: string;
+    /**
+     * As-of (spec 14 5.7 item 4): expand as of this moment T instead of now, and never expand a
+     * belief (a deprecated node) whatever includeDeprecated/includeSuperseded say.
+     */
+    asOf?: number;
+  },
   env: Env,
   config: Readonly<Config> = DEFAULTS,
   identity?: Identity,
 ): Promise<GraphNeighbor[]> {
   const hops = Math.max(0, Math.min(config.GRAPH_MAX_HOPS, opts.hops));
   if (hops === 0 || seedIds.length === 0) return [];
+  const includeSuperseded = opts.includeSuperseded ?? opts.includeDeprecated ?? false;
+  const now = opts.asOf ?? Date.now();
   const fanoutCap = opts.fanoutCap ?? GRAPH_FANOUT_CAP;
   const maxNodes = opts.maxNodes ?? GRAPH_MAX_NODES;
   const scope = identity ? scopeWhereForRead(identity, { layer: opts.only, teamId: opts.teamId }) : null;
@@ -206,16 +235,36 @@ export async function expandGraph(
     }
 
     let allowed = candidates;
-    // Skipped only when neither verdict is wanted — an identity-less caller that
-    // also wants deprecated rows has nothing to filter, so it issues no statement
-    // and costs exactly what it did before tenancy.
-    if (candidates.length && (identity || !opts.includeDeprecated)) {
-      const { readable, deprecated } = await readableAndDeprecatedAmong(
+    // Skipped only when none of the three verdicts is wanted — an identity-less
+    // caller that also wants deprecated rows (and so, by the default above,
+    // superseded ones too) has nothing to filter, so it issues no statement
+    // and costs exactly what it did before tenancy (and before T-0089.2.1).
+    if (candidates.length && (identity || !opts.includeDeprecated || !includeSuperseded || opts.asOf !== undefined)) {
+      // Held is treated exactly like deprecated (5.3): filtered whenever this
+      // statement runs, never released by includeDeprecated. The one case it
+      // does not cover — an identity-less caller that also wants deprecated
+      // and superseded rows, where the statement is skipped entirely to cost
+      // nothing beyond what a pre-tenancy caller always paid — is the
+      // cron/backfill path (graph-hop-isolation.test.ts).
+      const { readable, deprecated, held, validUntil, effectiveFrom } = await readableAndDeprecatedAmong(
         [...new Set(candidates.map(c => c.id))], env, identity, opts.only, opts.teamId,
       );
-      allowed = candidates.filter(c =>
-        (!identity || readable.has(c.id))
-        && (opts.includeDeprecated || !deprecated.has(c.id)));
+      allowed = candidates
+        .filter(c => {
+          const until = validUntil.get(c.id) ?? null;
+          if (opts.asOf !== undefined) {
+            // Beliefs are not expanded (item 4): a deprecated node never crosses a hop, whatever
+            // includeDeprecated/includeSuperseded ask for. Validity is checked against T, not now.
+            const from = effectiveFrom.get(c.id) ?? 0;
+            return (!identity || readable.has(c.id)) && !deprecated.has(c.id)
+              && from <= now && (until === null || until > now) && !held.has(c.id);
+          }
+          return (!identity || readable.has(c.id))
+            && (opts.includeDeprecated || !deprecated.has(c.id))
+            && (includeSuperseded || until === null || until > now)
+            && !held.has(c.id);
+        })
+        .map(c => ({ ...c, validUntil: validUntil.get(c.id) ?? null }));
     }
 
     const nextFrontier: string[] = [];
@@ -242,8 +291,9 @@ async function hydrateGraphEntries(ids: string[], env: Env, identity?: Identity,
     const batch = ids.slice(i, i + take);
     const ph = batch.map(() => "?").join(", ");
     // scope-checked: scopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
+    // validity: any: a graph-relationship view, not a current-facts answer (5.5)
     const { results } = await env.DB.prepare(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE id IN (${ph})${scopeSql}`
+      `SELECT id, content, tags, source, created_at, valid_until FROM entries WHERE id IN (${ph})${scopeSql} AND ${NOT_HELD_SQL}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
     for (const r of results) map.set(r.id as string, r);
   }
@@ -251,7 +301,9 @@ async function hydrateGraphEntries(ids: string[], env: Env, identity?: Identity,
 }
 
 export async function getConnections(id: string, type: string | undefined, env: Env, config: Readonly<Config> = DEFAULTS, identity?: Identity): Promise<Connection[]> {
-  let neighbors = await expandGraph([id], { hops: 1 }, env, config, identity);
+  // "any" validity (5.5): a replaced or wrong memory's link is still part of
+  // this memory's own history, so connections shows it, with valid_until.
+  let neighbors = await expandGraph([id], { hops: 1, includeDeprecated: true, includeSuperseded: true }, env, config, identity);
   if (type) neighbors = neighbors.filter(n => n.viaType === type);
   if (!neighbors.length) return [];
 
@@ -271,6 +323,7 @@ export async function getConnections(id: string, type: string | undefined, env: 
       weight: n.viaWeight,
       provenance: n.viaProvenance,
       linkedAt: n.viaLinkedAt,
+      validUntil: (row.valid_until as number | null | undefined) ?? null,
     });
   }
   return out;
@@ -298,7 +351,8 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
   // would answer with nodes from one layer joined by edges from both.
   const scope = identity ? scopeWhereForRead(identity, { layer: opts.only, teamId: opts.teamId }) : null;
   if (opts.seed) {
-    const neighbors = await expandGraph([opts.seed], { hops: 2, maxNodes: limit, includeDeprecated: true, only: opts.only, teamId: opts.teamId }, env, config, identity);
+    // "any" validity (5.5): the graph view dims a superseded node, it does not hide it.
+    const neighbors = await expandGraph([opts.seed], { hops: 2, maxNodes: limit, includeDeprecated: true, includeSuperseded: true, only: opts.only, teamId: opts.teamId }, env, config, identity);
     nodeIds = [opts.seed, ...neighbors.map(n => n.id)].slice(0, limit);
   } else {
     // A project view seeds only from edges with at least one member endpoint (its tag or an
@@ -306,6 +360,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
     // the patterns bind once, and both its read and the edge scan carry the caller's scope.
     // Needs an identity: the route always has one, the identity-less cron callers never pass a project.
     const project = scope && opts.project ? projectFilterSql(opts.project) : null;
+    // validity: any: member ids only, feeding the same node hydration below that carries valid_until (5.5)
     const { results } = await env.DB.prepare(
       project && scope
         ? `WITH member AS (SELECT id FROM entries WHERE ${project.clause} AND ${scope.clause})
@@ -365,12 +420,13 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
     // the first query within five lines of it, and prose in between silently
     // pushes the statement out of that window.
     // scope-checked: nodeScopeSql applies the caller's clause to e through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. The users join supplies labels only
+    // validity: any: a graph-relationship view, not a current-facts answer (5.5)
     const { results } = await env.DB.prepare(
       `SELECT e.id, e.content, e.tags, e.importance_score, e.created_at,
-              e.workspace_id, e.actor_id, e.source, u.name AS actor_display_name
+              e.workspace_id, e.actor_id, e.source, e.valid_until, u.name AS actor_display_name
        FROM entries e
        LEFT JOIN users u ON u.id = e.actor_id AND (u.removed_at IS NULL OR u.removed_at = 0)
-       WHERE e.id IN (${ph})${nodeScopeSql}`
+       WHERE e.id IN (${ph})${nodeScopeSql} AND ${NOT_HELD_SQL}`
     ).bind(...batch, ...(nodeScope?.bindings ?? [])).all() as { results: Record<string, any>[] };
     for (const r of results) {
       nodeRows.set(r.id as string, r);
@@ -385,7 +441,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
     const r = nodeRows.get(id);
     if (!r) continue;
     const tags: string[] = JSON.parse(r.tags ?? "[]");
-    if (tags.some(t => MACHINE_AUTHORED_TAGS.has(t))) continue;
+    if (tags.some(t => MACHINE_AUTHORED_TAGS.has(t)) || isHeld(tags)) continue;
     // Exactly GET /list's layer rule, because it is that function: the canvas
     // and the list badge the same row the same way. Without an Identity there
     // is no personal or company layer to be in — the cron and unit callers get
@@ -410,6 +466,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
             source: String(r.source ?? ""),
           })
         : null,
+      validUntil: (r.valid_until as number | null | undefined) ?? null,
     });
   }
 

@@ -2,7 +2,7 @@ export const STATUS_VALUES = ["canonical", "draft", "deprecated"] as const;
 export type MemoryStatus = (typeof STATUS_VALUES)[number];
 export const STATUS_PREFIX = "status:";
 
-export function getStatus(tags: string[]): MemoryStatus | null {
+export function getStatus(tags: readonly string[]): MemoryStatus | null {
   const tag = tags.find(t => t.startsWith(STATUS_PREFIX));
   if (!tag) return null;
   const value = tag.slice(STATUS_PREFIX.length) as MemoryStatus;

@@ -31,11 +31,18 @@ export async function handleOAuthAuthorize(request: Request, env: Env): Promise<
       grantUserId = identity.userId;
       propsUserId = identity.userId;
     }
+    // BE-5: the client's own registered name, read once at sign-in so every later
+    // request carries it on ctx.props at no extra cost (src/mcp/client-label.ts,
+    // resolveClientLabel's source 1). Absent entirely, not stored as "", when the
+    // client registered without one — an empty prop and a missing prop must not
+    // read the same to a caller checking `"clientName" in props`.
+    const client = await (env as any).OAUTH_PROVIDER.lookupClient(oauthReq.clientId);
+    const clientName = client?.clientName;
     const { redirectTo } = await (env as any).OAUTH_PROVIDER.completeAuthorization({
       request: oauthReq,
       userId: grantUserId,
       scope: oauthReq.scope,
-      props: { userId: propsUserId },
+      props: { userId: propsUserId, clientId: oauthReq.clientId, ...(clientName ? { clientName } : {}) },
     });
     return Response.redirect(redirectTo, 302);
   }

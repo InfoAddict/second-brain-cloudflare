@@ -1,0 +1,309 @@
+/* SH-1: the history timeline, and SH-3's status control (same lane, same
+   sheet). UI review found a hairline-divided list hard to read on mobile:
+   nothing said which entry a trailing action button belonged to. Each entry
+   is now its own card (see .history-item below), so the card edge itself
+   answers that. */
+
+/* T3/T4 lane S5 (7.2, UX-E.2): a real banner, not a quiet aside like
+   .view-standing below - this changes what the memory below it means (out
+   of search, invisible to AI tools) so it earns the border and the top
+   position. --warn, not --danger: a held memory is a common, reviewable
+   state, not an error. Stacked like .view-standing, for the same reason
+   (Rahil's mobile rules: no side-by-side squeeze that orphans a word). */
+.view-held {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-card);
+}
+
+.view-held-line {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+/* A quiet aside, not a claim: a session capture reads differently from
+   something the user typed, but it should not compete with the memory text
+   right below it. */
+.view-auto-save-note {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  margin: -6px 0 12px;
+}
+
+/* SH-3: the status control. A calm, permanent piece of the sheet, not a rare
+   warning, so all three options (including Wrong) share one selected
+   treatment — the same raised-pill language .theme-toggle already uses for
+   its own segmented control, not a new one. */
+.view-status {
+  margin-bottom: 18px;
+}
+
+/* T7-E Task 14: shares this row with the status control above (SH-3) rather
+   than a second full-width block, so Stop reads as one more fact about this
+   memory, not a second control competing for the same space.
+   UI reviewer: side-by-side with the button squeezed the line's own column
+   narrow enough to orphan a word onto its own line. Stacked instead - the
+   line gets the sheet's full width, and the button sits below it, left
+   aligned like the line it belongs to. */
+.view-standing {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.view-standing-line {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.view-status-title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.status-control {
+  display: flex;
+  gap: 3px;
+  background: var(--surface-2);
+  border-radius: var(--radius-pill);
+  padding: 3px;
+}
+
+.status-option {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-feedback) var(--ease-standard),
+    color var(--dur-feedback) var(--ease-standard);
+}
+
+/* Trusted, Unconfirmed and Wrong selected all read the same way: this is
+   infrastructure, not an alarm. Color stays out of it on purpose. */
+.status-option[aria-checked='true'] {
+  background: var(--bg-card);
+  color: var(--accent-ink);
+  box-shadow: var(--shadow-card);
+}
+
+/* Plain opacity alone read as "still selected, just weaker" for the checked
+   option, since its accent color and card background survived the dim; a
+   disabled control needs to look inactive, not just faint. Flattening the
+   checked option's color to neutral (its background and shadow stay, so the
+   selection itself is still legible) makes that reading unambiguous. */
+.status-option:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.status-option:disabled[aria-checked='true'] {
+  color: var(--text-secondary);
+}
+
+.status-option:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+.status-caption {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
+/* T-0101.6.1: the Replaced-by link in a replaced memory's status caption. A UI review
+   measured its tap target at ~20px tall; display:inline-block plus vertical padding gives it
+   the 44px a touch target needs, without the surrounding caption text moving (the negative
+   margin gives back exactly what the padding added). */
+.status-caption a {
+  display: inline-block;
+  min-height: 44px;
+  padding: 11px 0;
+  margin: -11px 0;
+  box-sizing: border-box;
+  color: var(--accent-ink);
+  text-decoration: underline;
+}
+
+/* The reason Append, Edit, Forget and Status are disabled, next to the
+   control it explains rather than at the end of History. */
+.status-lock-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-top: 6px;
+}
+
+.history-label {
+  margin-bottom: 8px;
+}
+
+/* UI review P0: history rows are taller than the plain event list they
+   replaced (a quote block plus an action button per change), so a long
+   history sharing .view-scroll's one page-level scroll with the sheet's meta,
+   brain and status sections cut its last row off right against the fixed
+   action row, with nothing to say it was scrollable rather than broken. Its
+   own bounded, visibly scrollable region keeps that clear of the footer and
+   stops the rest of the sheet's content competing with it for scroll space. */
+/* No max-height/overflow of its own: a nested scroll region here made "clear
+   of the footer" ambiguous (clear of which box's bottom edge?). One scroll
+   region — .view-scroll, sized dynamically in memory-crud.js's
+   syncViewScrollBottomPadding to the footer's real height — is what
+   "scroll to the bottom and it's clear" can mean unambiguously. */
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* UI review: enclosure, not a divider, is what makes "whose button is this"
+   unambiguous on mobile. Radius matches the sheet's own card language
+   (.view-brain's --r-card) rather than introducing a new one. */
+.history-item {
+  border-radius: var(--r-card);
+  padding: 12px;
+}
+
+.history-item--change {
+  background: var(--surface-muted);
+  border: 1px solid var(--border-card);
+}
+
+/* Event-only entries (shared, moved) are cards too, for the same rhythm, but
+   untinted with only a hairline edge — lighter on purpose, so change entries
+   (the ones with something to undo) stand out against them. */
+.history-item--event {
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+.history-meta {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Sits inside a card already tinted --surface-muted, so the quote reuses the
+   sheet's plain card color instead to still read as a distinct well rather
+   than disappearing into the card around it. */
+.history-before {
+  margin-top: 8px;
+  background: var(--bg-card);
+  border-radius: var(--r-input);
+  padding: 8px 10px;
+}
+
+.history-before-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin-bottom: 3px;
+}
+
+.history-before-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0 0 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.history-link-btn {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+.history-link-btn:hover {
+  text-decoration: underline;
+}
+
+.history-link-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  text-decoration: none;
+}
+
+.history-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+/* Left-aligned, auto width, at every width: a mobile media query used to
+   stretch this to flex:1 for the 44px tap-target floor, which is what
+   produced the oversized full-width button the trash lane already avoids
+   with its own auto-width Restore. The 44px floor lives in min-height here
+   instead, which does not touch width. */
+.history-action {
+  border: 1px solid var(--accent-ink);
+  color: var(--accent-ink);
+  background: transparent;
+  border-radius: var(--r-button);
+  padding: 10px 16px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 44px;
+  align-self: flex-start;
+  transition: background-color var(--dur-feedback) var(--ease-standard);
+}
+
+.history-action:hover {
+  background: var(--accent-soft);
+}
+
+.history-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.history-footer {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding-top: 8px;
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.history-footer + .history-footer {
+  border-top: none;
+  margin-top: 2px;
+  padding-top: 0;
+}
+

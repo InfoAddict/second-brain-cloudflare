@@ -54,6 +54,21 @@ const ENTRIES_WRITE_STATEMENT = new RegExp(
   "iu",
 );
 
+/**
+ * What may follow the table name, after any amount of whitespace (ADV-5, round 3): `(` (a column
+ * list), `;`, end of string, or an upper-case letter. House style always follows a real write's
+ * table name with an upper-case SQL keyword (SET, WHERE, VALUES, AS, ...), never a lower-case
+ * English word — needed only now that the guard also scans single- and double-quoted strings,
+ * some of which are prose that merely starts like a statement ("INSERT INTO entries missing
+ * column list", an error message). Every backtick-derived statement in production already
+ * satisfies it (fts-write-guard.test.ts's POSITIVES). Deliberately case-SENSITIVE, unlike the
+ * match above: folding case on the keyword check would defeat the point of having one.
+ */
+function isRealStatementTail(rest: string): boolean {
+  const afterWs = rest.replace(/^\s+/, "");
+  return afterWs === "" || afterWs[0] === "(" || afterWs[0] === ";" || /[A-Z]/.test(afterWs[0]);
+}
+
 function stripLeadingCommentsAndWs(sql: string): string {
   let stripped = sql;
   let prev: string;
@@ -160,12 +175,100 @@ function skipLeadingWith(sql: string): string {
   }
 }
 
-function isEntriesWriteSql(sql: string): boolean {
+/**
+ * Splits `sql` into its top-level `;`-terminated statements, respecting quoted strings and
+ * comments (ADV-5: a `.exec()` string can hold more than one statement; `env.DB.prepare()` never
+ * legitimately does, but the guard has to see every statement in whatever text it is handed).
+ */
+function splitStatements(sql: string): string[] {
+  const n = sql.length;
+  const out: string[] = [];
+  let start = 0;
+  for (let i = 0; i < n; i++) {
+    const ch = sql[i];
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const quote = ch;
+      i++;
+      while (i < n) {
+        if (sql[i] === quote) {
+          if (sql[i + 1] === quote) { i++; continue; } // doubled-quote escape
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === "-" && sql[i + 1] === "-") {
+      while (i < n && sql[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && sql[i + 1] === "*") {
+      i += 2;
+      while (i < n && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
+      i++;
+      continue;
+    }
+    if (ch === ";") {
+      out.push(sql.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(sql.slice(start));
+  return out;
+}
+
+/**
+ * A write verb whose TABLE cannot be read from the source (an interpolation sits where the name
+ * belongs) fails loud rather than silently passing (same principle as check-scope.mjs's
+ * UNRESOLVABLE_TABLE, ADV-5): the guard cannot prove it is not `entries`, so it is treated as one.
+ */
+const STATIC_VERB_DYNAMIC_TABLE = new RegExp(
+  `^(?:INSERT\\s+(?:OR\\s+\\w+\\s+)?INTO|REPLACE\\s+INTO|UPDATE(?:\\s+OR\\s+\\w+)?|DELETE\\s+FROM)\\s+(?:main\\.)?\\$\\{`,
+  "iu",
+);
+
+/**
+ * The mirror image: the table name is the literal `entries`, but the verb is an interpolation.
+ * Anchored to the start of the (comment/WITH-stripped) statement — the same word can appear as
+ * ordinary English anywhere else in a string ("Synthesized from ${rows.length} entries in..."),
+ * and only a dynamic verb sitting where a real statement's verb belongs is worth failing loud on.
+ */
+const DYNAMIC_VERB_ENTRIES = new RegExp(`^\\$\\{[^}]*\\}\\s*(?:main\\.)?${ENTRIES_NAME}(?=\\s|\\(|;|$)`, "iu");
+
+/**
+ * A write verb followed by string concatenation where the table name belongs (round 2, ADV-5):
+ * `"UPDATE " + "entries SET ..."` reconstructs to this shape once check-scope.mjs's writerSpans
+ * merges the operands into one span — a closing quote, `+`, and an opening quote sitting right
+ * after the verb is not valid SQL syntax on its own, so it can only be a concatenation boundary.
+ * Same fail-loud principle as STATIC_VERB_DYNAMIC_TABLE: the guard cannot read past it, so it
+ * cannot prove the table is not `entries`.
+ */
+const CONCATENATED_TABLE = new RegExp(
+  `^(?:INSERT\\s+(?:OR\\s+\\w+\\s+)?INTO|REPLACE\\s+INTO|UPDATE(?:\\s+OR\\s+\\w+)?|DELETE\\s+FROM)\\b[\\s\\S]*?["'\`]\\s*\\+\\s*["'\`]`,
+  "iu",
+);
+
+/**
+ * `[...].join(sep)` built directly as a .prepare()/.exec() argument (round 2, ADV-5): writerSpans
+ * only ever produces this shape there (isCallArgumentStart), never for the same construct used to
+ * build an ordinary string elsewhere, so unlike the checks above this needs no verb or table name
+ * to already be readable — the shape itself is the fail-loud signal, unconditionally.
+ */
+const ARRAY_JOIN_CALL = /^\s*\[[\s\S]*\]\s*\.\s*join\s*\(/iu;
+
+function isSingleStatementEntriesWrite(sql: string): boolean {
+  if (ARRAY_JOIN_CALL.test(sql)) return true;
   let stripped = stripLeadingCommentsAndWs(sql);
   if (/^WITH\b/i.test(stripped)) {
     stripped = stripLeadingCommentsAndWs(skipLeadingWith(stripped));
   }
-  return ENTRIES_WRITE_STATEMENT.test(stripped);
+  const m = ENTRIES_WRITE_STATEMENT.exec(stripped);
+  if (m && isRealStatementTail(stripped.slice(m.index + m[0].length))) return true;
+  return STATIC_VERB_DYNAMIC_TABLE.test(stripped) || DYNAMIC_VERB_ENTRIES.test(stripped) || CONCATENATED_TABLE.test(stripped);
+}
+
+export function isEntriesWriteSql(sql: string): boolean {
+  return splitStatements(sql).some(isSingleStatementEntriesWrite);
 }
 
 function retryOnce<T>(ref: GuardRef, attempt: () => Promise<T>): Promise<T> {

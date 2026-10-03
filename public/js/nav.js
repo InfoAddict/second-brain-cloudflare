@@ -8,6 +8,16 @@ async function loadTags() {
       const sel = document.getElementById(id)
       if (!sel) return
       sel.innerHTML = `<option value="">${escHtml(t('recall.allTags'))}</option>`
+      // T7-E Task 14: "Standing instructions" only on the Memories screen's own
+      // filter — recall's tag dropdown (tag-filter-recall) narrows a set of
+      // scored matches by an ordinary tag, which GET /standing's firing state
+      // is not.
+      if (id === 'tag-filter-recent') {
+        const standingOpt = document.createElement('option')
+        standingOpt.value = STANDING_FILTER_VALUE
+        standingOpt.textContent = t('standing.filterLabel')
+        sel.appendChild(standingOpt)
+      }
       tags.forEach((tagName) => {
         const opt = document.createElement('option')
         opt.value = tagName
@@ -34,6 +44,13 @@ function onTimeRangeChange(val) {
 }
 
 function applyRecentFilters() {
+  // T7-E Task 14: "Standing instructions" is GET /standing's firing state,
+  // not a tag to match against the already-loaded list, so it bypasses the
+  // client-side narrowing below entirely (recent.js's loadStandingFilter).
+  if (selectedTag === STANDING_FILTER_VALUE) {
+    if (typeof loadStandingFilter === 'function') loadStandingFilter()
+    return
+  }
   let entries = allEntries
   if (selectedTag) {
     const tag = selectedTag.replace(/^#/, '').toLowerCase().trim()

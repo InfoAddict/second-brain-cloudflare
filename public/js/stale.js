@@ -69,6 +69,21 @@ function loadMoreStale(btn) {
   loadStaleQueue({ append: true })
 }
 
+/**
+ * T-0101.6.1 (spec 14 section 7.6): why this landed in the review queue.
+ * GET /stale's own `reason` (src/memory/stale.ts's staleReasonFor) is authoritative — it already
+ * knows retracted-source wins over a passed date, which wins over plain age — so this only turns
+ * that verdict into a sentence, rather than re-deriving it from tags/dates itself.
+ */
+function staleReasonLine(e) {
+  if (e.reason === 'retracted_source') return t('stale.reasonRetracted')
+  if (e.reason === 'date_passed') return t('stale.reasonDate')
+  const confirmed = e.last_updated || e.created_at
+  if (!confirmed) return ''
+  const days = Math.floor((Date.now() - confirmed) / 86400000)
+  return tPlural('stale.reasonAge', Math.max(days, 0))
+}
+
 function staleRow(e) {
   // The date the claim was last confirmed, not when it was written. "Out of
   // date" is an assertion about age, and the reviewer cannot rule on it without
@@ -77,9 +92,11 @@ function staleRow(e) {
   const when = confirmed
     ? t('stale.lastConfirmed', { date: formatDateUI(confirmed, { year: 'numeric', month: 'short', day: 'numeric' }) })
     : ''
+  const reason = staleReasonLine(e)
   return `
     <div class="stale-row" id="stale-row-${escAttr(e.id)}">
       <p class="stale-text">${escHtml(e.content)}</p>
+      ${reason ? `<span class="stale-reason">${escHtml(reason)}</span>` : ''}
       ${when ? `<span class="stale-when">${escHtml(when)}</span>` : ''}
       <div class="stale-actions">
         <button type="button" class="card-action-btn" data-stale-action="edit"><i class="ti ti-pencil"></i> ${escHtml(t('memories.edit'))}</button>
@@ -135,6 +152,14 @@ async function keepStale(id, btn) {
     if (!data.ok) throw new Error(data.error || 'failed')
     notifyMemoryResolved(id)
     refreshAll({ list: false })
+    if (typeof undoToast === 'function') {
+      undoToast(t('undo.keptTrue'), id, {
+        onUndone: () => {
+          if (typeof loadStaleQueue === 'function') loadStaleQueue()
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch (e) {
     showToast(t('stale.keepFailed', { message: e.message }))
     btn.disabled = false

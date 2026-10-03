@@ -1,16 +1,24 @@
 #!/usr/bin/env node
 // Downloads a public retrieval dataset and normalizes it to the neutral layout the eval reads.
-// Usage: node scripts/eval-fetch-public.mjs <scifact|miracl-ja> [--keep-raw]
+// Usage: node scripts/eval-fetch-public.mjs <scifact|miracl-ja|longmemeval> [--keep-raw]
 // Everything lands under the git-ignored .eval-cache/public/; nothing is committed or redistributed.
 // Every download is pinned to an immutable URL and verified against a sha256 before use.
 //
-// Licenses (checked Sep 23, 2026; local evaluation use only, never committed or redistributed):
+// Licenses (checked Sep 28, 2026; local evaluation use only, never committed or redistributed):
 //  - SciFact (allenai/scifact, LICENSE.md): claims and evidence annotations (claims_*.jsonl) are CC BY 4.0;
 //    corpus abstracts are part of the Semantic Scholar S2ORC dataset, ODC-By 1.0. Attribution is required:
 //    Wadden et al., "Fact or Fiction: Verifying Scientific Claims", EMNLP 2020 (allenai/scifact);
 //    abstracts from S2ORC (Lo et al., ACL 2020, Semantic Scholar). Changes made: title and abstract
 //    sentences joined into one text; claims filtered to those with evidence; ids kept from the release.
 //  - MIRACL annotations and corpus: Apache-2.0 per the HF cards; passages are Wikipedia text (CC BY-SA 4.0).
+//  - LongMemEval (xiaowu0162/longmemeval-cleaned, Hugging Face): MIT license (dataset card and the
+//    upstream github.com/xiaowu0162/LongMemEval LICENSE file both confirm MIT). Attribution: Wu et al.,
+//    "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory", ICLR 2025. This fetch
+//    uses only the "s" split (longmemeval_s_cleaned.json, ~40 sessions/haystack, ~20k sessions total across
+//    500 questions) -- not "m" (~500 sessions/haystack, ~250k sessions, a 10x larger fetch and embedding
+//    job) or "oracle" (evidence-only, no retrieval to prove). Changes made: each session's turns joined
+//    into one text per normalizeLongMemEval's own doc comment; question dates parsed to epoch ms; nothing
+//    else altered from the released JSON.
 //
 // Raw MIRACL shards (~1 GB) are deleted after normalizing unless --keep-raw is passed, so a re-derive
 // downloads them again. The pins make that safe; the normalized files stay in .eval-cache/public/<id>/.
@@ -69,6 +77,13 @@ export const PINS = {
       url: `${HF}/miracl/miracl-corpus/resolve/${CORPUS_REV}/miracl-corpus-v1.0-ja/docs-${i}.jsonl.gz`,
       sha256,
     })),
+  },
+  longmemeval: {
+    // The "s" split of xiaowu0162/longmemeval-cleaned, pinned to the dataset's current commit (HF API
+    // /api/datasets/xiaowu0162/longmemeval-cleaned, checked Sep 28, 2026) rather than a mutable "main" ref.
+    revision: "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    url: `${HF}/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json`,
+    sha256: "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
   },
 };
 
@@ -254,11 +269,66 @@ export async function normalizeMiracl({ topicsPath, qrelsPath, shardPaths, out, 
 
 const sha256Text = path => createHash("sha256").update(readFileSync(path)).digest("hex");
 
-export function writeManifest(out, dataset, pin, counts) {
+export function writeManifest(out, dataset, pin, counts, files = ["corpus.jsonl", "queries.jsonl", "qrels.tsv"]) {
   writeFileSync(resolve(out, "MANIFEST.json"), JSON.stringify({
     dataset, fetchedAt: new Date().toISOString(), pin, counts,
-    derived: Object.fromEntries(["corpus.jsonl", "queries.jsonl", "qrels.tsv"].map(f => [f, sha256Text(resolve(out, f))])),
+    derived: Object.fromEntries(files.map(f => [f, sha256Text(resolve(out, f))])),
   }, null, 2) + "\n");
+}
+
+/**
+ * LongMemEval's "s" split -> two neutral files, not the scifact/miracl corpus+queries+qrels trio: every
+ * question has its OWN isolated haystack (T-0089.1.4 extension point 5), so there is no single shared
+ * relevance judgment table. Instead:
+ *  - corpus.jsonl: every DISTINCT session across all 500 haystacks (a session id can recur across
+ *    questions -- LongMemEval reuses sessions to build large haystacks cheaply), one row per session,
+ *    {id, text, createdAt}. text is every turn in the session joined "Role: content" per line (role
+ *    Title-cased from "user"/"assistant"), so the embedded text reads like a transcript, not a bag of
+ *    turns. createdAt is the session's own real date (haystack_dates), not a hash-based pseudo-age --
+ *    LongMemEval's temporal-reasoning and knowledge-update questions depend on real session order.
+ *  - questions.jsonl: one row per question, {id, category, text, date, gold: [sessionId, ...],
+ *    haystack: [sessionId, ...]}. `gold` is answer_session_ids (verified to be a subset of haystack
+ *    below); `category` is the released question_type ("single-session-user", "multi-session",
+ *    "temporal-reasoning", "knowledge-update", ...), carried as-is for report-only tags rather than
+ *    forced into this harness's own closed QUERY_CATEGORIES (extension point 3's own suggestion).
+ * A driver (test/eval/longmemeval.ts) builds one small, isolated CorpusSpec per question at run time
+ * by filtering corpus.jsonl to that question's own `haystack` ids -- the isolation extension point 5
+ * asks for, achieved by never mixing two questions' sessions into the same run, not by new per-question
+ * workspace/identity plumbing.
+ */
+export function normalizeLongMemEval({ raw, out }) {
+  resetDerived(out);
+  const questions = JSON.parse(readFileSync(raw, "utf8"));
+  const sessions = new Map(); // id -> { id, text, createdAt }
+  const parseDate = s => {
+    // "2023/05/30 (Tue) 23:40" -> epoch ms. The weekday is redundant with y/m/d and never used.
+    const m = /^(\d{4})\/(\d{2})\/(\d{2}) \([A-Za-z]+\) (\d{2}):(\d{2})$/.exec(s);
+    if (!m) throw new Error(`unrecognized LongMemEval date: ${s}`);
+    const [, y, mo, d, h, mi] = m;
+    return Date.UTC(+y, +mo - 1, +d, +h, +mi);
+  };
+  const questionRows = [];
+  for (const q of questions) {
+    if (q.haystack_session_ids.length !== q.haystack_sessions.length || q.haystack_session_ids.length !== q.haystack_dates.length) {
+      throw new Error(`question ${q.question_id}: haystack_session_ids, haystack_sessions and haystack_dates lengths disagree`);
+    }
+    for (const g of q.answer_session_ids) if (!q.haystack_session_ids.includes(g)) throw new Error(`question ${q.question_id}: gold session ${g} is not in its own haystack`);
+    for (let i = 0; i < q.haystack_session_ids.length; i++) {
+      const id = q.haystack_session_ids[i];
+      const text = q.haystack_sessions[i].map(turn => `${turn.role === "assistant" ? "Assistant" : "User"}: ${turn.content}`).join("\n");
+      const createdAt = parseDate(q.haystack_dates[i]);
+      const existing = sessions.get(id);
+      if (existing && existing.text !== text) throw new Error(`session ${id} has conflicting content across questions (expected the same conversation reused, not edited)`);
+      if (!existing) sessions.set(id, { id, text, createdAt });
+    }
+    questionRows.push(JSON.stringify({
+      id: q.question_id, category: q.question_type, text: q.question, date: parseDate(q.question_date),
+      gold: q.answer_session_ids, haystack: q.haystack_session_ids,
+    }));
+  }
+  writeLines(resolve(out, "corpus.jsonl"), [...sessions.values()].sort((a, b) => cmp(a.id, b.id)).map(s => JSON.stringify(s)));
+  writeLines(resolve(out, "questions.jsonl"), questionRows);
+  return { questions: questions.length, distinctSessions: sessions.size, haystackSessions: questions.reduce((n, q) => n + q.haystack_session_ids.length, 0) };
 }
 
 async function main(argv) {
@@ -293,8 +363,17 @@ async function main(argv) {
     writeManifest(out, dataset, pin, counts);
     if (!flags.includes("--keep-raw")) for (const p of shardPaths) rmSync(p);
     console.log(`wrote ${out}`, counts);
+  } else if (dataset === "longmemeval") {
+    const pin = PINS[dataset];
+    mkdirSync(raw, { recursive: true });
+    const rawPath = resolve(raw, "longmemeval_s_cleaned.json");
+    await downloadPinned({ url: pin.url, sha256: pin.sha256, dest: rawPath });
+    const counts = normalizeLongMemEval({ raw: rawPath, out });
+    writeManifest(out, dataset, pin, counts, ["corpus.jsonl", "questions.jsonl"]);
+    if (!flags.includes("--keep-raw")) rmSync(rawPath);
+    console.log(`wrote ${out}`, counts);
   } else {
-    console.error("usage: node scripts/eval-fetch-public.mjs <scifact|miracl-ja> [--keep-raw]");
+    console.error("usage: node scripts/eval-fetch-public.mjs <scifact|miracl-ja|longmemeval> [--keep-raw]");
     process.exit(2);
   }
 }

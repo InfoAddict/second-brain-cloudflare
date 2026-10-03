@@ -18,6 +18,7 @@ import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { setDbReady } from "../../src/runtime/state";
 import { resurfaceStateKey } from "../../src/runtime/resurface-state";
+import { createProject } from "../../src/projects/registry";
 import type { Env } from "../../src/env";
 
 const ctx = { waitUntil: (_: Promise<unknown>) => {} } as any;
@@ -124,6 +125,49 @@ describe("GET /brief — same-day stability and rotation", () => {
     const second = await (await worker.fetch(req("GET", "/brief"), env, ctx)).json() as any;
 
     expect(second.resurface?.id).toBe(first.resurface?.id);
+  });
+
+  // Cross-vendor review MAJOR (T-0102), finding 6(c): the same-day re-fetch had no held guard,
+  // unlike pickResurface's own fresh-pick query (resurfaceFilter already carries NOT_HELD_SQL).
+  it("never re-shows a pick that was held after it was first shown", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "only", content: "the secret plan is X", createdAt: now - OLD, importanceScore: 5 });
+    const env = envWithKv(sq);
+
+    const first = await (await worker.fetch(req("GET", "/brief"), env, ctx)).json() as any;
+    expect(first.resurface?.id).toBe("only");
+
+    sq.db.prepare(`UPDATE entries SET tags = ? WHERE id = 'only'`).bind(JSON.stringify(["quarantine:instruction", "status:draft"])).run();
+
+    const second = await (await worker.fetch(req("GET", "/brief"), env, ctx)).json() as any;
+    expect(second.resurface).toBeNull();
+    expect(JSON.stringify(second)).not.toContain("secret plan");
+  });
+
+  // Cross-vendor review MINOR (T-0102), finding 8: the persisted resurface state is keyed by
+  // workspace only, never by project, so a project-scoped pick (a narrower `scope`) would
+  // overwrite the same slot the UNSCOPED brief's own same-day stability reads from.
+  it("never persists a project-scoped pick, so it cannot corrupt the unscoped brief's own same-day pick", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "proj1", content: "a project memory", createdAt: now - OLD, importanceScore: 5, tags: ["project:site"] });
+    const env = envWithKv(sq);
+    const { ownerPersonalWorkspaceId } = await ensureTenantBootstrap(env);
+    await createProject(env.DB, ownerPersonalWorkspaceId, { id: "site", name: "Site", aliases: [] });
+
+    const scoped1 = await (await worker.fetch(req("GET", "/brief?project=site"), env, ctx)).json() as any;
+    expect(scoped1.resurface?.id).toBe("proj1");
+    expect(await env.OAUTH_KV.get(resurfaceStateKey(ownerPersonalWorkspaceId))).toBeNull();
+
+    const scoped2 = await (await worker.fetch(req("GET", "/brief?project=site"), env, ctx)).json() as any;
+    expect(scoped2.resurface?.id).toBe("proj1");
+    expect(await env.OAUTH_KV.get(resurfaceStateKey(ownerPersonalWorkspaceId))).toBeNull();
+
+    // The unscoped brief still persists normally, unaffected by the project-scoped calls above.
+    const unscoped = await (await worker.fetch(req("GET", "/brief"), env, ctx)).json() as any;
+    expect(unscoped.resurface?.id).toBe("proj1");
+    expect(await env.OAUTH_KV.get(resurfaceStateKey(ownerPersonalWorkspaceId))).not.toBeNull();
   });
 
   it("does not repeat a pick shown within the last 30 days", async () => {
@@ -263,10 +307,11 @@ describe("GET /brief — resurface pick query cost", () => {
     const data = await res.json() as any;
     expect(data.resurface?.id).toBe("old-topic");
 
-    // 6 parallel-batch reads + 1 identity batch + 2 resurface queries (probe,
-    // pick) = 9. The default stateless KV mock means every call re-selects
-    // fresh rather than hitting same-day stability, so this is the topic-
+    // 7 parallel-batch reads (S2, T-0089.4.3: getChanges joined the same
+    // Promise.all) + 1 identity batch + 2 resurface queries (probe, pick) =
+    // 10. The default stateless KV mock means every call re-selects fresh
+    // rather than hitting same-day stability, so this is the topic-
     // preferred branch on every request.
-    expect(sq.issued).toHaveLength(9);
+    expect(sq.issued).toHaveLength(10);
   });
 });

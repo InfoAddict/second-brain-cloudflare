@@ -102,13 +102,13 @@ describe("scoped entry id reads", () => {
     expect(response.status).toBe(200);
 
     const shapes = [
-      ["recall signals", "SELECT id, recall_count, importance_score"],
+      ["recall signals", "SELECT id, source, recall_count, importance_score"],
       ["recall final", "SELECT id, content, tags, source, created_at, updated_at"],
-      ["graph readability", "SELECT id, tags FROM entries WHERE"],
-      ["graph hydration", "SELECT id, content, tags, source, created_at FROM entries WHERE"],
+      ["graph readability", "SELECT id, tags, valid_from, valid_until, created_at FROM entries WHERE"],
+      ["graph hydration", "SELECT id, content, tags, source, created_at, valid_until FROM entries WHERE"],
       ["graph view hydration", "FROM entries e"],
-      ["admin resolution", "SELECT id, tags, vector_ids FROM entries WHERE"],
-      ["capture duplicate", "SELECT id, content FROM entries WHERE"],
+      ["admin resolution", "SELECT id, tags, vector_ids, workspace_id FROM entries WHERE"],
+      ["capture duplicate", "SELECT id, content, tags, valid_until FROM entries WHERE"],
     ] as const;
     for (const [name, fragment] of shapes) {
       const sql = sqlite.issued.find(statement => statement.includes(fragment) && /\b(?:e\.)?id IN \(/.test(statement));

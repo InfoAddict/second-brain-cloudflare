@@ -85,6 +85,29 @@ async function createProject(token: string, body: Record<string, unknown>) {
   expect(res.status).toBe(201);
 }
 
+describe("GET /brief with project", () => {
+  it("counts project tags and aliases across the readable scope", async () => {
+    await createProject(ALICE, { id: "site", name: "Site", aliases: ["hosting"] });
+    seed("direct", aliceWs, ["project:site", "task"], { createdAt: Date.now() });
+    seed("alias", aliceWs, ["hosting", "task"], { createdAt: Date.now() });
+    seed("other", aliceWs, ["task"], { createdAt: Date.now() });
+    seed("private", bobWs, ["project:site", "task"], { createdAt: Date.now(), actorId: bobId });
+    const res = await call("GET", "/brief?project=site&preview=1", ALICE);
+    expect(res.status).toBe(200);
+    const data = await jsonOf(res);
+    expect(data.captured).toBe(2);
+    expect(data.loops.open).toBe(2);
+    expect(data.loops.items.map((item: any) => item.id).sort()).toEqual(["alias", "direct"]);
+  });
+
+  it("rejects unknown projects with the known slugs", async () => {
+    await createProject(ALICE, { id: "site", name: "Site" });
+    const res = await call("GET", "/brief?project=nope", ALICE);
+    expect(res.status).toBe(404);
+    expect(await jsonOf(res)).toEqual({ ok: false, error: 'unknown project "nope"', known_projects: ["site"] });
+  });
+});
+
 beforeEach(async () => {
   resetDatabaseInit();
   pending = [];
@@ -320,7 +343,7 @@ describe("GET /digest with project", () => {
     const body = await jsonOf(res);
     expect(body.project).toBe("site");
     expect(body.entry_id).toBeUndefined();
-    expect(body.error).toBe("Could not create digest — project may have fewer than 10 eligible entries or was recently compressed");
+    expect(body.error).toBe("Could not create digest: the project may have fewer than 10 eligible entries, or it was recently compressed.");
     expect(body.source_count).toBe(0);
   });
 
@@ -515,7 +538,7 @@ describe("GET /recall with project", () => {
     expect(ids).toEqual(["aliased", "member"]);
     sqlite.issued.length = 0;
     await call("GET", "/recall?query=site%20hosting%20notes&project=site&topK=10&hops=1", ALICE);
-    const hydration = sqlite.issued.filter(s => /created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN/.test(s));
+    const hydration = sqlite.issued.filter(s => s.includes("superseded_by_json") && /FROM entries WHERE id IN/.test(s));
     expect(hydration.length).toBeGreaterThan(0);
     for (const sql of hydration) expect(sql).toMatch(/tags LIKE \? ESCAPE/);
   });

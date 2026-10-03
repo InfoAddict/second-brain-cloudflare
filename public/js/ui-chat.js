@@ -97,7 +97,7 @@ function autoResize(el) {
  * the brief and the board moved in with them, and the wipe took all three,
  * permanently, in a desktop window that has no reload to recover with.
  */
-const RECALL_FURNITURE = new Set(['home', 'brief', 'recall-welcome', 'board-tiles', 'board'])
+const RECALL_FURNITURE = new Set(['home', 'brief', 'board-tiles', 'board'])
 
 function clearRecall() {
   const msgs = document.getElementById('recall-messages')
