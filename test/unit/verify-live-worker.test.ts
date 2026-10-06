@@ -20,9 +20,9 @@ const options = {
 };
 
 describe("verifyLiveWorker", () => {
-  it("keeps the production retry, timeout, and delay budget", () => {
+  it("allows cold-isolate startup while retaining bounded retries", () => {
     expect(LIVE_VERIFY_ATTEMPTS).toBe(5);
-    expect(LIVE_VERIFY_TIMEOUT_SECONDS).toBe(10);
+    expect(LIVE_VERIFY_TIMEOUT_SECONDS).toBe(30);
     expect(LIVE_VERIFY_RETRY_DELAY_MS).toBe(3_000);
     expect(CONFIG_WARMUP_TIMEOUT_SECONDS).toBe(60);
   });
@@ -96,7 +96,7 @@ describe("verifyLiveWorker", () => {
 
     expect(requestHealthWithCurl({ ...options, runCurl })).toEqual({ ok: true, version: "4.0.0" });
     expect(runCurl).toHaveBeenCalledWith("curl", expect.arrayContaining([
-      "--config", "-", "--max-time", "10",
+      "--config", "-", "--max-time", "30",
     ]), expect.objectContaining({
       input: expect.stringContaining("Authorization: Bearer test-token"),
     }));

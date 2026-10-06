@@ -3,7 +3,9 @@ import { spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 
 export const LIVE_VERIFY_ATTEMPTS = 5;
-export const LIVE_VERIFY_TIMEOUT_SECONDS = 10;
+// A fresh v4 isolate took 18.7s to initialise in production. A config warmup
+// can land on a different isolate, so each health request needs its own margin.
+export const LIVE_VERIFY_TIMEOUT_SECONDS = 30;
 export const LIVE_VERIFY_RETRY_DELAY_MS = 3_000;
 export const CONFIG_WARMUP_TIMEOUT_SECONDS = 60;
 
