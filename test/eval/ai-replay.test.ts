@@ -284,17 +284,35 @@ describe("lock lease and fence", () => {
   const lockOf = (root: string, model: string, input: unknown, file: string) => `${join(cacheOf(root), file)}.${replayKey(model, input)}.lock`;
 
   it("renews the lease during a slow live call, so a short stale time still gives one live call and one row", async () => {
-    const root = tmp();
-    const live = { run: vi.fn(async () => { await sleep(400); return { data: [[1]] }; }) };
-    const a = makeReplayAi({ store: store(root, "s.jsonl", { lockStaleMs: 90 }), mode: "record", live });
-    const b = makeReplayAi({ store: store(root, "s.jsonl", { lockStaleMs: 90 }), mode: "record", live });
-    const first = a.ai.run(MODEL as never, embedInput("x") as never);
-    await sleep(40);
-    const second = b.ai.run(MODEL as never, embedInput("x") as never);
-    const [ra, rb] = await Promise.all([first, second]);
-    expect(rb).toEqual(ra);
-    expect(live.run).toHaveBeenCalledTimes(1);
-    expect(rows(join(cacheOf(root), "s.jsonl"))).toHaveLength(1);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    try {
+      const root = tmp();
+      const input = embedInput("x");
+      const lock = lockOf(root, MODEL, input, "s.jsonl");
+      let finishLive!: (value: { data: number[][] }) => void;
+      const live = { run: vi.fn(() => new Promise<{ data: number[][] }>(resolve => { finishLive = resolve; })) };
+      const a = makeReplayAi({ store: store(root, "s.jsonl", { lockStaleMs: 90 }), mode: "record", live });
+      const b = makeReplayAi({ store: store(root, "s.jsonl", { lockStaleMs: 90 }), mode: "record", live });
+      const first = a.ai.run(MODEL as never, input as never);
+      const initialLeaseTime = JSON.parse(readFileSync(lock, "utf8")).t;
+
+      // Advance past two renewal beats while the provider promise is still held.
+      // The previous real-time delay could let a loaded CI worker miss a 90 ms
+      // lease and accidentally test a scheduler stall instead of lease renewal.
+      await vi.advanceTimersByTimeAsync(61);
+      expect(JSON.parse(readFileSync(lock, "utf8")).t).toBeGreaterThan(initialLeaseTime);
+
+      const second = b.ai.run(MODEL as never, input as never);
+      finishLive({ data: [[1]] });
+      await vi.advanceTimersByTimeAsync(100);
+      const [ra, rb] = await Promise.all([first, second]);
+      expect(rb).toEqual(ra);
+      expect(live.run).toHaveBeenCalledTimes(1);
+      expect(rows(join(cacheOf(root), "s.jsonl"))).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not append after losing the lock, and returns the winner's row", async () => {
