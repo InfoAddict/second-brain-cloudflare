@@ -378,7 +378,7 @@ jobs:
 
       - name: Test
         if: steps.update.outputs.needed == 'true' && steps.merge.outputs.blocked != 'true'
-        run: npm run test
+        run: npm run test:release
 
       - name: Predeploy guard
         if: steps.update.outputs.needed == 'true' && steps.merge.outputs.blocked != 'true'

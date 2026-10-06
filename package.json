@@ -21,6 +21,8 @@
     "db:migrate:remote": "wrangler d1 execute second-brain-db --remote --file=db/schema.sql",
     "vectors:create": "wrangler vectorize create second-brain-vectors --dimensions=384 --metric=cosine",
     "test": "vitest run",
+    "test:cpu": "vitest run --maxWorkers=1 test/unit/quarantine-cold-cpu.test.ts test/unit/quarantine-score.test.ts test/unit/versions-chain.test.ts",
+    "test:release": "vitest run --exclude test/unit/quarantine-cold-cpu.test.ts --exclude test/unit/quarantine-score.test.ts --exclude test/unit/versions-chain.test.ts && npm run test:cpu",
     "test:watch": "vitest",
     "test:coverage": "COVERAGE=1 vitest run --coverage",
     "test:eval:local-models": "EVAL_LOCAL_MODELS=1 vitest run test/eval/local-ai.smoke.test.ts test/eval/legacy-rerank.test.ts",

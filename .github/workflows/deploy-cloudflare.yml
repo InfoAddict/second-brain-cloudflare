@@ -50,7 +50,7 @@ jobs:
         run: npm run typecheck
 
       - name: Test
-        run: npm run test
+        run: npm run test:release
 
       - name: Predeploy guard
         run: npm run predeploy

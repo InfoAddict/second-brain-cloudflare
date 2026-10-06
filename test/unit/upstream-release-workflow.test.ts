@@ -5,6 +5,7 @@ import { SB_VERSION } from "../../src/env";
 const updateWorkflow = readFileSync(".github/workflows/upstream-release-update.yml", "utf8");
 const deployWorkflow = readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
 const releaseState = JSON.parse(readFileSync(".github/upstream-release.json", "utf8"));
+const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts as Record<string, string>;
 
 describe("upstream release workflow safety", () => {
   it("tracks installer releases by their bundled Worker version", () => {
@@ -26,6 +27,29 @@ describe("upstream release workflow safety", () => {
     expect(updateWorkflow).not.toContain("update_applied: ${{ steps.update.outputs.needed }}");
     expect(updateWorkflow).toContain("run: npm run predeploy");
     expect(updateWorkflow).toContain("run: npx wrangler deploy --dry-run");
+  });
+
+  it("runs the complete release suite with CPU budgets isolated and unchanged", () => {
+    const cpuBudgetFiles = [
+      "test/unit/quarantine-cold-cpu.test.ts",
+      "test/unit/quarantine-score.test.ts",
+      "test/unit/versions-chain.test.ts",
+    ];
+
+    expect(scripts["test:cpu"]).toBe(`vitest run --maxWorkers=1 ${cpuBudgetFiles.join(" ")}`);
+    for (const file of cpuBudgetFiles) {
+      expect(scripts["test:release"]).toContain(`--exclude ${file}`);
+    }
+    expect(scripts["test:release"]).toContain("npm run test:cpu");
+    expect(deployWorkflow).toContain("run: npm run test:release");
+    expect(updateWorkflow).toContain("run: npm run test:release");
+
+    expect(readFileSync(cpuBudgetFiles[0], "utf8")).toContain("expect(ms).toBeLessThan(9)");
+    expect(readFileSync(cpuBudgetFiles[1], "utf8")).toContain("expect(worst).toBeLessThan(8)");
+    const versionsChain = readFileSync(cpuBudgetFiles[2], "utf8");
+    expect(versionsChain).toContain("expect(asciiMs).toBeLessThan(5 * scale)");
+    expect(versionsChain).toContain("expect(emojiMs).toBeLessThan(10 * scale)");
+    expect(versionsChain).toContain("expect(ms).toBeLessThan(10 * scale)");
   });
 
   it("turns merge conflicts into a draft PR without deploying them", () => {
