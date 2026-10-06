@@ -1,7 +1,11 @@
 import type { Env } from "../env";
 import { resolveConfig } from "../config";
 import { hashToken } from "./identity";
-import { D1_MAX_BOUND_PARAMS } from "../constants";
+import {
+  D1_MAX_BOUND_PARAMS, MEMBER_HISTORY_CHUNK, MEMBER_HISTORY_MAX_CHUNKS, MEMBER_HISTORY_SLICE,
+} from "../constants";
+import type { OwnedVectors } from "../vectorize/batch";
+import { standingTouched } from "../standing/cache";
 
 /** Team membership, workspace, and offboarding operations. */
 
@@ -403,7 +407,7 @@ export async function removeMember(
   env: Env,
   actorId: string,
   userId: string,
-): Promise<{ removedEntries: number; vectorIds: string[] }> {
+): Promise<RemovalProgress> {
   if (userId === actorId) {
     throw new TeamAdminError(400, "You cannot remove your own account");
   }
@@ -451,33 +455,189 @@ export async function removeMember(
   ).bind(userId).first<{ wid: string }>();
   if (!personal) throw new TeamAdminError(404, `No member found with ID: ${userId}`);
 
+  return cleanupMemberData(env, userId, personal.wid);
+}
+
+export interface RemovalProgress {
+  /** False while history remains: the caller answers 202, and writes no audit and deletes no vectors yet. */
+  done: boolean;
+  removedEntries: number;
+  vectorIds: string[];
+  /** The same ids grouped by the entry that listed them, for the parentId-checked delete (T-0089.1.1). */
+  ownedVectors: OwnedVectors[];
+  /** Entry ids whose history is not fully cleaned yet (done: false only). */
+  remaining?: number;
+  /** Rows written by this call, for the nightly budget. */
+  rowsWritten?: number;
+  /**
+   * True only for the specific done:false case where every history chunk is already clear and
+   * the one thing left is a final batch too big for what `rowsLeft` has left this call (the
+   * nightly resume, never the dashboard's unbounded call). Distinct from an ordinary done:false
+   * (still working through history, making progress every night on its own): a removal whose
+   * final batch alone exceeds the whole nightly budget stalls HERE forever on a brain where the
+   * trash purge writes something every night, since `allowOversize` never sees a night to fire on
+   * its own (T-0089.7.5) — the caller uses this flag to force one.
+   */
+  blockedByBudget?: boolean;
+}
+
+/**
+ * A member's data cleanup, chain-safe and resumable. History goes first, in bounded bottom-up
+ * chunks (so no chain is ever left with a gap or an orphan); only when none remains does the
+ * one final batch delete the rows themselves, the trash rows, the membership and the workspace.
+ * `rowsLeft` (the nightly resume) shrinks each chunk and defers a final batch that would not fit,
+ * unless `allowOversize` (a night when the purge wrote nothing, or one the caller is forcing —
+ * see `RemovalProgress.blockedByBudget`).
+ */
+export async function cleanupMemberData(
+  env: Env,
+  userId: string,
+  personalWid: string,
+  opts: { rowsLeft?: number; allowOversize?: boolean; ctx?: ExecutionContext } = {},
+): Promise<RemovalProgress> {
+  let rowsWritten = 0;
+  const left = () => (opts.rowsLeft ?? Infinity) - rowsWritten;
+
+  // Affected ids, collected once per call. A: rows and trash rows the member owns; B: entries whose
+  // history carries the member's personal-era versions (shared out since), minus A.
+  const idsA = new Set<string>();
+  {
+    const { results } = await env.DB.prepare(
+      // scope-exempt: offboarding: ids in the removed member's own workspace
+      `SELECT id FROM entries WHERE workspace_id = ?1 UNION SELECT id FROM entries_trash WHERE workspace_id = ?1`,
+    ).bind(personalWid).all<{ id: string }>();
+    for (const r of results ?? []) idsA.add(r.id);
+  }
+  const idsB: string[] = [];
+  {
+    const { results } = await env.DB.prepare(
+      // scope-exempt: offboarding: versions stamped with the removed member's personal workspace
+      `SELECT DISTINCT entry_id FROM entry_versions WHERE workspace_id = ?1`,
+    ).bind(personalWid).all<{ entry_id: string }>();
+    for (const r of results ?? []) if (!idsA.has(r.entry_id)) idsB.push(r.entry_id);
+  }
+
+  // Work units: slices of ids, each deleted a chunk at a time until it returns fewer than asked.
+  type Unit = { kind: "A" | "B"; ids: string[] };
+  const slices = (kind: "A" | "B", ids: string[]): Unit[] => {
+    const out: Unit[] = [];
+    for (let i = 0; i < ids.length; i += MEMBER_HISTORY_SLICE) out.push({ kind, ids: ids.slice(i, i + MEMBER_HISTORY_SLICE) });
+    return out;
+  };
+  const units = [...slices("A", [...idsA]), ...slices("B", idsB)];
+  let executions = 0;
+  while (units.length && executions < MEMBER_HISTORY_MAX_CHUNKS) {
+    const chunk = Math.min(MEMBER_HISTORY_CHUNK, Math.floor(left() / 2));
+    if (chunk < 1) break;
+    const unit = units[0];
+    const res = unit.kind === "A"
+      ? await env.DB.prepare(
+        // scope-exempt: offboarding: oldest versions first of entries the removed member owns
+        `DELETE FROM entry_versions WHERE id IN (
+           SELECT id FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(?1)) ORDER BY seq LIMIT ?2)`,
+      ).bind(JSON.stringify(unit.ids), chunk).run()
+      : await env.DB.prepare(
+        // scope-exempt: offboarding: versions up to the newest one stamped with the removed member's personal workspace, oldest first
+        `DELETE FROM entry_versions WHERE id IN (
+           SELECT v.id FROM entry_versions v
+            WHERE v.entry_id IN (SELECT value FROM json_each(?1))
+              AND v.seq <= (SELECT MAX(w.seq) FROM entry_versions w WHERE w.entry_id = v.entry_id AND w.workspace_id = ?2)
+            ORDER BY v.seq LIMIT ?3)`,
+      ).bind(JSON.stringify(unit.ids), personalWid, chunk).run();
+    executions++;
+    const n = changedRows(res);
+    rowsWritten += 2 * n;
+    if (n < chunk) units.shift();
+  }
+  if (units.length) {
+    return { done: false, removedEntries: 0, vectorIds: [], ownedVectors: [], remaining: units.reduce((n, u) => n + u.ids.length, 0), rowsWritten };
+  }
+
   // Collect the doomed rows' vectors first: D1 rows go in one batch, the
   // Vectorize delete is the caller's (it may be absent entirely).
   const { results: vectorRows } = await env.DB.prepare(
-    `SELECT vector_ids FROM entries WHERE workspace_id = ? AND vector_ids != '[]'`,
-  ).bind(personal.wid).all<{ vector_ids: string }>();
-  const vectorIds = (vectorRows ?? []).flatMap((r) => {
-    try { return JSON.parse(r.vector_ids) as string[]; } catch { return []; }
+    `SELECT id, vector_ids FROM entries WHERE workspace_id = ? AND vector_ids != '[]'`,
+  ).bind(personalWid).all<{ id: string; vector_ids: string }>();
+  const ownedVectors: OwnedVectors[] = (vectorRows ?? []).map((r) => {
+    try { return { entryId: r.id, vectorIds: JSON.parse(r.vector_ids) as string[] }; } catch { return { entryId: r.id, vectorIds: [] }; }
   });
+  const vectorIds = ownedVectors.flatMap((o) => [...o.vectorIds]);
 
-  const { results: counts } = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM entries WHERE workspace_id = ?`,
-  ).bind(personal.wid).all<{ n: number }>();
-  const removedEntries = counts?.[0]?.n ?? 0;
+  const count = await env.DB.prepare(
+    `SELECT (SELECT COUNT(*) FROM entries WHERE workspace_id = ?1) AS entries,
+            (SELECT COUNT(*) FROM entries_trash WHERE workspace_id = ?1) AS trashed,
+            (SELECT COUNT(*) FROM edges WHERE workspace_id = ?1) AS edges,
+            (SELECT COUNT(*) FROM entries WHERE workspace_id = ?1 AND instr(lower(tags), '"standing:active"') > 0) AS standing`,
+  ).bind(personalWid).first<{ entries: number; trashed: number; edges: number; standing: number }>();
+  const removedEntries = count?.entries ?? 0;
+  // A final batch that would not fit the night's budget waits for a night when nothing else wrote,
+  // unless it is the only thing left to do (the 3.7 route paid this cost at click time).
+  // +6 per entries row and +6 per trashed row for their own life-end marker INSERT: one
+  // entry_events row costs 6 rows written on this schema (the row, its own PK autoindex,
+  // idx_entry_events_entry, idx_entry_events_created, idx_entry_events_actor, and
+  // idx_entry_events_life_end -- R23 -- since a life-end marker always matches that last index's
+  // own predicate).
+  const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0)
+    + 6 * removedEntries + 6 * (count?.trashed ?? 0);
+  if (opts.rowsLeft !== undefined && estimate > left() && !opts.allowOversize) {
+    return { done: false, removedEntries: 0, vectorIds: [], ownedVectors: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten, blockedByBudget: true };
+  }
 
+  const offboardNow = Date.now();
   await env.DB.batch([
+    // A version written between the chunks and here (a racing writer) must not outlive its entry.
+    env.DB.prepare(
+      // scope-exempt: offboarding: leftover versions of the removed member's rows and trash rows
+      `DELETE FROM entry_versions WHERE entry_id IN (SELECT id FROM entries WHERE workspace_id = ?1 UNION SELECT id FROM entries_trash WHERE workspace_id = ?1)`,
+    ).bind(personalWid),
+    // A life-end marker, in the SAME batch as the DELETE below -- a fire-and-forget write here
+    // could be lost, leaking a removed member's history into whoever reuses the id later.
+    env.DB.prepare(
+      // scope-exempt: offboarding: one life-end marker per entry this batch's own DELETE removes
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+         SELECT lower(hex(randomblob(16))), id, '', 'deleted',
+                json_object('reason', 'offboarding', 'trash', json('false'), 'channel', 'system:offboarding'), ?2
+           FROM entries WHERE workspace_id = ?1`,
+    ).bind(personalWid, offboardNow),
+    // Already trashed: the same life-end marker every retention purge writes.
+    env.DB.prepare(
+      // scope-exempt: offboarding: one life-end marker per trash row this batch's own DELETE removes
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+         SELECT lower(hex(randomblob(16))), id, '', 'purged',
+                json_object('reason', 'offboarding', 'channel', 'system:offboarding'), ?2
+           FROM entries_trash WHERE workspace_id = ?1`,
+    ).bind(personalWid, offboardNow),
     // Edges before entries: the edge delete resolves endpoints through the
     // entries table, so it has to run while the rows still exist.
     env.DB.prepare(
       // scope-exempt: offboarding: deletes exactly the edges whose endpoints are in the removed member's workspace, per the two subselects
       `DELETE FROM edges WHERE source_id IN (SELECT id FROM entries WHERE workspace_id = ?) OR target_id IN (SELECT id FROM entries WHERE workspace_id = ?)`,
-    ).bind(personal.wid, personal.wid),
-    env.DB.prepare(`DELETE FROM entries WHERE workspace_id = ?`).bind(personal.wid),
+    ).bind(personalWid, personalWid),
+    // versioning: hard-delete: member removal
+    // validity: retraction-exempt: the member's own rows go together, closers and the rows they closed alike
+    env.DB.prepare(`DELETE FROM entries WHERE workspace_id = ?`).bind(personalWid),
+    env.DB.prepare(`DELETE FROM entries_trash WHERE workspace_id = ?`).bind(personalWid),
     env.DB.prepare(`DELETE FROM memberships WHERE user_id = ?`).bind(userId),
-    env.DB.prepare(`DELETE FROM workspaces WHERE id = ?`).bind(personal.wid),
+    env.DB.prepare(`DELETE FROM workspaces WHERE id = ?`).bind(personalWid),
   ]);
 
-  return { removedEntries, vectorIds };
+  // Bulk: once for the whole workspace, not per row (spec 15 2.6) — it no longer exists to narrow further.
+  if (opts.ctx && (count?.standing ?? 0) > 0) standingTouched(env, opts.ctx, await resolveConfig(env), [personalWid]);
+  return { done: true, removedEntries, vectorIds, ownedVectors, rowsWritten: rowsWritten + estimate };
+}
+
+/**
+ * The oldest removal still waiting on its history cleanup (the dashboard may never re-call
+ * after a 202, and the roster hides removed members), for the nightly resume.
+ */
+export async function findPendingRemoval(env: Env): Promise<{ userId: string; personalWid: string } | null> {
+  const row = await env.DB.prepare(
+    `SELECT m.user_id AS user_id, m.workspace_id AS wid FROM memberships m
+       JOIN users u ON u.id = m.user_id
+       JOIN workspaces w ON w.id = m.workspace_id AND w.kind = 'personal'
+      WHERE u.removed_at > 0 LIMIT 1`,
+  ).first<{ user_id: string; wid: string }>();
+  return row ? { userId: row.user_id, personalWid: row.wid } : null;
 }
 
 /** Rename a member, or set their email. At least one of name or email must be supplied. */

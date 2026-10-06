@@ -137,6 +137,13 @@ class SqliteStatement {
     if (/^\s*(SELECT|WITH)\b/i.test(this.sql)) {
       return { results: statement.all(...(q.args as never[])), success: true, meta: { rows_written: 0 } };
     }
+    // A write with a RETURNING clause: node:sqlite's own .run() silently drops whatever it would
+    // have returned, so this goes through .all() instead (which both performs the write and hands
+    // back its rows) — same as D1, which reports the RETURNING rows through a batched write too.
+    if (/\bRETURNING\b/i.test(this.sql)) {
+      const rows = statement.all(...(q.args as never[]));
+      return { results: rows, success: true, meta: { rows_written: rows.length } };
+    }
     const result = statement.run(...(q.args as never[]));
     return { success: true, meta: { rows_written: Number(result.changes) } };
   }
@@ -152,6 +159,8 @@ export interface SqliteD1 {
     prepare(sql: string): SqliteStatement;
     exec(sql: string): Promise<void>;
     batch(statements: SqliteStatement[]): Promise<{ results?: unknown[]; success: true; meta: { rows_written: number } }[]>;
+    /** Vector id -> the row that listed it, remembered across statements (never counted). */
+    __vectorOwners(): Map<string, string>;
   };
   /**
    * One entry per D1 call made through `db` — which is one entry per subrequest,
@@ -172,6 +181,9 @@ export interface SqliteD1 {
     vectorIds?: string[];
     /** Drives the compression and resurfacing rules; defaults to 0. */
     importanceScore?: number;
+    /** Stated validity window (T-0089.2.1); both default to NULL (open, since created_at). */
+    validFrom?: number | null;
+    validUntil?: number | null;
   }): void;
   /** Every row, for assertions about what the code under test wrote. */
   rows(): Record<string, unknown>[];
@@ -263,6 +275,19 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
 
   const issued: string[] = [];
   const batches: string[][] = [];
+  // Test-infrastructure reads straight from SQLite, never counted in `issued` (T-0089.1.1).
+  const listedVectors = new Map<string, string>();
+  const rememberListed = () => {
+    for (const table of ["entries", "entries_trash"]) {
+      let rows: { id: string; vector_ids: string | null }[] = [];
+      try { rows = raw.prepare(`SELECT id, vector_ids FROM ${table}`).all() as typeof rows; } catch { continue; }
+      for (const r of rows) {
+        let ids: string[] = [];
+        try { ids = JSON.parse(r.vector_ids ?? "[]"); } catch { ids = []; }
+        for (const v of ids) if (!listedVectors.has(v)) listedVectors.set(v, r.id);
+      }
+    }
+  };
   let savepointCounter = 0;
 
   return {
@@ -270,9 +295,12 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
     batches,
     db: {
       prepare: (sql: string) => {
+        if (/^\s*(UPDATE entries|DELETE FROM entries|INSERT INTO entries_trash)/i.test(sql)) rememberListed();
         issued.push(sql);
         return new SqliteStatement(raw, sql);
       },
+      /** Vector id -> the row that listed it, remembered across statements; uncounted (see D1Mock.__vectorOwners). */
+      __vectorOwners: () => { rememberListed(); return listedVectors; },
       // Present so a whole-Worker request against this facade runs the real
       // initializeDatabase path rather than failing on a missing method. The
       // schema is already applied above; that DDL is idempotent, and the ALTERs
@@ -353,7 +381,20 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
       return (raw.prepare(`SELECT name FROM pragma_table_info('entries')`).all() as { name: string }[])
         .map(r => r.name);
     },
-    seed({ id, content, createdAt, tags = [], source = "api", vectorIds = [], importanceScore = 0 }) {
+    seed({ id, content, createdAt, tags = [], source = "api", vectorIds = [], importanceScore = 0, validFrom = null, validUntil = null }) {
+      // Some callers use makeSqliteD1() straight off db/schema.sql's CREATE, with
+      // no initializeDatabase() migration run — validity, like every other
+      // runtime-ALTERed column (e.g. when_label), exists only after that runs.
+      const hasValidity = raw.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'valid_from'`).get() !== undefined;
+      if (hasValidity) {
+        raw
+          .prepare(
+            `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, recall_count, importance_score, valid_from, valid_until)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+          )
+          .run(id, content, JSON.stringify(tags), source, createdAt, JSON.stringify(vectorIds), importanceScore, validFrom, validUntil);
+        return;
+      }
       raw
         .prepare(
           `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, recall_count, importance_score)

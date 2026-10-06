@@ -34,7 +34,11 @@ describe("GET /entry", () => {
     expect(res.status).toBe(200);
     const data = await res.json() as any;
     expect(data.ok).toBe(true);
-    expect(data.entry).toEqual({
+    // history (BE-7, contract 4.1) is asserted separately below: its footer.not_recorded_before
+    // is versions:since, which this D1Mock has no entry_versions rows to derive deterministically
+    // (it falls back to Date.now()), so it cannot join the exact toEqual below.
+    const { history, ...entry } = data.entry;
+    expect(entry).toEqual({
       id: "a",
       content: longContent, // full content, not an 80-char label
       tags: ["work", "kind:semantic"],
@@ -58,7 +62,15 @@ describe("GET /entry", () => {
       // a solo brain: the author lock only ever engages on the company layer.
       can_edit: true,
       timeline: [],
+      valid_from: 1234,
+      valid_from_stated: false,
+      valid_until: null,
+      validity_state: "current",
+      superseded_by: null,
+      retracted_source: false,
     });
+    expect(history).toMatchObject({ items: [], footer: { pruned: false, kept: 20, shared_cut_by: null } });
+    expect(typeof history.footer.not_recorded_before).toBe("number");
   });
 
   it("reports a memory recall cannot see as unindexed", async () => {

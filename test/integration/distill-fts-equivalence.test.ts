@@ -11,7 +11,7 @@
  * the string-matching D1 mock.
  */
 import { describe, it, expect } from "vitest";
-import { distillToRareTerms } from "../../src/recall/distill";
+import { distillToRareTerms, probeTrigrams } from "../../src/recall/distill";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
@@ -110,6 +110,7 @@ describe("T-0059 equivalence: FTS-counted distillation vs the LIKE scan it repla
   it(`agrees on kept terms and the rebuilt query across ${TRIALS} randomized corpora`, async () => {
     const divergences: string[] = [];
     let ftsRunCount = 0;
+    let scanRunCount = 0;
     let likeFallbackCount = 0;
 
     for (let n = 0; n < TRIALS; n++) {
@@ -127,8 +128,9 @@ describe("T-0059 equivalence: FTS-counted distillation vs the LIKE scan it repla
         continue;
       }
 
-      if (ftsOut.distillSource === "fts") {
-        ftsRunCount++;
+      // "scan": the one-pass count a common-word query takes instead, capped as the FTS counts would be, so held to the same bar.
+      if (ftsOut.distillSource === "fts" || ftsOut.distillSource === "scan") {
+        if (ftsOut.distillSource === "fts") ftsRunCount++; else scanRunCount++;
         expect(likeOut.distillSource === "like" || likeOut.distillSource === "shortcut", label).toBe(true);
         if (ftsOut.total !== likeOut.total) {
           divergences.push(`${label}: total differs — like=${likeOut.total} fts=${ftsOut.total}`);
@@ -161,7 +163,9 @@ describe("T-0059 equivalence: FTS-counted distillation vs the LIKE scan it repla
     // Sanity: the generator must actually exercise both paths, or this test
     // proves nothing. "accented" trials are expected to fall back to LIKE
     // (ftsCountSafeToken), so likeFallbackCount > 0 is expected too.
-    expect(ftsRunCount).toBeGreaterThan(TRIALS / 4);
+    expect(ftsRunCount + scanRunCount).toBeGreaterThan(TRIALS / 4);
+    expect(ftsRunCount).toBeGreaterThan(0);
+    expect(scanRunCount).toBeGreaterThan(0);
     expect(likeFallbackCount).toBeGreaterThan(0);
   }, 30000); // 320 real-SQLite trials measured at 4.09s against the 5s default; give it headroom under load.
 });
@@ -174,25 +178,25 @@ describe("T-0059 cost: the FTS count path never scans entries or entries_fts in 
     const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
     await initializeDatabase(env);
     for (let i = 0; i < 30; i++) sqlite.seed({ id: `row-${i}`, content: "atlas ledger widget filler text", createdAt: i + 1 });
+    // Rows without the terms, so the counts are cheaper than one pass over the corpus and the FTS route is taken.
+    for (let i = 30; i < 400; i++) sqlite.seed({ id: `row-${i}`, content: "unrelated filler text", createdAt: i + 1 });
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
 
     const out = await distillToRareTerms("atlas ledger widget", env);
     expect(out.distillSource).toBe("fts");
 
-    // T-0065: no time bounds, so distillation issues ONE batch — liveness,
-    // entry_counts' total, and every per-term count together. Pick out the
-    // per-term count statements (they mention both entries_fts and MATCH;
-    // the liveness and total statements mention neither or only one).
+    // T-0065: no time bounds, so distillation issues ONE batch: liveness, then one statement carrying entry_counts'
+    // total and every per-term count (dfCountsStmt in src/recall/distill.ts).
     const batch = sqlite.batches.find(b => b.some(sql => sql.includes("entries_fts") && sql.includes("MATCH")));
     expect(batch, JSON.stringify(sqlite.batches, null, 2)).toBeTruthy();
     const countStatements = batch!.filter(sql => sql.includes("entries_fts") && sql.includes("MATCH"));
+    expect(countStatements).toHaveLength(1);
 
     for (const sql of countStatements) {
-      // Only `match` is JS-bound now: the saturation cap is a SQL subquery on
-      // entry_counts embedded in the statement text itself (see
-      // ftsTermCountStmtSqlCap in src/recall/distill.ts), not a second param.
-      const { results } = await sqlite.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(`"atlas"`).all();
+      // The plan does not depend on the bound values, so every numbered parameter is bound to null.
+      const params = Math.max(...[...sql.matchAll(/\?(\d+)/g)].map(m => Number(m[1])));
+      const { results } = await sqlite.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...new Array(params).fill(null)).all();
       const detail = (results as { detail: string }[]).map(r => r.detail).join(" | ");
       // SQLite always labels virtual-table access "SCAN <table> VIRTUAL TABLE
       // INDEX n:xx" in EXPLAIN QUERY PLAN, even when it is using an index —
@@ -243,8 +247,34 @@ describe("T-0059 scope: the FTS count path never counts another workspace's rows
     resetFtsReadyMemo();
     const out = await distillToRareTerms("atlas ledger quartz", env, undefined, {}, identity);
 
-    expect(out.distillSource).toBe("fts");
+    // The foreign rows count in entries_fts_vocab (it has no scope), so the price sends this query to the pass.
+    expect(out.distillSource).toBe("scan");
     expect(out.total).toBe(2); // ws-a's two rows only
+    expect(out.df!.get("atlas")).toBe(2);
+    expect(out.df!.get("ledger")).toBe(1);
+    sqlite.close();
+  });
+
+  it("the FTS route is scoped the same way", async () => {
+    resetDatabaseInit();
+    resetFtsReadyMemo();
+    const sqlite = makeSqliteD1();
+    const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
+    await initializeDatabase(env);
+
+    const identity = memberOf("ws-a");
+    seedIn(sqlite, "mine-1", "ws-a", "atlas ledger quartz", 1);
+    seedIn(sqlite, "mine-2", "ws-a", "atlas filler text", 2);
+    // Enough of ws-a's own rows without the terms that the counts are the cheaper route.
+    for (let i = 0; i < 200; i++) seedIn(sqlite, `other-${i}`, "ws-a", "unrelated filler text", 100 + i);
+    for (let i = 0; i < 20; i++) seedIn(sqlite, `foreign-${i}`, "ws-b", "atlas ledger quartz", 10 + i);
+
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    const out = await distillToRareTerms("atlas ledger quartz", env, undefined, {}, identity);
+
+    expect(out.distillSource).toBe("fts");
+    expect(out.total).toBe(202);
     expect(out.df!.get("atlas")).toBe(2);
     expect(out.df!.get("ledger")).toBe(1);
     sqlite.close();
@@ -281,7 +311,7 @@ describe("T-0065: entry_counts' total equals the scoped COUNT(*) for every calle
 
     const out = await distillToRareTerms("atlas ledger quartz", env, undefined, {}, identity, "personal");
 
-    expect(out.distillSource).toBe("fts");
+    expect(out.distillSource).toBe("scan");
     expect(out.total).toBe(await trueScopedTotal(sqlite, ["ws-personal"]));
     expect(out.total).toBe(2);
     sqlite.close();
@@ -293,7 +323,7 @@ describe("T-0065: entry_counts' total equals the scoped COUNT(*) for every calle
 
     const out = await distillToRareTerms("atlas ledger quartz", env, undefined, {}, identity, "company");
 
-    expect(out.distillSource).toBe("fts");
+    expect(out.distillSource).toBe("scan");
     expect(out.total).toBe(await trueScopedTotal(sqlite, ["ws-team-a", "ws-team-b"]));
     expect(out.total).toBe(3);
     sqlite.close();
@@ -305,7 +335,7 @@ describe("T-0065: entry_counts' total equals the scoped COUNT(*) for every calle
 
     const out = await distillToRareTerms("atlas ledger quartz", env, undefined, {}, identity, "company", "ws-team-b");
 
-    expect(out.distillSource).toBe("fts");
+    expect(out.distillSource).toBe("scan");
     expect(out.total).toBe(await trueScopedTotal(sqlite, ["ws-team-b"]));
     expect(out.total).toBe(2);
     sqlite.close();
@@ -316,7 +346,7 @@ describe("T-0065: entry_counts' total equals the scoped COUNT(*) for every calle
 
     const out = await distillToRareTerms("atlas ledger quartz", env);
 
-    expect(out.distillSource).toBe("fts");
+    expect(out.distillSource).toBe("scan");
     const row = await sqlite.db.prepare(`SELECT count(*) AS n FROM entries`).first() as { n: number };
     expect(out.total).toBe(row.n);
     expect(out.total).toBe(5);
@@ -364,7 +394,8 @@ describe("T-0065: a time-bounded call never affects the unbounded scoped total",
     expect(bounded.total).toBe(5); // only the 5 rows created after t=50
 
     const unbounded = await distillToRareTerms("atlas ledger widget", env);
-    expect(unbounded.distillSource).toBe("fts");
+    // Every row holds every term, so the unbounded call takes the pass; the bounded path always counts.
+    expect(unbounded.distillSource).toBe("scan");
     expect(unbounded.total).toBe(10); // the whole corpus, not the bounded call's leftover total
     sqlite.close();
   });
@@ -471,9 +502,112 @@ describe("T-0059 all-saturated fallback: capped counts that cannot rank fall bac
     resetFtsReadyMemo();
     const out = await distillToRareTerms("term1 term2 rare", env);
 
+    // Two capped terms price the counts under twice one pass, so the counts serve it.
     expect(out.distillSource).toBe("fts");
     expect(out.query).toBe("rare");
     expect(out.df!.get("rare")).toBe(5); // exact, uncapped
+    expect(out.df!.get("term1")).toBe(2401);
+    sqlite.close();
+  });
+
+  it("the pass serves a query whose counts would read past twice the corpus, capped exactly as the counts would be", async () => {
+    resetDatabaseInit();
+    resetFtsReadyMemo();
+    const sqlite = makeSqliteD1();
+    const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
+    await initializeDatabase(env);
+
+    const total = 8000;
+    for (let i = 0; i < total; i++) {
+      const content = `termw termx ${i < 7000 ? "termy" : ""} ${i < 6000 ? "termz" : ""} ${i < 5 ? "rare" : ""}`.replace(/\s+/g, " ").trim();
+      sqlite.seed({ id: `row-${i}`, content, createdAt: i + 1 });
+    }
+
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    const out = await distillToRareTerms("termw termx termy termz rare", env);
+
+    expect(out.distillSource).toBe("scan");
+    expect(out.query).toBe("rare");
+    expect(out.total).toBe(8000);
+    expect(out.df!.get("rare")).toBe(5);
+    // min(df, cap = 2401): what a LIMIT cap count returns for each
+    for (const t of ["termw", "termx", "termy", "termz"]) expect(out.df!.get(t)).toBe(2401);
+    sqlite.close();
+  });
+});
+
+describe("pricing the df counts with entries_fts_vocab", () => {
+  it("probes every distinct trigram of a term, folded as the trigram tokenizer folds them", () => {
+    expect(probeTrigrams("abc")).toEqual(["abc"]);
+    expect(probeTrigrams("Atlas")).toEqual(["atl", "tla", "las"]);
+    expect(probeTrigrams("ledgers")).toEqual(["led", "edg", "dge", "ger", "ers"]);
+    expect(probeTrigrams("aaaa")).toEqual(["aaa"]);
+    expect(probeTrigrams("認証方式")).toEqual(["認証方", "証方式"]);
+  });
+
+  async function brain(rows: number) {
+    resetDatabaseInit();
+    resetFtsReadyMemo();
+    const sqlite = makeSqliteD1();
+    const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
+    await initializeDatabase(env);
+    for (let i = 0; i < rows; i++) sqlite.seed({ id: `row-${i}`, content: "atlas ledger widget", createdAt: i + 1 });
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    return { sqlite, env };
+  }
+
+  it("a query needing more than 24 vocabulary lookups keeps the counts and reads no vocabulary", async () => {
+    const { sqlite, env } = await brain(10);
+    // Eight long words: far more than 24 distinct trigrams.
+    const out = await distillToRareTerms("atlasatlas ledgerledger widgetwidget harborharbor cactuscactus budgetbudget reportreport kernelkernel", env);
+    expect(out.distillSource).toBe("fts");
+    const combined = sqlite.batches.flat().find(sql => sql.startsWith("WITH RECURSIVE g AS MATERIALIZED"));
+    expect(combined).toBeTruthy();
+    expect(combined).not.toContain("entries_fts_vocab");
+    sqlite.close();
+  });
+
+  it("a common-word query within the lookup cap still reaches the pass", async () => {
+    const { sqlite, env } = await brain(10);
+    const out = await distillToRareTerms("atlas ledger widget", env);
+    expect(out.distillSource).toBe("scan");
+    expect(sqlite.batches.flat().find(sql => sql.startsWith("WITH RECURSIVE g AS MATERIALIZED"))).toContain("entries_fts_vocab");
+    sqlite.close();
+  });
+
+  it("a missing entries_fts_vocab degrades to the LIKE scan with the same df", async () => {
+    const { sqlite, env } = await brain(10);
+    sqlite.db.prepare(`DROP TABLE entries_fts_vocab`).run();
+    const out = await distillToRareTerms("atlas ledger widget", env);
+    expect(out.distillSource).toBe("like");
+    expect(out.total).toBe(10);
+    expect(out.df!.get("atlas")).toBe(10);
+    sqlite.close();
+  });
+
+  const sixteen = ["atlas", "ledger", "widget", "harbor", "cactus", "budget", "report", "kernel", "socket", "canvas", "meadow", "quartz", "cobalt", "lumen", "forge", "printer"];
+  const memberOfTeams = (n: number): Identity => ({ userId: "u1", role: "member", personalWorkspaceId: "ws-personal", companyWorkspaceIds: Array.from({ length: n }, (_, i) => `ws-team-${i}`), defaultShare: "" });
+
+  it("drops the price, not the combined counts, when the vocabulary probes would pass D1's bound-parameter limit", async () => {
+    const { sqlite, env } = await brain(10);
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-personal'`).run();
+    const out = await distillToRareTerms(sixteen.join(" "), env, undefined, {}, memberOfTeams(30));
+    expect(out.distillSource).toBe("fts");
+    const combined = sqlite.batches.flat().find(sql => sql.startsWith("WITH RECURSIVE g AS MATERIALIZED"));
+    expect(combined).toBeTruthy();
+    expect(combined).not.toContain("entries_fts_vocab");
+    sqlite.close();
+  });
+
+  it("keeps the per-term counts when even the unpriced statement would pass the limit", async () => {
+    const { sqlite, env } = await brain(10);
+    sqlite.db.prepare(`UPDATE entries SET workspace_id = 'ws-personal'`).run();
+    const out = await distillToRareTerms(sixteen.join(" "), env, undefined, {}, memberOfTeams(70));
+    expect(out.distillSource).toBe("fts");
+    expect(sqlite.batches.flat().some(sql => sql.startsWith("WITH RECURSIVE g AS MATERIALIZED"))).toBe(false);
+    expect(sqlite.batches.flat().some(sql => sql.startsWith("SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts WHERE"))).toBe(true);
     sqlite.close();
   });
 });

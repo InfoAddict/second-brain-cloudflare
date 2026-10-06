@@ -668,6 +668,28 @@ describe("scanSource, documented limitations, pinned so the header cannot drift"
     expect(r.violations).toEqual([]);
   });
 
+  it("a literal workspace_id predicate that sits only inside an OR arm does not count as scoping", () => {
+    // `created_at > ? OR (held AND workspace_id = ?)` returns every recent row of every workspace: the
+    // predicate restricts one arm, not the row set. It used to pass because the predicate was "present".
+    const r = scanSource("const q = `SELECT id FROM entries WHERE tags LIKE ? AND (created_at > ? OR (tags LIKE ? AND workspace_id = ?)) LIMIT 1`;");
+    expect(r.violations.length).toBe(1);
+  });
+
+  it("`WHERE x OR workspace_id = ?` is not scoped, the same shape written flat", () => {
+    const r = scanSource("const q = `SELECT id FROM entries WHERE created_at > ? OR workspace_id = ?`;");
+    expect(r.violations.length).toBe(1);
+  });
+
+  it("an OR whose every arm is scoped still counts: `(workspace_id = ? OR workspace_id IN (?, ?))`", () => {
+    const r = scanSource("const q = `SELECT id FROM entries WHERE (workspace_id = ? OR workspace_id IN (?, ?)) AND tags LIKE ?`;");
+    expect(r.violations).toEqual([]);
+  });
+
+  it("a predicate alongside an OR elsewhere still counts: `workspace_id = ? AND (a = ? OR b = ?)`", () => {
+    const r = scanSource("const q = `SELECT id FROM entries WHERE workspace_id = ? AND (created_at > ? OR tags LIKE ?)`;");
+    expect(r.violations).toEqual([]);
+  });
+
   it("limitation 2 + item 4: a conditional hoisted one line up is not caught", () => {
     // Asserted as CURRENT BEHAVIOUR. The rejection in item 4 is a test on the
     // text between ${ and }, so moving the ternary into a const defeats it,
@@ -1028,6 +1050,42 @@ describe("scanSource, a scoped table reached by an OUTER join", () => {
   });
 });
 
+describe("scanSource, entry_versions and entries_trash (Task 12)", () => {
+  it("flags an unscoped SELECT from entry_versions", () => {
+    const r = scanSource("const q = `SELECT id, seq FROM entry_versions WHERE entry_id = ?`;");
+    expect(r.violations.length).toBe(1);
+    expect(r.violations[0].snippet).toContain("FROM entry_versions");
+  });
+
+  it("flags an unscoped SELECT from entries_trash", () => {
+    const r = scanSource("const q = `SELECT id FROM entries_trash WHERE deleted_at < ?`;");
+    expect(r.violations.length).toBe(1);
+    expect(r.violations[0].snippet).toContain("FROM entries_trash");
+  });
+
+  it("accepts scope-exempt and scope-checked on either", () => {
+    const exempt = scanSource([
+      "// scope-exempt: by-id, the id came from a scoped read",
+      "const a = `SELECT * FROM entry_versions WHERE entry_id = ?`;",
+    ].join("\n"));
+    expect(exempt.violations).toEqual([]);
+    expect(exempt.exceptions.length).toBe(1);
+
+    const checked = scanSource([
+      "// scope-checked: readability enforced per row by buildChain (D-SH)",
+      "const b = `SELECT * FROM entries_trash WHERE id IN (${ph})${rcScopeSql}`;",
+    ].join("\n"));
+    expect(checked.violations).toEqual([]);
+    expect(checked.exceptions.length).toBe(1);
+
+    // And a real scope clause passes on the merits, exactly like `entries`.
+    const scoped = scanSource("const q = `SELECT * FROM entry_versions WHERE ${scope.clause}`;");
+    expect(scoped.violations).toEqual([]);
+    const literal = scanSource("const q = `SELECT * FROM entries_trash WHERE workspace_id = ?`;");
+    expect(literal.violations).toEqual([]);
+  });
+});
+
 describe("the checker over the real source tree", () => {
   it("exits 0, so a future unscoped query fails the suite as well as CI", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
@@ -1162,7 +1220,55 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (138 queries, 69 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  // MOVED 162/81/12/1 -> 186/102/13/1 by Task 12 (scope checker covers history and trash):
+  // entry_versions and entries_trash joined entries/edges in the table alternation
+  // (scripts/check-scope.mjs:277, :281 — now CORPUS_TABLE_ALT), so every existing query on
+  // either table is swept for the first time. Every one of them was read, not rubber-stamped:
+  //
+  // +20 queries, +20 scope-exempt, each already carrying (or now given) a by-id, cron/retention,
+  // offboarding or identity-less reason:
+  //   src/entries/import.ts:269 entries_trash, :280 entry_versions — by-id dedupe/orphan-cleanup
+  //     reads on ids from the import payload; never returned, only tested for existence.
+  //   src/lib/team-admin.ts:521, :526 — offboarding: cleanupMemberData prunes only the removed
+  //     member's own versions, oldest first, by id list.
+  //   src/memory/trash.ts:113 (tier-3 version delete), :178 (trash rows this call just wrote,
+  //     read back by its own actor+timestamp), :259 (purge candidate read — a system job keyed
+  //     on deleted_at, not caller identity), :308/:320 (purge batch: audit + trash delete for the
+  //     candidates the same purge call chose above), :351 (identity-less branch, scoped arm is
+  //     the line below), :415/:427 (restoreEntry's insert and delete: the trash row getTrashedEntry
+  //     already scoped for this caller), :485/:487 (deleteForever: the live-or-trashed row
+  //     getReadableEntry/getTrashedEntry already scoped, assertCanMutateEntry already checked).
+  //   src/memory/versions.ts:65 (NEWEST_SEQ: correlated to entries e, which every embedding
+  //     caller pins by id first), :157/:172/:189 (buildPrune/buildPruneMany/buildMirrorPrune:
+  //     prune only the entry(ies) just snapshotted), :226 (ownSnapshotLandedSql: entryId is the
+  //     row revertEntry's own UPDATE ... WHERE id = ... already pins), :241 (getVersionsSince:
+  //     a deployment-wide bootstrap scalar, one cursor shared by every workspace, not a caller read).
+  //
+  // +1 query, +1 scope-checked: src/memory/versions.ts:393, loadHistory. Already carried
+  // `// scope-checked: readability enforced per row by buildChain (D-SH)` before Task 12; the
+  // table just was not swept yet for the marker to be spent on.
+  //
+  // +3 queries needing no annotation at all, scoped on their own merits once swept:
+  // src/lib/team-admin.ts:500 (`WHERE workspace_id = ?1`) and :577 (`WHERE workspace_id = ?`),
+  // src/memory/trash.ts:355 (getTrashedEntry's identified branch, `WHERE id = ? AND ${scope.clause}`).
+  // (team-admin.ts:500 still carries a comment from before Task 12; it was never spent, on either
+  // side of this change — the query needed no licence then and needs none now.)
+  //
+  // +1 more scope-exempt with NO change to the query count: src/lib/team-admin.ts:567. That
+  // statement was already swept and already passing before Task 12, on the strength of its two
+  // real per-subquery `workspace_id = ?1` predicates matching its `entries` and `entry_versions`
+  // references. Task 12 adds a THIRD table reference to the same statement (`entries_trash`, the
+  // second UNION arm) with no third predicate to match it, so the checker's alias-less pool
+  // (limitation 4: an unattributed clause joins a shared pool, consumed in the order references
+  // are found) now leaves one reference unmatched. The statement's own scope-exempt comment
+  // (unchanged, "offboarding: leftover versions of the removed member's rows and trash rows")
+  // now answers a real finding instead of sitting unspent. Net: queries unchanged, +1 exempt.
+  //
+  // Read every one of the 24 newly-swept queries and the 1 converted one by hand (not just their
+  // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
+  // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
+  // hold up; nothing here needed a code fix beyond the annotations themselves.
+  it("reports the checker's pinned totals (244 queries, 119 exceptions, 38 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1226,7 +1332,238 @@ describe("the checker over the real source tree", () => {
     // src/recall/keyword-rows.ts): the FTS statement that was one prepare over both tiers is now two candidate
     // SELECTs (the AND tier and the bm25 tier), each carrying the caller's clause into a CTE that D1 turns into
     // per-term match levels. Same rows, same scope.
-    ).toEqual({ queries: 138, exempt: 69, checked: 12, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt (by-id) for T-0089.4.4: the weekly insight pass drops the old
+    // drawn_from edges of an insight it replaces, by that insight's own id.
+    // Deliberate: net +1 query and no new exemption for T-0089.4.4 (src/capture/entry.ts): the merge-target
+    // and contradiction-conflict snapshot reads are now pinned to the writer's workspace in the predicate
+    // (`AND workspace_id = ?`, writeCtx.workspaceId) instead of trusting the scoped candidate read, so their two
+    // by-id exemptions are gone; restoreRowVectors adds one by-id SELECT after a lost compare-and-set.
+    // The CAS and deprecation UPDATEs are not counted by the checker.
+    // Deliberate: -1 scope-exempt for T-0089.4.4: deprecateEntry (src/capture/lifecycle.ts) takes an optional
+    // workspace and pins its read and write to it when captureEntry passes the writer's workspace; that SELECT
+    // now carries the clause in a JS fragment, and the checker no longer needs an exemption for the read it replaced.
+    // Deliberate: +1 query for T-0089.4.4 (src/compression/digest.ts): the held-draft existence check,
+    // scoped by `workspace_id = ?`. And +1 scope-exempt: the nightly corpus-wide 24h cooldown query is back
+    // to its original text and its `scope-exempt: cron` reason. The folded version had put `workspace_id = ?`
+    // inside an OR arm, which the checker used to count as scoped; it no longer does (inUnscopedOrArm).
+    // Deliberate: +1 query and +1 scope-exempt (cron) for T-0089.4.4 (src/compression/digest.ts prepareHeldDigests):
+    // the nightly run's one held-digest read, riding in its existing candidate batch. It selects only
+    // (workspace, tags) of held drafts, narrowed by the run's workspace slice when it has one, and the per-tag
+    // `heldDigestSql` it replaces on the nightly path stays for manual digests.
+    // Deliberate: +6 queries (142 -> 148 on top of T-0089.4's 142/70, no new exemption and none loosened;
+    // the checker's OR-arm rule still passes them) for the T-0089.6 MCP
+    // tools: the four agent-brief reads (src/brief/compute.ts), the digest lookup
+    // (src/mcp/server.ts) and the history supersedes read (src/memory/history.ts).
+    // Each carries the caller's clause; the timeline read is by-id after getReadableEntry.
+    // Deliberate: +1 query and +1 scope-exempt (T-0089.1.1, src/memory/versions.ts): the snapshot SELECT over entries is by-id,
+    // the caller having authorized the entry before it builds the batch.
+    // Deliberate: +1 query and +1 scope-exempt (T-0089.1.1, src/capture/share.ts): moveEntry's move-event
+    // INSERT reads the row's own workspace by id, the row having been read above under the caller's scope.
+    // (148/70 -> 150/72 on the foundations branch.)
+    // Deliberate: +8 queries and +5 scope-exempt (150/72 -> 158/77) for T-0089.1.2/T-0089.4.9/T-0089.8
+    // (trash, purge, member removal, disconnect purge, restore): src/memory/trash.ts's trash size read
+    // (by-id), trash insert x2 (tier 1/2, by-id), purge candidate read and purge batch's INSERT/DELETEs
+    // (scope-exempt: retention purge, global by design), the disconnect purge's scoped size read (carries
+    // scopeWhere), getTrashedEntry's scoped SELECT (carries scopeWhere), restoreEntry's INSERT/edge-restore
+    // (by-id, caller pre-authorized), and src/lib/team-admin.ts's cleanupMemberData reads/deletes
+    // (scope-exempt: offboarding, by workspace already resolved to the removed member's own).
+    // Deliberate: +3 queries and +3 scope-exempt (158/77 -> 161/80) for T-0089.4.7 (Delete forever):
+    // src/memory/trash.ts's deleteForever issues its edges/versions/trash/entries deletes as four
+    // separate by-id statements (each needs its own dense Params, so each carries its own comment).
+    // Deliberate: +1 query and +1 scope-exempt (T-0089.1.3, src/memory/undo.ts): revertEntry's post-miss
+    // liveness check is by-id, the row having been read above under the caller's own scope.
+    // Deliberate: +2 queries and +2 scope-exempt (161/80 -> 163/82) for T-0089.1.2 (adversary
+    // MAJOR fix): restoreEntry's upfront liveness check, and deleteOrphanedRestoreVectors' own
+    // liveness check before a losing restore's vector cleanup — both by-id, the caller already
+    // authorized the trash row.
+    // Deliberate: -2 scope-exempt (164/83 -> 164/81) for T-0089.1.1/T-0089.10 (R2-3, round 2
+    // adversary): deprecateEntry's optional workspace became a required one, and applyStatus's
+    // non-deprecated branch (previously a bare `WHERE id = ?`) now reads under the same guard —
+    // both carry a literal, unconditional `AND workspace_id = ?` the checker recognizes on its
+    // own, so the exemption they used to need is gone.
+    // Round 3 (T-0089.1.3, U10/U13 simplification, Builder D's undo.ts): the round-2
+    // findLiveIncomingRecreation liveness read is gone (a merge's incoming is now re-created at
+    // most once by checking meta already in hand, no DB read); D's branch also folded the
+    // merge-recreation INSERT (previously counted separately on this branch, ADV-4 residual) into
+    // the revert's own guarded batch, so no exemption is spent on it here either.
+    // MOVED (T-0089.1.3, merge of 694ec670): recomputed against the real --inventory output after
+    // combining Builder D's undo.ts rewrite with this branch's own R2-3/R2-2 changes, rather than
+    // trying to hand-reconcile two independently-tracked running totals. Lands back at 164/81 —
+    // both branches' changes to undo.ts net out even though neither total moved on its own.
+    // MOVED 164/81/12/1 -> real --inventory output (merge of 7e517282, Builder C's Task 12): see
+    // the running history above this test's own name for the accounting behind the jump —
+    // recomputed against the real scanner output after combining rather than hand-reconciling
+    // two independently-tracked totals. Not exactly C's own 186/102/13/1: the table alternation
+    // now covering entry_versions also caught this branch's own updated_at clamp (store.ts's long
+    // and short append branches, T-0089.1.1 R2-6), given a by-id scope-exempt (the clamp's
+    // entry_versions subquery is correlated to the SAME row's id the outer UPDATE already pins,
+    // same shape as every correlated-subquery exemption C's own sweep documented above); the rest
+    // of the difference is queries the wider alternation now counts for the first time that were
+    // already properly scoped or already covered by an existing annotation, not new findings —
+    // the checker exits clean.
+    // Deliberate: +1 query and +1 scope-exempt (T-0089.7.4, R3-2, src/capture/share.ts): moveEntry's
+    // post-miss liveness check is by-id, the row having been read above under the caller's own scope.
+    // Deliberate: -2 queries and -2 scope-exempt (192/105 -> 190/103) for T-0089.1.1 (digest mark
+    // guard hardening): the entry_versions correlated subquery R2-6's updated_at clamp used in
+    // both append branches (store.ts) is gone, replaced by a bare COALESCE(e.updated_at,
+    // e.created_at) + 1 row reference with no table read of its own — the two scope-exempt
+    // annotations it needed are gone with it. Every other content writer (updateEntryContent, the
+    // merge paths, undo's revertEntry, the mirror sync) picks up the same clamp for the digest
+    // guard's own change signal, but only ever reads its OWN row (e.updated_at/e.created_at), so
+    // none of them add a new corpus query either.
+    // MOVED 190/103/13/1 -> real --inventory output (merge of 36fe9dad, Builder B's Task 10): this
+    // branch's own R3-2/clamp changes above and Builder B's T-0100 SQLITE_TOOBIG fallback (two new
+    // by-id/scoped queries in trash.ts, both scope-checked) landed on independently-tracked running
+    // totals with different starting points (190/103/13/1 here, 193/105/13/1 -> 195/105/15/1 on
+    // Builder B's side) — recomputed against the real scanner output after combining rather than
+    // hand-reconciling the two totals, same reasoning as the Builder C merge above. Not exactly
+    // Builder B's own 195/105/15/1: the two branches' independent prior changes to shared callers
+    // (revertEntry, deleteForever) overlap by one query and one exemption once combined on the real
+    // tip, not a new finding — the checker exits clean.
+    // MOVED 194/104/15/1 -> 195/105/15/1 (T-0089.1.1, R4-V4): restoreRowVectors's own-miss branch
+    // gained a second by-id read of the row (same reasoning as its first, scope-exempt) to repair a
+    // clobbered vector and catch a chunk added between two of its own callers' reads.
+    // MOVED 195/105/15/1 -> 195/105/15/1, then 195/104/15/1 (T-0089.1.1, R4-C1): moveEntry's move-
+    // event INSERT changed its guard from `workspace_id <> target` to `workspace_id = row.workspace_id`
+    // (R4-C1's own fix) — the scanner's heuristic now reads that equality as a self-evident scope
+    // clause and no longer flags the query as needing the `scope-exempt` comment it previously
+    // carried; the query itself, and its actual scoping, are unchanged.
+    // Deliberate: +1 query and +1 scope-exempt (195/104/15/1 -> 196/105/15/1) for T-0089.1.1
+    // (adv-final MAJOR 1): restoreEntry's post-miss check now tells a genuinely vanished trash row
+    // apart from one that still exists under the id but no longer matches the rowid/deleted_at the
+    // caller's read authorized (a purge-then-reuse race) — a new by-id read, same exemption shape
+    // as the liveness checks already on this path.
+    // Deliberate: -1 query and -2 scope-exempt (196/105 -> 195/103) for the T-0089.1.1 close-out:
+    // deleteForever became trash-only (its live-row delete and its post-miss by-id probe are gone;
+    // one existence probe for a live row with the same id is added), and the nightly vectorize-pending
+    // read (src/vectorize/pending.ts) is new.
+    // Deliberate: +1 query and +1 scope-exempt (195/103 -> 196/104) for T-0089.1.1 round 2: import's
+    // entry insert now probes entries and entries_trash by id in the same statement (id uniqueness).
+    // Deliberate: +2 queries and +2 scope-checked (196/104/15 -> 198/104/17) for T-0089.1.1 round 3:
+    // the shared edge readability guard (graph/edges.ts) and import's scoped endpoint read, both
+    // scoped by the actor's readable workspaces bound as one JSON array.
+    // Deliberate: +1 query and +1 scope-exempt (198/104 -> 199/105) for T-0089.1.1 round 3: the
+    // nightly vectorize-pending pass reads lengths to plan, then the chosen rows' content by id.
+    // Deliberate: +1 query and +1 scope-exempt (199/105 -> 200/106) for T-0089.1.1 round 5:
+    // settleLostVectorCommit reads the row's vector_ids by id to settle a lost vector commit.
+    // Deliberate: -4 queries and -4 scope-exempt (200/106 -> 196/102) for T-0089.1.1 round 6: per-upload
+    // vector ids retire restoreRowVectors (its two by-id reads), settleLostVectorCommit's read, and the
+    // losing restore's liveness probe; a losing writer now only deletes its own upload.
+    // Deliberate: +1 query (148 -> 149) for Track 7: the decision ledger's
+    // calibration read (src/decisions/queries.ts calibrationQuery). It carries
+    // both the read scope and the actionable clause (personal workspace or
+    // authored by the caller, P7.7), so it needs no exemption.
+    // Deliberate: +1 scope-checked (12 -> 13), same query, after the QA review
+    // (18-t7-wow, finding 6): the scope clause is now assembled in JS
+    // (boundedScope collapses a many-team IN-list into one json_each binding
+    // to stay under D1's 100-bound-parameter limit), so the literal
+    // `${scope.clause}` interpolation the checker recognized is gone.
+    // Deliberate: +1 query (149 -> 150) for Track 7 Task 3 (src/standing/cache.ts, buildStandingCache): the standing
+    // cache build's one D1 read of a workspace's standing:active rows, scoped by `workspace_id = ?1`.
+    // MOVED (T-0089.1.1, merge of release/v4 ebc8010d): recomputed from a real check:scope run on the merged
+    // tree, not by adding two independently-tracked totals: Track 1's 196/102/17 plus release/v4's own queries
+    // (Track 7's calibration and standing-cache reads, lanes Q/R/D, BE-2) land at 198/102/18/1.
+    // MOVED 202/103/19/1 + 221/114/28/1 -> real --inventory output (merge of release/v4 d3b5b25c into
+    // v4/t7-c): this branch's own Track 7 deltas and release/v4's own independently-tracked deltas
+    // (T5 recall_log + T2 validity/supersede/retraction work, see history above) are
+    // independently-tracked deltas from the same base — recomputed against the real scanner output
+    // after combining rather than hand-reconciling the two.
+    // MOVED 227/115 -> 228/116 -> 227/115 (T-0089.4.2, Lane W follow-up, then withdrawn): the
+    // nightly quarantine-rescan pass's candidate SELECT briefly added +1 query/+1 documented
+    // exception; the too_long simplification removed rescan.ts (and the query) entirely.
+    // MOVED 227/115 -> 228/116 (T-0089.4.2, Codex review class A): restampVectorWorkspace's fresh
+    // isHeld re-check (src/capture/share.ts) adds one by-id SELECT of the vectors' owning rows.
+    // MOVED 218/114/27/1 -> real --inventory output (merge of release/v4 57583d10 into v4/t2-b): this
+    // branch's own Task B1/B2 validity deltas and release/v4's own independently-tracked deltas
+    // (BE-1's listTrash query, S1's changes query, and T-0089.2.1 lane A's supersede/retraction/
+    // cascade/updateEntryValidity scope-checked and scope-exempt sites) are independently-tracked
+    // deltas from the same base — recomputed against the real scanner output after combining rather
+    // than hand-reconciling the two.
+    // Deliberate: +2 queries, +2 scope-checked (220/114/28 -> 222/114/30) for Task B3 (src/recall/as-of.ts):
+    // the belief batch's two UNION branches are each scoped in JS (sScope/eScope ternaries the lexer
+    // cannot see); the entry_versions subqueries and the edges join ride on s.id/e.id, already-scoped
+    // by those same clauses.
+    // MOVED (merge of release/v4 d3b5b25c into v4/t2-b): R16 (T-0089.2.1) folds the superseded_by
+    // lookup into one shared fragment (src/memory/validity.ts supersededBySql) the four readers that
+    // spelled it out now interpolate instead; recomputed against the real scanner output on the
+    // merged tree rather than hand-combining both branches' independently-tracked deltas.
+    // MOVED 202/103/19/1 + 223/114/30/1 -> real --inventory output (merge of release/v4 c0eed34b into
+    // v4/t2-b): this branch's own Track 2 deltas and release/v4's own independently-tracked deltas
+    // (Track 7-C decisions/commitments wiring, see history above) are independently-tracked deltas
+    // from the same base — recomputed against the real scanner output after combining rather than
+    // hand-reconciling the two.
+    // Deliberate: +2 queries (229 -> 231) for Track 7 lane D Task 11 (standing fires in recall):
+    // GET /standing's own listing read (routes/standing.ts) and the standalone standing-arm fetch
+    // recall's early-return paths use (recall/search.ts); both scope in the literal clause the
+    // checker already recognizes, so neither adds to exempt or scope-checked.
+    // Deliberate: +1 query, +1 scope-checked (231/115/31 -> 232/115/32) for the same task's main
+    // hydration statement: it is now a ternary between the byte-identical (no-standing) SQL string
+    // and the standing-arm SQL string, two template literals where there was one, each carrying its
+    // own scope-checked/validity markers so neither span reads as unscoped on its own.
+    // MOVED (merge of release/v4 5a98da4a into v4/t7-d, lane W merged): v4/t34-w's own class E/A
+    // deltas (+1 query, +1 documented exception: restampVectorWorkspace's isHeld re-check) and lane
+    // D's own Task 11/12 deltas above are independently-tracked from the same base c870e5ac —
+    // recomputed against the real scanner output on the merged tree, not hand-combined.
+    // Deliberate: +4 queries, +1 documented exception, +3 scope-checked (233/116/32 -> 237/117/35)
+    // for T3/T4 lane S3 (5.9, src/memory/undo.ts): undoGroup's three per-family batched prescans
+    // each carry their own workspace_id IN (?) scope-checked comment, and lowestQualifyingVersion's
+    // single-id lookup is scope-exempt (its caller already confirmed that id is in the reader's
+    // scope, just above).
+    // Deliberate: -1 query, -1 documented exception (237/117/35 -> 236/116/35) for the reviewer's
+    // MINOR/MAJOR follow-up: lowestQualifyingVersion's separate scope-exempt lookup merged into
+    // classifyMember's single scope-checked chain scan (undo.ts), which now also carries the
+    // actor check that closes the widened-group-key MAJOR. Net one fewer statement, not a new one.
+    // Deliberate: +1 query, +1 documented exception (236/116/35 -> 237/117/35) for the Codex
+    // cross-vendor review (T-0102 B3, src/entries/import.ts): orphanEventsDelete clears an
+    // imported id's orphaned entry_events the same way orphanVersionsDelete already clears its
+    // orphaned entry_versions, scope-exempt by id for the same reason.
+    // Deliberate: +1 query, +1 scope-checked (237/117/35 -> 238/117/36) for the director follow-up
+    // (T-0102 MAJOR, cloud re-review): trash.ts's workspacePairs refactor keys the trash INSERT,
+    // the version DELETE, the edges DELETE and the entries DELETE on the identical (id, workspace)
+    // guard `retractionHook` already builds -- referencedEntryGuardSql's own EXISTS fragment is
+    // the new query, scope-checked (assembled here in JS from meta.workspacePairs).
+    // MOVED (director follow-up, T-0102 MINOR): orphanEventsDelete's own fix was itself wrong
+    // (deleting a permanent audit trail); it is gone, replaced by loadEventHistoryIds
+    // (src/entries/import.ts, scope-exempt by id, same shape) -- net -1 query, -1 exception
+    // against the total just above (238/117/36 -> 237/116/36).
+    // Deliberate: +2 queries, +2 documented exceptions (237/116/36 -> 239/118/36) for the round 3
+    // re-review's id-uniqueness fix (src/entries/import.ts, T-0089.1.1 close-out round 3):
+    //   1. ENTRY_INSERT_SQL_TEMPLATE reads entries and entries_trash now (`WHERE NOT EXISTS (...)
+    //      AND NOT EXISTS (...)`, checking both tables atomically in the same statement the id's
+    //      own row lands in) where it used to be a plain `VALUES` insert reading neither -- a
+    //      genuinely new query, scope-exempt by id the same way loadExistingIds' own pre-read is.
+    //   2. The new heldEventStatement's guarded `WHERE EXISTS (SELECT 1 FROM entries ...)` --
+    //      another new query, replacing auditEventStatement's unconditional form (src/lib/audit.ts,
+    //      no entries read, never counted here) so a held row's own audit event can never land on
+    //      an unrelated row that already owned a colliding id.
+    // loadEventHistoryIds (the query the comment above this one introduced) is gone -- finding 2 of
+    // the same round ("reverse the fresh-id remap") keeps a reused id outright now, with no history
+    // check to decide a remap -- but its own SELECT never read entries or entries_trash, so it was
+    // never counted here either way (net 0 on this total).
+    // Deliberate: +2 queries, +0 net exceptions (239/118/36 -> 241/118/36) for the round 4
+    // re-review MINOR ("every hard-delete path writes a life-end marker inside the same batch"):
+    // team-admin.ts's offboarding batch gained two new INSERT...SELECT statements, one reading
+    // entries and one reading entries_trash, each scope-exempt by the same reasoning as the rest
+    // of that batch's own by-workspace statements. trash.ts's own new tier-3 marker statement
+    // reads only json_each(...), no corpus table, so it adds no query here at all.
+    // Deliberate: +1 query, +1 documented exception (241/118/36 -> 242/119/36) for the round 5
+    // re-review MAJOR ("the tier-3 life-end marker insert has no guard"): that marker now selects
+    // FROM entries (guarded by entriesGuardSql, plus a NOT EXISTS on entries_trash) instead of a
+    // bare json_each(...) -- a genuinely new corpus-table read, scope-exempt the same way the
+    // entries DELETE it shares a guard with already is.
+    //
+    // Merge of release/v4 1cbc817b into v4/gate-fx2: brief/changes.ts's own changeEventRows carried
+    // an independent delta on this lane's own base (236/116/35 -> 237/116/36 -> 236/116/35, net no
+    // change): finding 7 added an inScope workspace semi-join as its own scope-checked query, R22
+    // (budget auditor MAJOR) then replaced that semi-join with a per-row JOIN inside the
+    // already-1,000-row-capped raw scan (still scope-checked, a JS-assembled fragment), landing
+    // back on the pre-finding-7 count underneath a materially cheaper query. Recomputed against the
+    // real scanner output on the merged tree, not hand-combined.
+    //
+    // Deliberate: +2 queries, +2 scope-checked (242/119/36 -> 244/119/38) for distillation's combined df statement
+    // (src/recall/distill.ts dfCountsStmt): its per-term FTS count fragment and the statement holding the entries pass,
+    // both scoped through scope.clause with numbered placeholders.
+    ).toEqual({ queries: 244, exempt: 119, checked: 38, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

@@ -50,10 +50,26 @@ describe("upstream release workflow safety", () => {
     expect(updateWorkflow).not.toContain("-- .github/workflows\n");
   });
 
-  it("emails a newly blocked release and leaves repeat runs deduplicated", () => {
+  it("blocks upstream workflow changes before staging a branch or attempting a bot push", () => {
+    expect(updateWorkflow).toContain('node scripts/check-upstream-workflows.mjs "$SOURCE_TAG"');
+    expect(updateWorkflow).toContain('GitHub Actions token cannot publish workflow changes');
+    expect(updateWorkflow).toContain('echo "pr_created=false" >> "$GITHUB_OUTPUT"');
+    expect(updateWorkflow).toContain('echo "workflow_review_required=true"');
+    expect(updateWorkflow).toContain("workflow_review_required: ${{ steps.merge.outputs.workflow_review_required }}");
+    expect(updateWorkflow).toContain("a maintainer must review and merge the release manually");
+    expect(updateWorkflow.indexOf('node scripts/check-upstream-workflows.mjs "$SOURCE_TAG"')).toBeLessThan(
+      updateWorkflow.indexOf('git checkout -B "$BRANCH_NAME"'),
+    );
+  });
+
+  it("emails a newly blocked release while leaving ordinary conflict PRs deduplicated", () => {
     expect(updateWorkflow).toContain("conflict_pr_created");
     expect(updateWorkflow).toContain("notification_status=\"blocked\"");
     expect(updateWorkflow).toContain("needs.update-from-upstream-release.outputs.conflict_pr_created == 'true'");
+    expect(updateWorkflow).toContain("needs.update-from-upstream-release.outputs.workflow_review_required == 'true'");
+    expect(updateWorkflow).toContain("WORKFLOW_REVIEW_REQUIRED");
+    expect(updateWorkflow).toContain("Upstream workflow files require maintainer credentials and review");
+    expect(updateWorkflow).toContain('action_url="${CONFLICT_PR_URL:-$RUN_URL}"');
   });
 
   it("records release metadata for clean and manually resolved updates", () => {
@@ -93,6 +109,7 @@ describe("upstream release workflow safety", () => {
   it("marks a blocked release run as failed after notification", () => {
     expect(updateWorkflow).toContain("mark-upstream-release-blocked:");
     expect(updateWorkflow).toContain("requires conflict resolution");
+    expect(updateWorkflow).toContain("${PR_URL:-$RUN_URL}");
   });
 
   it("does not deploy a clean upstream push twice", () => {

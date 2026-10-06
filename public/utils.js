@@ -180,6 +180,8 @@ function relativeTime(ts) {
  */
 const SOURCE_BADGE_I18N = {
   'claude code': 'common.sourceClaudeCode',
+  'codex session': 'common.sourceCodexSession',
+  'cursor session': 'common.sourceCursorSession',
   cli: 'common.sourceCli',
   email: 'common.sourceEmail',
   chat: 'common.sourceChat',
@@ -195,9 +197,22 @@ const SOURCE_BADGE_I18N = {
 const SOURCE_BADGES = [
   // Terminals and code tools. `cli` is the Second Brain CLI; an earlier version
   // of this table matched it to GitHub, which was simply wrong.
-  [/claude-code/, 'ti-terminal-2', 'claude code'],
   [/^cli$|command-line|terminal/, 'ti-terminal-2', 'cli'],
   [/git-hook|github|^git$/, 'ti-brand-github', 'github'],
+  // Every automatic session-end capture hook (Claude Code, Codex CLI, Cursor)
+  // shares one icon so "this was captured for you, not written by hand" reads
+  // at a glance, regardless of which client did it. A deliberate MCP write
+  // from the same client (plain "codex" / "cursor") is a different source on
+  // purpose (see TRANSCRIPT_SOURCES in src/constants.ts) and keeps its own
+  // brand icon below — the two must never collide, which is why each pair
+  // gets its own row rather than one shared pattern. These rows must stay
+  // ahead of the generic chatgpt/openai/codex row further down, which would
+  // otherwise catch every one of them and badge them all "chatgpt".
+  [/claude-code/, 'ti-history', 'claude code session'],
+  [/codex-session/, 'ti-history', 'codex session'],
+  [/cursor-session/, 'ti-history', 'cursor session'],
+  [/^codex$|codex-cli/, 'ti-brand-openai', 'codex'],
+  [/^cursor$/, 'ti-code', 'cursor'],
   // Mail, branded by provider where we know it.
   [/gmail/, 'ti-brand-google', 'gmail'],
   [/icloud/, 'ti-brand-apple', 'icloud'],
@@ -236,6 +251,36 @@ function sourceBadge(source) {
   // the width of the meta line.
   const label = raw.length > 18 ? raw.slice(0, 17) + '…' : raw
   return { icon: 'ti-writing', label }
+}
+
+/**
+ * Human names for a provider id, for use in a sentence ({provider} in
+ * trash.removedBySync, trash.mirrorBody, history.bySync, the undo.mirror
+ * toast): "by the Notion sync", not "by the notion sync". Badges
+ * (sourceBadge above) stay lowercase on purpose; this is prose only.
+ *
+ * The synced-integration entries mirror src/integrations/index.ts's
+ * registry (test/unit/provider-name-parity.test.ts pins that one-way: every
+ * registry id must be here, though not every id here has to be a synced
+ * integration - github, git-hook and obsidian are source values this table
+ * also names in a sentence without being something a person "connects").
+ * An id with no entry passes through unchanged rather than showing nothing.
+ */
+const PROVIDER_NAMES = {
+  notion: 'Notion',
+  'calendar-google': 'Google Calendar',
+  'calendar-outlook': 'Outlook Calendar',
+  'calendar-icloud': 'iCloud Calendar',
+  'email-gmail': 'Gmail',
+  'email-icloud': 'iCloud Mail',
+  obsidian: 'Obsidian',
+  github: 'GitHub',
+  'git-hook': 'Git',
+}
+
+function providerName(source) {
+  if (!source) return source
+  return PROVIDER_NAMES[source] || source
 }
 
 function toDateStr(d) {
@@ -432,7 +477,7 @@ function syncWorkspaceFilterChip(doc, chip, offsetTop) {
  * js/tags.js is gone; its callers pick these up as globals exactly as before.
  */
 
-/** Namespaces the Worker owns. Anything `prefix:value` shaped and reserved. */
+/** Pre-4.0 namespaces the Worker owns. Anything `prefix:value` shaped and reserved. */
 const SYSTEM_TAG_PREFIXES = [
   'kind:',
   'status:',
@@ -442,6 +487,66 @@ const SYSTEM_TAG_PREFIXES = [
   'capsule-slot:',
   'project:',
 ]
+
+/**
+ * Namespaces this 4.0 contract reserved (src/quarantine/tags.ts,
+ * src/tags/t7.ts). Unlike SYSTEM_TAG_PREFIXES above, a tag in one of these is
+ * hidden only when its VALUE also matches the system's own format -- see
+ * isRecognizedNewReservedValue below. A pre-existing user tag that merely
+ * looks like one of these (a genuine `outcome:won` or `confidence:high`
+ * someone tagged before 4.0) shows as an ordinary tag instead. Stored data
+ * is never rewritten either way.
+ */
+const NEW_RESERVED_TAG_PREFIXES = [
+  // Track 4 (self-protecting): src/quarantine/tags.ts
+  'quarantine:',
+  'edited-canonical:',
+  // Track 7 (standing memory, decision ledger, commitments): src/tags/t7.ts
+  'standing:',
+  'ledger:',
+  'confidence-source:',
+  'confidence:',
+  'outcome:',
+  'review-rearms:',
+  'counterparty:',
+]
+
+/** Same slug grammar as PROJECT_SLUG_RE below, and src/tags/t7.ts's T7_SLUG_RE. */
+const T7_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const CONFIDENCE_VALUES = new Set([
+  '0.05', '0.10', '0.15', '0.20', '0.25', '0.30', '0.35', '0.40', '0.45',
+  '0.50', '0.55', '0.60', '0.65', '0.70', '0.75', '0.80', '0.85', '0.90', '0.95',
+])
+
+/**
+ * Mirrors isRecognizedReservedTagFormat (src/tags/system.ts) -- this file
+ * cannot import TypeScript, so the guard test checks the two stay in step.
+ * `t` is already trimmed and lowercased by the caller.
+ */
+function isRecognizedNewReservedValue(t) {
+  if (t.startsWith('quarantine:')) {
+    const v = t.slice('quarantine:'.length)
+    return v === 'instruction' || v === 'hidden' || v === 'burst' || v === 'capsule' || v === 'too_long'
+  }
+  if (t.startsWith('edited-canonical:')) return /^\d{4}-\d{2}-\d{2}$/.test(t.slice('edited-canonical:'.length))
+  if (t.startsWith('standing:')) return t.slice('standing:'.length) === 'active'
+  if (t.startsWith('ledger:')) return t.slice('ledger:'.length) === 'decision'
+  if (t.startsWith('confidence-source:')) {
+    const v = t.slice('confidence-source:'.length)
+    return v === 'stated' || v === 'inferred'
+  }
+  if (t.startsWith('confidence:')) return CONFIDENCE_VALUES.has(t.slice('confidence:'.length))
+  if (t.startsWith('outcome:')) {
+    const v = t.slice('outcome:'.length)
+    return v === 'right' || v === 'wrong' || v === 'mixed' || v === 'unknown'
+  }
+  if (t.startsWith('review-rearms:')) {
+    const v = t.slice('review-rearms:'.length)
+    return v === '1' || v === '2'
+  }
+  if (t.startsWith('counterparty:')) return T7_SLUG_RE.test(t.slice('counterparty:'.length))
+  return false
+}
 
 /** Membership tag written on a memory that belongs to a project: `project:<slug>`. */
 const PROJECT_TAG_PREFIX = 'project:'
@@ -461,6 +566,14 @@ const SYSTEM_TAG_NAMES = new Set([
   'rolled-up',
   'duplicate-candidate',
   'contradiction-resolved',
+  'user-edited',
+  'conflict-held',
+  // Track 7's inbound-commitment marker: a bare word, not a namespace (P7.3).
+  'owed-to-me',
+  // T-0101.6.1: the retracted-source cascade's own marker (src/tags/system.ts's
+  // RETRACTED_SOURCE_TAG) - the Check chip (validityChipHtml) already says this row
+  // needs a look, so the raw tag would be the same fact said twice, once unreadably.
+  'retracted-source',
 ])
 
 /**
@@ -494,7 +607,11 @@ function isSystemTag(tag) {
   if (!t) return true
   if (SYSTEM_TAG_NAMES.has(t)) return true
   if (isMachineIdentifier(t)) return true
-  return SYSTEM_TAG_PREFIXES.some((p) => t.startsWith(p))
+  if (SYSTEM_TAG_PREFIXES.some((p) => t.startsWith(p))) return true
+  // A 4.0-reserved prefix hides only when the value also matches the
+  // system's own format -- see NEW_RESERVED_TAG_PREFIXES above.
+  if (NEW_RESERVED_TAG_PREFIXES.some((p) => t.startsWith(p))) return isRecognizedNewReservedValue(t)
+  return false
 }
 
 /** The tags worth showing a person, in their original order. */
@@ -962,9 +1079,91 @@ function layerChipHtml(entry, teamMode) {
   return `<span class="tag-chip tag-chip--shared" title="${escAttr(t('memories.sharedTitle'))}"><i class="ti ti-users-group"></i> ${escHtml(who)}</span>`
 }
 
+/**
+ * T7-E Task 14 (15-t7-wow-spec.md 7.3): a "Standing" chip, icon plus label,
+ * never color alone, on cards in the Memories list, board cards and recall
+ * results whose tags carry the worker-owned `standing:active` marker.
+ */
+function standingBadgeHtml(tags) {
+  const list = Array.isArray(tags) ? tags : []
+  if (!list.some((tag) => String(tag).toLowerCase() === 'standing:active')) return ''
+  return `<span class="tag-chip tag-chip--standing" title="${escAttr(t('standing.badgeTitle'))}"><i class="ti ti-pin"></i> ${escHtml(t('standing.badge'))}</span>`
+}
+
+/**
+ * T3/T4 lane S5 (16-t3-t4-trust-spec.md, `quarantine:<reason>`): the row's
+ * hold reason, or null when it carries none - mirrors heldReason
+ * (src/quarantine/tags.ts) in plain JS, since this file cannot import
+ * TypeScript.
+ */
+const HOLD_REASONS = ['instruction', 'hidden', 'burst', 'capsule', 'too_long']
+function heldReason(tags) {
+  const list = Array.isArray(tags) ? tags : []
+  for (const tag of list) {
+    const t = String(tag).trim().toLowerCase()
+    if (!t.startsWith('quarantine:')) continue
+    const reason = t.slice('quarantine:'.length)
+    if (HOLD_REASONS.includes(reason)) return reason
+  }
+  return null
+}
+
+/**
+ * S5 (UX-E.2): a "Held" chip, icon plus label, never color alone, on cards
+ * in the Memories list whose tags carry a worker-owned `quarantine:<reason>`
+ * marker. `too_long` reads "Held: too long" (deck section 9); every other
+ * reason reads the plain "Held".
+ */
+function heldChipHtml(tags) {
+  const reason = heldReason(tags)
+  if (!reason) return ''
+  const label = reason === 'too_long' ? t('held.tooLongChip') : t('held.chip')
+  return `<span class="tag-chip tag-chip--held"><i class="ti ti-eye-off"></i> ${escHtml(label)}</span>`
+}
+
+/**
+ * T-0101.6.1 (spec 14 section 7.6): Replaced, Ended or Check - the three
+ * validity states worth a glance on a card (recent.js's list cards and
+ * recall.js's result cards both call this, and recall.js loads before
+ * recent.js in index.html, so this lives beside the other shared chip
+ * helpers rather than in either caller). Current and Wrong show nothing here
+ * (Wrong already has its own status control on the sheet); a chip on every
+ * card would be no signal at all, the same restraint heldChipHtml above
+ * applies. Checked first: a row can be both replaced and built on a
+ * retracted source, and "needs a look" outranks "superseded".
+ */
+function validityChipHtml(entry) {
+  if (entry.retracted_source) {
+    return `<span class="tag-chip validity-chip validity-chip--check">${escHtml(t('validity.chipCheck'))}</span>`
+  }
+  if (entry.validity_state === 'replaced') {
+    return `<span class="tag-chip validity-chip validity-chip--replaced">${escHtml(t('validity.chipReplaced'))}</span>`
+  }
+  if (entry.validity_state === 'ended') {
+    return `<span class="tag-chip validity-chip validity-chip--ended">${escHtml(t('validity.chipEnded'))}</span>`
+  }
+  return ''
+}
+
+/**
+ * S5 (5.7): the canonical-edit label's date ("YYYY-MM-DD"), or null when the
+ * row carries none - mirrors editedCanonicalAt (src/quarantine/tags.ts).
+ * The caller checks the date against EDITED_CANONICAL_LABEL_DAYS (7); this
+ * function only reads the tag.
+ */
+function editedCanonicalAt(tags) {
+  const list = Array.isArray(tags) ? tags : []
+  for (const tag of list) {
+    const t = String(tag).trim()
+    if (!t.toLowerCase().startsWith('edited-canonical:')) continue
+    return t.slice('edited-canonical:'.length)
+  }
+  return null
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   // downloadTextFile is deliberately absent: it needs a live URL and Blob, and
   // it is exercised through its two callers (exportMemories in js/settings.js
   // and exportActivityCsv in js/activity.js) rather than in isolation.
-  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, projectChipsHtml, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml };
+  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, projectChipsHtml, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml, standingBadgeHtml, heldReason, heldChipHtml, editedCanonicalAt, providerName };
 }

@@ -1,0 +1,89 @@
+/* T3/T4 S4 (16-t3-t4-trust-spec.md ~1341): its own small board panel, above
+   "Needs a decision" (UX review: AI edits are already live, not a decision).
+   boardPanel() already supplies the title/subtitle head and the panel card;
+   this only styles the summary line, the Review button (main.css's .attn,
+   used context-free here, the same class the decide panel's own rows use)
+   and the expanded rows. */
+
+/* Full width at every breakpoint (UI review, S4, MINOR): the panel above
+   "Needs a decision" must never share a row with it. No span12 class exists
+   in board.css (nothing else needs the full row), so this panel states its
+   own width directly rather than adding one for a single caller. */
+[data-panel="ai-changes"] {
+  grid-column: span 12;
+}
+
+.ai-changes-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-changes-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ai-changes-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.ai-change-row {
+  border: 1px solid var(--line);
+  border-radius: var(--r-card, 10px);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-change-meta {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ai-change-preview {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ai-change-btn {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-button);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.ai-change-btn:hover {
+  border-color: var(--text-secondary);
+}
+
+.ai-change-lock-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.ai-change-group {
+  border-style: dashed;
+}
+
+@media (max-width: 480px) {
+  .ai-change-row {
+    padding: 10px;
+  }
+}

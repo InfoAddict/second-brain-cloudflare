@@ -674,7 +674,7 @@ export function makeReplayAi(opts: {
   };
   const arm: LlmTagsArm = opts.llmTags ?? "stand-in";
   // `quiet` keeps the stand-in's own embedding lookups out of the per-query call list: production pays for the LLM call, not these.
-  const exec = async (model: string, input: AiInput, quiet = false): Promise<unknown> => {
+  const execOne = async (model: string, input: AiInput, quiet = false): Promise<unknown> => {
     const record = (call: AiCall) => { if (!quiet) calls.push(call); };
     const kind = kindOf(input);
     if (kind !== "llm") {
@@ -725,7 +725,11 @@ export function makeReplayAi(opts: {
       misses.set(key, { model, preview, neurons });
       const cost = price();
       record({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: "dry" });
-      if (kind === "embedding") return { data: [hashVector(text, EMBEDDING_DIMS[model] ?? 384)] };
+      // Codex review, T-0102 F3: storeEntry now always batchEmbeds (one AI call per chunk batch,
+      // not per chunk), so a dry-mode embedding call can carry more than one text; one vector per
+      // text, like every sibling mock in this eval suite (runner.test.ts, prepare.test.ts)
+      // already does, not one vector for the whole (cache-key-only) joined string.
+      if (kind === "embedding") return { data: input.text!.map(t => hashVector(t, EMBEDDING_DIMS[model] ?? 384)) };
       if (kind === "llm") return input.stream ? sseStream("") : { response: "" };
       if (opts.dryOther) return opts.dryOther(model, input);
       throw new ReplayMissError(model, key, preview);
@@ -757,6 +761,25 @@ export function makeReplayAi(opts: {
     const cost = price(stored);
     record({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: ranLive ? "live" : "replay" });
     return respond(input, stored);
+  };
+  /**
+   * storeEntry now always batchEmbeds (T-0102 F3): a production embedding call can carry more than
+   * one text in one env.AI.run. The replay store keys and records every embedding call it has ever
+   * seen one text at a time (embedMany's own pre-batching shape, and still every non-embedding call
+   * today) -- a batched call's own joined-array key never matches any of those single-text rows, so
+   * batching alone turned every replay of a committed fixture into a cache miss.
+   *
+   * Splitting here, at the one entry point every call (batched or not) goes through, means a
+   * batched embedding call looks up and records each of its texts on its own -- exactly the rows a
+   * single-text call already reads and writes -- so the committed fixture, recorded before batching
+   * existed, keeps serving replays without being touched, whatever a caller's own batch size is.
+   */
+  const exec = async (model: string, input: AiInput, quiet = false): Promise<unknown> => {
+    if (kindOf(input) !== "embedding" || (input.text?.length ?? 0) <= 1) return execOne(model, input, quiet);
+    const vectors = await Promise.all(
+      input.text!.map(async t => ((await execOne(model, { ...input, text: [t] }, quiet)) as { data: number[][] }).data[0]),
+    );
+    return { data: vectors };
   };
   const run = (model: string, input: AiInput) => exec(model, input);
   return {

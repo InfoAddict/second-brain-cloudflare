@@ -119,6 +119,7 @@ export async function settleLevels(env: Env, rows: KeywordRow[], terms: readonly
   const chunks: string[][] = [];
   for (let i = 0; i < open.length; i += size) chunks.push(open.slice(i, i + size).map(r => r.id));
   // scope-exempt: by-id: every id here came from the scoped keyword read that produced `rows`; the scope clause is left out, as it is for the reranker's by-id read, so SQLite does primary-key lookups
+  // validity: current: every id here already passed the current-only keyword scan that produced `rows` (5.5); this only settles match levels for candidates already filtered
   const statements = chunks.map(ids => env.DB.prepare(`SELECT id, content FROM entries WHERE id IN (${ids.map(() => "?").join(", ")}) AND (${where})`).bind(...ids, ...patterns));
   const results = statements.length === 1 ? [await statements[0].all()] : await env.DB.batch(statements);
   const byId = new Map(open.map(r => [r.id, r]));

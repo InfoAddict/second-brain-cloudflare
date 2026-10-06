@@ -106,6 +106,22 @@ describe("MCP audit trail", () => {
     expect(trail.some(e => e.entry_id === id && e.event === "status_changed")).toBe(true);
   });
 
+  it("records channel mcp in every audit payload", async () => {
+    await withClient(env, identity, async (client) => {
+      const stored = await client.callTool({ name: "remember", arguments: { content: "Memory that touches every audited tool" } });
+      const id = /ID: ([^\s]+)/.exec((stored.content as { text: string }[])[0].text)?.[1] ?? "";
+      await client.callTool({ name: "append", arguments: { id, addition: "follow-up detail" } });
+      await client.callTool({ name: "update", arguments: { id, content: "Replaced body for channel audit" } });
+      await client.callTool({ name: "set_status", arguments: { id, status: "canonical" } });
+      await client.callTool({ name: "forget", arguments: { id } });
+    });
+    await new Promise(r => setTimeout(r, 10));
+    const { results } = await env.DB.prepare(`SELECT event, payload FROM entry_events`).all();
+    const rows = results as { event: string; payload: string }[];
+    expect(rows.map(r => r.event).sort()).toEqual(["appended", "created", "deleted", "status_changed", "updated"]);
+    for (const r of rows) expect(JSON.parse(r.payload).channel).toBe("mcp");
+  });
+
   it("records deleted on forget", async () => {
     let id = "";
     await withClient(env, identity, async (client) => {

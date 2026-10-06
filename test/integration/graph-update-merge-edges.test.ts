@@ -92,7 +92,7 @@ describe("edges from the update and merge paths", () => {
       sqlite.seed({ id: "friend", content: "a related memory", createdAt: 900 });
       const env = envWith([{ id: "friend", score: 0.85 }], "3");
 
-      const result = await updateEntryContent(env, "edited", "an entirely different subject");
+      const result = await updateEntryContent(env, "edited", "an entirely different subject", undefined, undefined, undefined, { workspaceId: "", actorId: "u1" }, { actorId: "u1", channel: "rest" }, "");
       expect(result.status).toBe("updated");
 
       expect((await edges()).flatMap(e => [e.source_id, e.target_id])).toContain("friend");
@@ -103,7 +103,7 @@ describe("edges from the update and merge paths", () => {
       sqlite.seed({ id: "friend", content: "a related memory", createdAt: 900 });
       const env = envWith([{ id: "friend", score: 0.85 }], "3");
 
-      await updateEntryContent(env, "edited", "an entirely different subject");
+      await updateEntryContent(env, "edited", "an entirely different subject", undefined, undefined, undefined, { workspaceId: "", actorId: "u1" }, { actorId: "u1", channel: "rest" }, "");
 
       // One: the re-embed the update already owed. The neighbour query reuses
       // that vector rather than embedding the same text a second time.

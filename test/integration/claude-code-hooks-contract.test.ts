@@ -28,12 +28,14 @@ const FIXTURE = join(HOOKS, "fixtures/sample-transcript.jsonl");
 const ctx = { waitUntil: (_: Promise<any>) => {} } as ExecutionContext;
 
 interface Captured { method: string; url: string; body: string }
-interface StubBehaviour { healthVersion?: string; recallStatus?: number; recallResults?: unknown[]; delayMs?: number; unknownProject?: boolean; badProject?: boolean }
+interface StubBehaviour { healthVersion?: string; recallStatus?: number; recallResults?: unknown[]; briefStatus?: number; briefDelayMs?: number; delayMs?: number; recallDelayMs?: number; unknownProject?: boolean; badProject?: boolean }
 
 let server: Server;
 let origin = "";
 let captured: Captured[] = [];
 let behaviour: StubBehaviour = {};
+let recallReplied = false;
+let briefBeforeRecallReply = false;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -41,6 +43,7 @@ beforeAll(async () => {
     req.on("data", c => { body += c; });
     req.on("end", () => {
       captured.push({ method: req.method ?? "", url: req.url ?? "", body });
+      if (req.url?.startsWith("/brief")) briefBeforeRecallReply = !recallReplied;
       const reply = (status: number, json: unknown) => {
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify(json));
@@ -48,6 +51,7 @@ beforeAll(async () => {
       const send = () => {
         if (req.url?.startsWith("/health")) return reply(200, { ok: true, version: behaviour.healthVersion ?? "3.0.0" });
         if (req.url?.startsWith("/recall")) {
+          recallReplied = true;
           if (behaviour.recallStatus && behaviour.recallStatus >= 400) return reply(behaviour.recallStatus, { ok: false, code: "unauthorized" });
           if (behaviour.unknownProject && req.url.includes("project="))
             return reply(404, { ok: false, error: 'unknown project "x"', known_projects: [] });
@@ -55,9 +59,17 @@ beforeAll(async () => {
             return reply(400, { ok: false, code: "invalid_project" });
           return reply(200, { ok: true, results: behaviour.recallResults ?? [{ id: "m1", content: "a remembered thing", truncated: false }], insight: null });
         }
+        if (req.url?.startsWith("/brief")) {
+          if (behaviour.unknownProject && req.url.includes("project="))
+            return reply(404, { ok: false, error: 'unknown project "x"', known_projects: [] });
+          if (behaviour.briefStatus) return reply(behaviour.briefStatus, { ok: false });
+          return reply(200, { ok: true, attention: { due: 2 }, loops: { open: 1, items: [{ id: "task-1", content: "Send invoice" }] } });
+        }
         return reply(200, { ok: true, id: "new-id" });
       };
-      behaviour.delayMs ? setTimeout(send, behaviour.delayMs) : send();
+      const delay = req.url?.startsWith("/recall") ? behaviour.recallDelayMs ?? behaviour.delayMs
+        : req.url?.startsWith("/brief") ? behaviour.briefDelayMs ?? behaviour.delayMs : behaviour.delayMs;
+      delay ? setTimeout(send, delay) : send();
     });
   });
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
@@ -77,6 +89,8 @@ let project: string;
 beforeEach(async () => {
   captured = [];
   behaviour = {};
+  recallReplied = false;
+  briefBeforeRecallReply = false;
   scratch = mkdtempSync(join(tmpdir(), "sb-hooks-"));
   project = join(scratch, "brain-app");
   mkdirSync(project);
@@ -134,6 +148,13 @@ describe("session-start.js", () => {
 
     const recalls = captured.filter(c => c.url.startsWith("/recall?"));
     expect(recalls.length).toBeGreaterThanOrEqual(1);
+    const briefs = captured.filter(c => c.url.startsWith("/brief?"));
+    expect(briefs).toHaveLength(1);
+    expect(new URL(`http://x${briefs[0].url}`).searchParams.get("project")).toBeTruthy();
+    // preview keeps the hook from advancing the dashboard's resurface rotation
+    expect(new URL(`http://x${briefs[0].url}`).searchParams.get("preview")).toBe("1");
+    expect(r.stdout).toContain("Due: 2");
+    expect(r.stdout).toContain("Open commitments: 1");
     const url = new URL(`http://x${recalls[0].url}`);
     expect(url.searchParams.get("query")).toBeTruthy();
     expect(url.searchParams.get("workspace")).toBe("personal");
@@ -155,6 +176,17 @@ describe("session-start.js", () => {
       expect(res.status, c.url).toBe(200);
       expect((await res.json() as any).ok).toBe(true);
     }
+    for (const c of briefs) {
+      const res = await replay(c);
+      expect(res.status, c.url).toBe(200);
+    }
+  });
+
+  it("starts the brief request before recall finishes", async () => {
+    behaviour.recallDelayMs = 200;
+    const r = await runHook("session-start.js", startPayload());
+    expect(r.code).toBe(0);
+    expect(briefBeforeRecallReply).toBe(true);
   });
 
   it("falls back from the project arm to free text when the project arm is empty", async () => {
@@ -164,6 +196,43 @@ describe("session-start.js", () => {
     expect(recalls).toHaveLength(2);
     expect(new URL(`http://x${recalls[0].url}`).searchParams.get("project")).toBeTruthy();
     expect(new URL(`http://x${recalls[1].url}`).searchParams.get("project")).toBeNull();
+  });
+
+  it("asks for the lean brief in the same workspace as recall", async () => {
+    await runHook("session-start.js", startPayload());
+    const brief = new URL(`http://x${captured.find(c => c.url.startsWith("/brief?"))!.url}`).searchParams;
+    expect(brief.get("lean")).toBe("1");
+    expect(brief.get("workspace")).toBe("personal");
+  });
+
+  it("falls back to an unscoped brief when the project is not registered, as recall does", async () => {
+    behaviour.unknownProject = true;
+    const r = await runHook("session-start.js", startPayload());
+    const briefs = captured.filter(c => c.url.startsWith("/brief?")).map(c => new URL(`http://x${c.url}`).searchParams);
+    expect(briefs).toHaveLength(2);
+    expect(briefs[0].get("project")).toBeTruthy();
+    expect(briefs[1].get("project")).toBeNull();
+    expect(briefs[1].get("workspace")).toBe("personal");
+    expect(r.stdout).toContain("Due: 2");
+  });
+
+  it("does not wait long for a slow brief once recall is done", async () => {
+    behaviour.briefDelayMs = 8000;
+    const started = Date.now();
+    const r = await runHook("session-start.js", startPayload());
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("a remembered thing");
+    expect(r.stdout).not.toContain("Due:");
+    expect(Date.now() - started).toBeLessThan(5500);
+  }, 15000);
+
+  it("prints recall when the brief request fails", async () => {
+    behaviour.briefStatus = 500;
+    const r = await runHook("session-start.js", startPayload());
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("a remembered thing");
+    expect(r.stdout).not.toContain("Due:");
+    expect(captured.filter(c => c.url.startsWith("/brief?"))).toHaveLength(1);
   });
 
   it("falls back to free text when the project is not registered (404)", async () => {

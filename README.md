@@ -75,21 +75,28 @@ Search now finds the hard things: exact names, ticket numbers, versions, and phr
 
 | Tool | What it does |
 | --- | --- |
-| `remember` | Store ideas, decisions, preferences, and project context |
+| `remember` | Store ideas, decisions, preferences, and project context; optionally when a fact became or stopped being true |
 | `append` | Add a timestamped update to an existing memory |
-| `update` | Replace an existing memory |
-| `recall` | Find memories by meaning rather than exact wording |
+| `update` | Replace an existing memory; optionally set when it stopped being true |
+| `recall` | Find memories by meaning rather than exact wording; optionally what was true as of a past date |
+| `brief` | Show due items, open commitments, stale memories, and pending insights |
+| `resolve` | Settle one tracked task, date, insight, or stale fact |
+| `digest` | Read the latest existing automatic summary for a project or tag |
+| `history` | Read a memory's recorded changes, with the text before each one |
 | `list_recent` | Browse recently saved memories |
 | `list_teams` | List shared teams you belong to (names and ids). In v3.0.0 this is one team; used by MCP clients for future multi-team support |
 | `list_projects` | List projects in scope, with display names, descriptions, and memory counts |
 | `get_prompt_capsule` | Read a deterministic core or project context projection for a gateway-controlled prompt prefix |
 | `get` | Read one memory by ID |
-| `forget` | Permanently delete a memory |
+| `forget` | Move a memory to the trash (undo brings it back) |
+| `undo` | Reverse the most recent change to a memory, or restore one from the trash |
 | `set_status` | Mark a memory `canonical`, `draft`, or `deprecated` |
 | `link` | Add an explicit relationship between two memories |
 | `unlink` | Remove a relationship between two memories |
 | `connections` | List the memories connected to a memory |
 | `share` | Move a memory between the Personal and Shared layers |
+
+A memory keeps the dates it was true for: recall with `as_of` answers what was actually true on a past date, and a fact that a newer one replaces is kept as history instead of being marked wrong.
 
 On a team brain, memory tools accept a `workspace` of `personal` or `company` when you want to choose a layer explicitly. `company` is the wire value for the Shared team layer. Without `workspace`, captures use the member and team defaults, while recall searches everything that person is allowed to see.
 
@@ -246,6 +253,8 @@ https://YOUR-WORKER-URL/mcp
 
 Use OAuth where the client supports it, or an `Authorization: Bearer <token>` header for static clients. Query-string token authentication was removed in v3 because URLs can leak through browser history and logs.
 
+Add `?client=<name>` to the MCP URL so the dashboard can name the tool that made each change.
+
 Having connection issues? See [Connect to AI Clients → Troubleshooting](https://github.com/rahilp/second-brain-cloudflare/wiki/Connect-to-AI-Clients#troubleshooting) (Opera warnings, Cursor OAuth, Claude Code tool visibility).
 
 ### 3. Manual deployment
@@ -290,7 +299,13 @@ A successful response looks like `{"ok":true,"id":"..."}`.
 - **Calendar and email:** Google, Outlook, iCloud, and Gmail integrations
 - **iPhone and iPad:** Voice, text, and share-sheet shortcuts in [`integrations/ios-shortcuts/`](integrations/ios-shortcuts/)
 - **Claude Code:** session hooks that recall project context on start and save the conversation on exit — [`integrations/claude-code-hooks/`](integrations/claude-code-hooks/)
+- **Codex CLI:** session-start recall plus session-end capture ([`integrations/codex-cli-hooks/`](integrations/codex-cli-hooks/))
+- **Cursor:** session-start recall plus session-end capture; pair it with the MCP `recall` tool for reliable recall ([`integrations/cursor-hooks/`](integrations/cursor-hooks/))
+- **VS Code Copilot (Local harness):** session-start recall ([`integrations/vscode-copilot-hooks/`](integrations/vscode-copilot-hooks/))
+- **Gemini CLI:** session-start recall ([`integrations/gemini-cli-hooks/`](integrations/gemini-cli-hooks/))
 - **Dashboard:** Capture, recall, browse, graph, share, back up, and restore from the built-in web interface
+
+Not yet supported, revisit later: **Windsurf** (no documented session-start context injection event, only a post-response hook); **OpenCode** and **Oh My Pi** (plugin/event-callback APIs, not stdin/stdout scripts, so they need their own integration model rather than an adapter like the ones above).
 
 See [Capture from Anywhere](https://github.com/rahilp/second-brain-cloudflare/wiki/Capture-from-Anywhere) for setup and usage instructions.
 
@@ -320,6 +335,32 @@ See [GitHub Releases](releases) for release notes and previous versions.
 - [Frequently Asked Questions](https://github.com/rahilp/second-brain-cloudflare/wiki/Frequently-Asked-Questions): Design, privacy, costs, and common questions
 - [Obsidian Plugin](https://github.com/rahilp/second-brain-cloudflare/wiki/Obsidian-Plugin): Installation, configuration, and sync modes
 - [Local Development](https://github.com/rahilp/second-brain-cloudflare/wiki/Local-Development): Run the Worker locally and share it for testing
+
+## Local UX QA harness
+
+Runs the real Worker and dashboard offline, for a UI change or a full walkthrough of the app, with no Cloudflare account of any kind, ever. `wrangler dev` cannot do this on its own: a real Workers AI binding needs a Cloudflare login even in local dev. This harness never asks for one.
+
+```bash
+npm run dev:local                 # boots the Worker + dashboard at http://localhost:8788
+npm run ux:seed -- solo           # seeds a 3.7.0-shaped brain and boots the real 4.0 upgrade against it
+npm run ux:seed -- team           # the same, plus a teammate, for the shared-history rows
+UX_BRAIN=3.7-solo npm run dev:local   # run against a seeded brain instead of an empty one
+npm run ux:shot -- --name=home --caption="Dashboard home"   # one screenshot, on demand (see below)
+npm run ux:walkthroughs           # the scripted dashboard journeys (map section 6.2), with screenshots
+npm run ux:chat                   # scripted MCP calls per AI_Instructions file (map section 6.4)
+```
+
+What it uses instead of a Cloudflare account: real local D1 and KV (via wrangler's `getPlatformProxy`), real deterministic local embeddings (the same BGE weights Workers AI serves, run in-process through `@huggingface/transformers`, the eval harness's own local-model runtime), a real cosine-similarity Vectorize double, and fixed canned replies for the handful of LLM-style calls (classify, merge decisions, digest synthesis) a real local model cannot practically stand in for. Everything else, the dashboard, the REST routes, the MCP tools, is the genuine Worker code.
+
+`npm run ux:shot` takes one screenshot of a named screen or state on demand (any lane can use it for a before/after pair), for example:
+
+```bash
+npm run ux:shot -- --name=trash-view --caption="New Trash view" --path=/#trash --viewport=mobile --locale=it
+```
+
+Screenshots never land in this repository: they are written to `docs/superpowers/screenshots/v4/harness/<run-id>/` outside `public/`, which the project's `docs/*` gitignore rule already excludes, alongside an `index.md` captioning each one.
+
+A journey in `npm run ux:walkthroughs` that reaches a feature not yet built on the current branch (the dashboard timeline, trash view, or settings panel, for example) reports PENDING with the exact missing UX item, not a failure; the same script turns green the moment that feature ships. None of this runs as part of `npm test` or CI's default job: it needs a local Chrome or Chromium (already present on GitHub's `ubuntu-latest` runners and most Linux desktops) and takes real wall-clock time to boot a browser and a local D1, so it stays behind its own npm scripts.
 
 ## Technology and privacy
 

@@ -52,6 +52,45 @@ export function zonedMidnightMs(year: number, month0: number, day: number, timez
   return zonedTimeMs(year, month0, day, 0, 0, 0, timezone);
 }
 
+export interface ZonedDateParts {
+  year: number;
+  month0: number;
+  day: number;
+  /** 0 = Sunday, matching Date.prototype.getDay(). */
+  weekday: number;
+}
+
+const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+// Intl.DateTimeFormat construction is expensive relative to the rest of this
+// module's work, and parseTimePhrase calls zonedDateParts once per recall —
+// thousands of times in a corpus eval run. Formatters are stateless per
+// timezone, so one per zone is cached and reused for the process lifetime.
+const dateFormatterCache = new Map<string, Intl.DateTimeFormat>();
+function dateFormatterFor(timezone: string): Intl.DateTimeFormat {
+  let formatter = dateFormatterCache.get(timezone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric", month: "2-digit", day: "2-digit", weekday: "short",
+    });
+    dateFormatterCache.set(timezone, formatter);
+  }
+  return formatter;
+}
+
+/** The calendar date and weekday of `utcMs`, as read on a wall clock in `timezone`. */
+export function zonedDateParts(utcMs: number, timezone: string): ZonedDateParts {
+  const parts = dateFormatterFor(timezone).formatToParts(utcMs);
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? "";
+  return {
+    year: Number(get("year")),
+    month0: Number(get("month")) - 1,
+    day: Number(get("day")),
+    weekday: WEEKDAY_INDEX[get("weekday")] ?? 0,
+  };
+}
+
 /** Matches a bare ISO date or datetime with no offset — the two shapes this module anchors. */
 const BARE_DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/;
 

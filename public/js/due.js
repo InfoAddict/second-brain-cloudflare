@@ -60,17 +60,89 @@ function dueWhenLine(item) {
   return t('due.due', { date: formatDateUI(item.when_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
 }
 
+/** The stored when_label's hardcoded English "Review: " prefix (src/decisions/capture.ts's reviewLabel), stripped so the sheet can re-add it through i18n (18-copy-deck.md section 5's note: Italian must read "Da rivedere", not the stored word). */
+const DUE_REVIEW_PREFIX_RE = /^Review:\s*/
+
+/** A decision row's own text, with i18n's own "Review:" prefix rather than the stored (English-only) one. */
+function dueDecisionLabel(item) {
+  const bare = (item.label || '').replace(DUE_REVIEW_PREFIX_RE, '')
+  return t('due.reviewLabel', { label: bare })
+}
+
+/**
+ * "Owed to you · from Priya" for an inbound commitment, or "Owed to you"
+ * alone when the counterparty tag yielded no usable name (Design 5.1's own
+ * fallback), derived from `tags`, which GET /due already returns on every
+ * row (Design 5.3: kind is derived in JS for the same reason).
+ *
+ * UX advisor round 2: reuses loops.fromName rather than its own "Owed to
+ * you by {name}" wording, so the counterparty reads as "from Priya" the
+ * same way in the loops sheet, the loops panel and here.
+ */
+function dueInboundLine(item) {
+  const name = typeof loopCounterpartyOf === 'function' ? loopCounterpartyOf(item.tags) : ''
+  return name ? `${t('due.owedToYou')} · ${t('loops.fromName', { name })}` : t('due.owedToYou')
+}
+
+/** Reads whatever the row's own note input currently holds, trimmed; '' when the row has none or it was never expanded. */
+function dueNoteValue(id) {
+  const input = document.getElementById(`due-note-${id}`)
+  return input && !input.hidden ? String(input.value || '').trim() : ''
+}
+
+/** "Add a note" (Design 7.2): reveals the one-line input in place, or hides it again on a second tap. Never required, so there is no separate save step — whatever it holds travels with the next outcome button pressed. */
+function toggleDueNote(id) {
+  const input = document.getElementById(`due-note-${id}`)
+  if (!input) return
+  input.hidden = !input.hidden
+  if (!input.hidden && input.focus) input.focus()
+}
+
 /**
  * `expanded` (the row the caller deep-linked to, if any) shows the fuller
  * content GET /due carries and its tags; every other row shows the short
  * label so the sheet is scannable rather than a wall of full memories.
+ *
+ * T7-E (Design 7.2, 5.3): a decision row (`kind: "decision"`) shows Right,
+ * Wrong, Mixed and Can't tell yet instead of Done, plus an optional note —
+ * Done and Not a commitment never appear on one (the `done` guard on the
+ * Worker's own /loops/resolve would refuse them anyway, C13). An inbound
+ * commitment (`kind: "inbound"`) keeps the ordinary actions and adds the
+ * "Owed to you · from Priya" line above them.
  */
 function dueRow(item, expanded) {
   const isTask = (item.tags || []).includes('task')
+  const isDecision = item.kind === 'decision'
+  const isInbound = item.kind === 'inbound'
+  // A row tagged ledger:decision without kind set predates Design 7.2's
+  // outcome buttons (an older Worker, or a row from before kind was added):
+  // it still resolves through the ordinary Done/Snooze actions, with just a
+  // localized "Review" cue in place of the ordinary label.
+  const isReviewCueOnly = !isDecision && (item.tags || []).includes('ledger:decision')
+  const reviewCue = isReviewCueOnly ? `<span class="due-review-cue">${escHtml(t('due.reviewCue'))}</span> ` : ''
   const tagsLine = expanded && item.tags && item.tags.length
     ? `<div class="card-tags due-tags">${item.tags.map((tag) => `<span class="tag-chip">${escHtml(tag)}</span>`).join('')}</div>`
     : ''
-  const body = expanded ? escHtml(item.content) : escHtml(titleLine(item.label, 120))
+  const body = isDecision
+    ? escHtml(dueDecisionLabel(item))
+    : reviewCue + (expanded ? escHtml(item.content) : escHtml(titleLine(item.label, 120)))
+  const inboundLine = isInbound ? `<div class="digest-note">${escHtml(dueInboundLine(item))}</div>` : ''
+  const noteRow = isDecision
+    ? `<button type="button" class="card-action-btn" id="due-note-link-${escAttr(item.id)}" onclick="toggleDueNote('${escAttr(item.id)}')"><i class="ti ti-note"></i> ${escHtml(t('due.addNote'))}</button>` +
+      `<input type="text" class="due-note-input" id="due-note-${escAttr(item.id)}" placeholder="${escAttr(t('due.notePlaceholder'))}" hidden />`
+    : ''
+  const outcomeLabel = isDecision ? `<div class="digest-note">${escHtml(t('due.outcomeLabel'))}</div>` : ''
+  const actions = isDecision
+    ? `<button type="button" class="card-action-btn" onclick="resolveDecision('${escAttr(item.id)}', 'right', this)">${escHtml(t('due.right'))}</button>
+        <button type="button" class="card-action-btn" onclick="resolveDecision('${escAttr(item.id)}', 'wrong', this)">${escHtml(t('due.wrong'))}</button>
+        <button type="button" class="card-action-btn" onclick="resolveDecision('${escAttr(item.id)}', 'mixed', this)">${escHtml(t('due.mixed'))}</button>
+        <button type="button" class="card-action-btn" onclick="resolveDecision('${escAttr(item.id)}', 'unknown', this)">${escHtml(t('due.cantTellYet'))}</button>
+        <button type="button" class="card-action-btn" onclick="snoozeDue('${escAttr(item.id)}', 'tomorrow', this)"><i class="ti ti-clock"></i> ${escHtml(t('due.snoozeTomorrow'))}</button>
+        <button type="button" class="card-action-btn" onclick="snoozeDue('${escAttr(item.id)}', 'next-week', this)"><i class="ti ti-clock"></i> ${escHtml(t('due.snoozeNextWeek'))}</button>`
+    : `<button type="button" class="card-action-btn" onclick="resolveDue('${escAttr(item.id)}', 'done', ${isTask}, this)"><i class="ti ti-check"></i> ${escHtml(t('due.done'))}</button>
+        <button type="button" class="card-action-btn" onclick="snoozeDue('${escAttr(item.id)}', 'tomorrow', this)"><i class="ti ti-clock"></i> ${escHtml(t('due.snoozeTomorrow'))}</button>
+        <button type="button" class="card-action-btn" onclick="snoozeDue('${escAttr(item.id)}', 'next-week', this)"><i class="ti ti-clock"></i> ${escHtml(t('due.snoozeNextWeek'))}</button>
+        <button type="button" class="card-action-btn" onclick="resolveDue('${escAttr(item.id)}', 'clear', false, this)"><i class="ti ti-x"></i> ${escHtml(t('due.notCommitment'))}</button>`
   // Content full-width, then tags/date, then a wrapping actions row (up to
   // four buttons) — .due-row stacks rather than sitting content and actions
   // side by side the way loops.js's shared .task layout does, which left the
@@ -79,12 +151,12 @@ function dueRow(item, expanded) {
     <div class="due-row${expanded ? ' due-row-expanded' : ''}" id="due-row-${escAttr(item.id)}">
       <div class="due-text">${body}</div>
       ${tagsLine}
+      ${inboundLine}
       <div class="digest-note">${escHtml(dueWhenLine(item))}</div>
+      ${noteRow}
+      ${outcomeLabel}
       <div class="due-actions">
-        <button type="button" class="card-action-btn" onclick="resolveDue('${escAttr(item.id)}', 'done', ${isTask}, this)"><i class="ti ti-check"></i> ${escHtml(t('due.done'))}</button>
-        <button type="button" class="card-action-btn" onclick="snoozeDue('${escAttr(item.id)}', 'tomorrow', this)"><i class="ti ti-clock"></i> ${escHtml(t('due.snoozeTomorrow'))}</button>
-        <button type="button" class="card-action-btn" onclick="snoozeDue('${escAttr(item.id)}', 'next-week', this)"><i class="ti ti-clock"></i> ${escHtml(t('due.snoozeNextWeek'))}</button>
-        <button type="button" class="card-action-btn" onclick="resolveDue('${escAttr(item.id)}', 'clear', false, this)"><i class="ti ti-x"></i> ${escHtml(t('due.notCommitment'))}</button>
+        ${actions}
       </div>
     </div>`
 }
@@ -119,7 +191,8 @@ function dropFromDueQueue(id) {
 async function resolveDue(id, action, isTask, btn) {
   if (btn) btn.disabled = true
   try {
-    const res = action === 'done' && isTask
+    const wentToLoops = action === 'done' && isTask
+    const res = wentToLoops
       ? await fetch(`${WORKER_URL}/loops/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
@@ -133,9 +206,74 @@ async function resolveDue(id, action, isTask, btn) {
     const data = await res.json()
     if (!data.ok) throw new Error(data.error || 'failed')
     dropFromDueQueue(id)
+    if (typeof undoToast === 'function') {
+      undoToast(t(wentToLoops ? 'undo.done' : 'undo.dateRemoved'), id, {
+        onUndone: () => {
+          if (typeof loadDueQueue === 'function') loadDueQueue(id)
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch (e) {
     if (btn) btn.disabled = false
     showToast(action === 'done' ? t('due.doneFailed', { message: e.message }) : t('due.clearFailed', { message: e.message }))
+  }
+}
+
+/** The toast text for a right/wrong/mixed outcome (Design 7.2): the dashboard's own short line, not the MCP reply's longer sentence (which names the decision and says "Undo is available" in prose). */
+function decisionOutcomeToast(result) {
+  if (result === 'right') return t('due.outcomeToastRight')
+  if (result === 'wrong') return t('due.outcomeToastWrong')
+  return t('due.outcomeToastMixed')
+}
+
+/**
+ * The toast for "Too early to tell" (result "unknown"): "no more reviews"
+ * when `reviews_done` (T7-C's structured field on POST /decisions/outcome,
+ * src/decisions/outcome.ts) is true (re-arming exhausted); a review date from
+ * `review_at`, formatted the same way ledger.reviewAround does, otherwise;
+ * the Worker's own reply when `reviews_done` is absent entirely, from a
+ * Worker that predates it.
+ */
+function decisionUnknownToast(data) {
+  if (!('reviews_done' in data)) return data.message
+  if (data.reviews_done) return t('due.outcomeToastNoMore')
+  return t('due.outcomeToastLater', { date: formatDateUI(data.review_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
+}
+
+/** Records how a logged decision turned out (Design 4.2, POST /decisions/outcome). */
+async function resolveDecision(id, result, btn) {
+  if (btn) btn.disabled = true
+  const note = dueNoteValue(id)
+  try {
+    const res = await fetch(`${WORKER_URL}/decisions/outcome`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify(note ? { id, result, note } : { id, result }),
+    })
+    const data = await res.json()
+    if (!data.ok) throw new Error(data.error || 'failed')
+    dropFromDueQueue(id)
+    showToast(result === 'unknown' ? decisionUnknownToast(data) : decisionOutcomeToast(result), {
+      action: t('due.undo'),
+      onAction: async () => {
+        try {
+          const undoRes = await fetch(`${WORKER_URL}/undo`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+            body: JSON.stringify({ id }),
+          })
+          const undoData = await undoRes.json()
+          if (!undoData.ok) throw new Error(undoData.error || 'failed')
+          loadDueQueue()
+        } catch (e) {
+          showToast(t('due.undoFailed', { message: e.message }))
+        }
+      },
+    })
+  } catch (e) {
+    if (btn) btn.disabled = false
+    showToast(t('due.outcomeFailed', { message: e.message }))
   }
 }
 
@@ -148,14 +286,24 @@ function snoozeUntilDate(choice) {
 async function snoozeDue(id, choice, btn) {
   if (btn) btn.disabled = true
   try {
+    const until = snoozeUntilDate(choice)
     const res = await fetch(`${WORKER_URL}/due/snooze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: JSON.stringify({ id, until: snoozeUntilDate(choice) }),
+      body: JSON.stringify({ id, until }),
     })
     const data = await res.json()
     if (!data.ok) throw new Error(data.error || 'failed')
     dropFromDueQueue(id)
+    if (typeof undoToast === 'function') {
+      const date = formatDateUI(new Date(until + 'T00:00:00').getTime(), { year: 'numeric', month: 'short', day: 'numeric' })
+      undoToast(t('undo.snoozed', { date }), id, {
+        onUndone: () => {
+          if (typeof loadDueQueue === 'function') loadDueQueue(id)
+          if (typeof refreshAll === 'function') refreshAll()
+        },
+      })
+    }
   } catch (e) {
     if (btn) btn.disabled = false
     showToast(t('due.snoozeFailed', { message: e.message }))

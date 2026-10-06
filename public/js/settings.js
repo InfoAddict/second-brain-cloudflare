@@ -206,7 +206,7 @@ async function runVectorize(btn) {
       if ((data.processed ?? 0) === 0 && remaining > 0) break
     }
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(t('upkeep.vectorizeDone', { n: totalProcessed }))}`
+    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('upkeep.vectorizeDone', totalProcessed, { n: totalProcessed }))}`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
     refreshAll()
@@ -254,7 +254,7 @@ async function runClassify(btn) {
       prevRemaining = remaining
     }
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(t('upkeep.classifyDone', { n: totalProcessed }))}`
+    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('upkeep.classifyDone', totalProcessed, { n: totalProcessed }))}`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
     refreshAll()
@@ -291,7 +291,7 @@ async function runClassify(btn) {
  * is why this throws on error and lets the caller offer a retry.
  */
 async function runImportLoop(payload, post, onProgress) {
-  const totals = { imported: 0, skipped: 0, failed: 0, edges_imported: 0, edges_skipped: 0, edges_failed: 0, projects_imported: 0, projects_skipped: 0, projects_failed: 0 }
+  const totals = { imported: 0, skipped: 0, failed: 0, too_large: 0, edges_imported: 0, edges_skipped: 0, edges_failed: 0, projects_imported: 0, projects_skipped: 0, projects_failed: 0 }
   let offset = 0
   let edgeOffset = 0
   let projectOffset = 0
@@ -304,6 +304,7 @@ async function runImportLoop(payload, post, onProgress) {
     totals.imported += data.imported || 0
     totals.skipped += data.skipped || 0
     totals.failed += data.failed || 0
+    totals.too_large += data.too_large || 0
     totals.edges_imported += data.edges_imported || 0
     totals.edges_skipped += data.edges_skipped || 0
     totals.edges_failed += data.edges_failed || 0
@@ -366,13 +367,16 @@ function renderRestoreDone(totals) {
   if (totals.skipped) parts.push(t('upkeep.restoreSummaryPresent', { n: totals.skipped.toLocaleString(localeTag()) }))
   const failures = totals.failed + totals.edges_failed
   const failNote = failures
-    ? ` ${t('upkeep.restoreFailNote', { n: failures.toLocaleString(localeTag()) })}`
+    ? ` ${tPlural('upkeep.restoreFailNote', failures, { n: failures.toLocaleString(localeTag()) })}`
+    : ''
+  const tooLargeNote = totals.too_large
+    ? ` ${tPlural('upkeep.importTooLarge', totals.too_large, { n: totals.too_large.toLocaleString(localeTag()) })}`
     : ''
   const needsIndexing = totals.imported > 0
   el.style.display = ''
   el.innerHTML = `
     <div class="digest-section-label">${escHtml(t('upkeep.restoreLabel'))}</div>
-    <p class="digest-note"><i class="ti ti-check"></i> ${escHtml(parts.join(' · '))}.${escHtml(failNote)}${
+    <p class="digest-note"><i class="ti ti-check"></i> ${escHtml(parts.join(' · '))}.${escHtml(failNote)}${escHtml(tooLargeNote)}${
       needsIndexing ? ` ${escHtml(t('upkeep.restoreNeedsIndex'))}` : ''
     }</p>
     ${needsIndexing ? `<button class="digest-btn" onclick="indexRestored(this)">${escHtml(t('upkeep.restoreMakeSearchable'))}</button>` : ''}

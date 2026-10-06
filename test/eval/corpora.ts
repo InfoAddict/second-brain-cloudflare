@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { CORE_DATA_DIR, CORPUS_IDS, buildCorpus, type CoreCorpusId } from "./corpus/build";
 import type { CorpusSpec } from "./corpus/types";
 import { PUBLIC_CORPORA, publicCorpusProvider } from "./public/neutral";
+import { SYNTHETIC_CORPORA, buildSyntheticCorpus } from "./corpus/synthetic";
 
 interface Provider { name: string; match: (id: string) => boolean; build: (id: string) => CorpusSpec | Promise<CorpusSpec>; ids?: readonly string[] }
 const providers: Provider[] = [];
@@ -17,6 +18,7 @@ registerCorpusProvider("core", id => (CORPUS_IDS as readonly string[]).includes(
 // Public corpora: downloaded on demand into .eval-cache/public, never committed. The provider is built per call so
 // SB_EVAL_ROOT is read when a corpus is resolved.
 registerCorpusProvider("public", id => publicCorpusProvider().match(id), id => publicCorpusProvider().build(id), Object.keys(PUBLIC_CORPORA));
+registerCorpusProvider("synthetic", id => (SYNTHETIC_CORPORA as readonly string[]).includes(id), id => buildSyntheticCorpus(id as (typeof SYNTHETIC_CORPORA)[number]), SYNTHETIC_CORPORA);
 
 /** True for corpora whose data is committed (the core set); everything else is local-only. */
 export const isCoreCorpus = (id: string): boolean => (CORPUS_IDS as readonly string[]).includes(id);

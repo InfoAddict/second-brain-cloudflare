@@ -34,6 +34,7 @@ function load(responses: any[] = [], { hash = "", search = "", authToken = "t" }
   });
   let callIndex = 0;
   const fetchCalls: { url: string; init?: any }[] = [];
+  const toasts: { message: string; opts?: any }[] = [];
   const swMessageListeners: ((ev: unknown) => void)[] = [];
   const ctx: any = {
     console,
@@ -41,7 +42,7 @@ function load(responses: any[] = [], { hash = "", search = "", authToken = "t" }
     AUTH_TOKEN: authToken,
     URLSearchParams,
     closeMenu: () => {},
-    showToast: () => {},
+    showToast: (message: string, opts?: any) => { toasts.push({ message, opts }); },
     history: { replaceState: vi.fn() },
     window: {
       location: { hash, pathname: "/", search },
@@ -82,11 +83,12 @@ function load(responses: any[] = [], { hash = "", search = "", authToken = "t" }
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   installI18n(ctx, "en");
-  for (const f of ["public/utils.js", "public/js/pending-due.js", "public/js/due.js"]) {
+  for (const f of ["public/utils.js", "public/js/loops.js", "public/js/pending-due.js", "public/js/due.js"]) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
   ctx.__els = els;
   ctx.__fetchCalls = fetchCalls;
+  ctx.__toasts = toasts;
   ctx.__fireSwMessage = (data: unknown) => { for (const fn of swMessageListeners) fn({ data }); };
   ctx.__fireWindowEvent = (type: string) => { for (const fn of windowListeners.get(type) ?? []) fn({}); };
   ctx.__fireVisibilityChange = (state: "visible" | "hidden") => {
@@ -160,6 +162,27 @@ describe("the due sheet", () => {
     expect(html).toContain("snoozeDue('e1', 'tomorrow'");
     expect(html).toContain("snoozeDue('e1', 'next-week'");
     expect(html).toContain("resolveDue('e1', 'clear', false");
+  });
+
+  // Track 7 lane B stores a decision row's bare label, without the "Review:"
+  // prefix it used to bake into the stored text; the sheet supplies its own
+  // localized cue instead.
+  it("shows a review cue for a row tagged ledger:decision", async () => {
+    const ctx = load([
+      dueResponse({
+        overdue: [{ id: "e1", content: "Postgres or SQLite for the analytics store", label: "Postgres or SQLite for the analytics store", tags: ["ledger:decision"], when_at: Date.UTC(2027, 0, 15) }],
+      }),
+    ]);
+    await ctx.loadDueQueue();
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toContain('<span class="due-review-cue">Review</span>');
+    expect(html).not.toContain("Review: Postgres");
+  });
+
+  it("shows no review cue for a plain due row", async () => {
+    const ctx = load([dueResponse()]);
+    await ctx.loadDueQueue();
+    expect(ctx.__els.get("due-list").innerHTML).not.toContain("due-review-cue");
   });
 
   it("shows full content and tags only for the highlighted (deep-linked) row", async () => {
@@ -240,6 +263,178 @@ describe("resolving a due item", () => {
 
     expect(btn.disabled).toBe(false);
     expect(ctx.__els.get("due-list").innerHTML).toContain("File the report");
+  });
+});
+
+describe("decision rows in the due sheet (T7-E, Design 7.2)", () => {
+  const decisionResponse = (overrides: any = {}) => dueResponse({
+    overdue: [{
+      id: "d1",
+      content: "Decided to hire Dana for the role",
+      label: "Review: hire Dana for the role",
+      tags: ["ledger:decision"],
+      when_at: Date.UTC(2026, 11, 26),
+      kind: "decision",
+    }],
+    ...overrides,
+  });
+
+  it("decision rows show the four outcome buttons and no Done", async () => {
+    const ctx = load([decisionResponse()]);
+
+    await ctx.loadDueQueue();
+
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toContain("resolveDecision('d1', 'right'");
+    expect(html).toContain("resolveDecision('d1', 'wrong'");
+    expect(html).toContain("resolveDecision('d1', 'mixed'");
+    expect(html).toContain("resolveDecision('d1', 'unknown'");
+    expect(html).not.toContain("resolveDue(");
+    // Snooze stays (Design 7.2); the label is the i18n prefix, not the stored English one twice over.
+    expect(html).toContain("snoozeDue('d1'");
+    expect(html).toContain("Review:");
+    expect((html.match(/Review:/g) || []).length).toBe(1);
+  });
+
+  it("UX advisor round 2: a label introduces the four outcome buttons", async () => {
+    const ctx = load([decisionResponse()]);
+
+    await ctx.loadDueQueue();
+
+    const html = ctx.__els.get("due-list").innerHTML;
+    // The label's own text: round 3 gave the note input its own distinct
+    // placeholder ("Add details"), so "How did it go?" only ever appears
+    // here now, not doubled inside an attribute too.
+    const labelMatch = html.match(/>How did it go\?</);
+    expect(labelMatch).not.toBeNull();
+    const buttonsAt = html.indexOf("resolveDecision('d1', 'right'");
+    expect(buttonsAt).toBeGreaterThan(labelMatch!.index!);
+  });
+
+  it("an optional note link expands a one-line input, never required", async () => {
+    const ctx = load([decisionResponse()]);
+    await ctx.loadDueQueue();
+
+    // The rendered markup itself starts with the input hidden (a plain string
+    // check, since this harness does not parse innerHTML into a live tree).
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toMatch(/id="due-note-d1"[^>]*\shidden/);
+
+    // toggleDueNote acts on the real element, so the mock is seeded to match
+    // what the markup above just proved before exercising the toggle itself.
+    ctx.document.getElementById("due-note-d1").hidden = true;
+    ctx.toggleDueNote("d1");
+    expect(ctx.document.getElementById("due-note-d1").hidden).toBe(false);
+
+    ctx.toggleDueNote("d1");
+    expect(ctx.document.getElementById("due-note-d1").hidden).toBe(true);
+  });
+
+  it("outcome posts /decisions/outcome then toasts with Undo", async () => {
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", message: "Recorded: hire Dana for the role went right. Undo is available." }]);
+    await ctx.loadDueQueue();
+
+    await ctx.resolveDecision("d1", "right", { disabled: false });
+
+    const call = ctx.__fetchCalls.find((c: any) => c.url.includes("/decisions/outcome"));
+    expect(JSON.parse(call.init.body)).toEqual({ id: "d1", result: "right" });
+    expect(ctx.__els.get("due-list").innerHTML).not.toContain("hire Dana");
+    expect(ctx.__toasts).toHaveLength(1);
+    expect(ctx.__toasts[0].opts.action).toBe("Undo");
+    expect(typeof ctx.__toasts[0].opts.onAction).toBe("function");
+  });
+
+  it("sends the note when one was typed into the expanded field", async () => {
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", message: "Recorded." }]);
+    await ctx.loadDueQueue();
+    ctx.document.getElementById("due-note-d1").hidden = true; // matches the rendered markup's starting state
+    ctx.toggleDueNote("d1");
+    ctx.document.getElementById("due-note-d1").value = "Went better than expected.";
+
+    await ctx.resolveDecision("d1", "right", { disabled: false });
+
+    const call = ctx.__fetchCalls.find((c: any) => c.url.includes("/decisions/outcome"));
+    expect(JSON.parse(call.init.body)).toEqual({ id: "d1", result: "right", note: "Went better than expected." });
+  });
+
+  it("Can't tell yet toast names the next date, from the structured review_at field", async () => {
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", review_at: Date.UTC(2026, 11, 26, 12), reviews_done: false, message: "OK, I'll ask again around Dec 26, 2026." }]);
+    await ctx.loadDueQueue();
+
+    await ctx.resolveDecision("d1", "unknown", { disabled: false });
+
+    const call = ctx.__fetchCalls.find((c: any) => c.url.includes("/decisions/outcome"));
+    expect(JSON.parse(call.init.body)).toEqual({ id: "d1", result: "unknown" });
+    expect(ctx.__toasts[0].message).toBe("Okay. Review again around Dec 26, 2026");
+  });
+
+  it("Can't tell yet toast says no more reviews when reviews_done is true (re-arming exhausted)", async () => {
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", review_at: null, reviews_done: true, message: "OK, no more reviews for this one." }]);
+    await ctx.loadDueQueue();
+
+    await ctx.resolveDecision("d1", "unknown", { disabled: false });
+
+    expect(ctx.__toasts[0].message).toBe("Okay. No more reviews for this one");
+  });
+
+  it("falls back to the Worker's own reply when reviews_done is absent (a Worker that predates it)", async () => {
+    const ctx = load([decisionResponse(), { ok: true, id: "d1", message: "OK, I'll ask again around Dec 26, 2026." }]);
+    await ctx.loadDueQueue();
+
+    await ctx.resolveDecision("d1", "unknown", { disabled: false });
+
+    expect(ctx.__toasts[0].message).toBe("OK, I'll ask again around Dec 26, 2026.");
+  });
+
+  it("re-enables the button and keeps the row on a failed outcome", async () => {
+    const ctx = load([decisionResponse(), { ok: false, error: "nope" }]);
+    await ctx.loadDueQueue();
+    const btn = { disabled: false };
+
+    await ctx.resolveDecision("d1", "right", btn);
+
+    expect(btn.disabled).toBe(false);
+    expect(ctx.__els.get("due-list").innerHTML).toContain("hire Dana");
+  });
+});
+
+describe("inbound commitment rows in the due sheet (T7-E, Design 5.3, 7.1)", () => {
+  it("shows the counterparty", async () => {
+    const ctx = load([dueResponse({
+      overdue: [{ id: "in1", content: "Priya owes a signed contract", label: "Priya owes a signed contract", tags: ["task", "owed-to-me", "counterparty:priya"], when_at: Date.UTC(2026, 8, 1), kind: "inbound" }],
+    })]);
+
+    await ctx.loadDueQueue();
+
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toContain("Owed to you");
+    // UX advisor round 2: "from Priya", the same wording loops.js uses, not "by Priya".
+    expect(html).toContain("from Priya");
+  });
+
+  it("falls back to a plain line when there is no usable counterparty name", async () => {
+    const ctx = load([dueResponse({
+      overdue: [{ id: "in1", content: "Something owed", label: "Something owed", tags: ["task", "owed-to-me"], when_at: Date.UTC(2026, 8, 1), kind: "inbound" }],
+    })]);
+
+    await ctx.loadDueQueue();
+
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toContain("Owed to you");
+    expect(html).not.toContain("from ");
+  });
+
+  it("keeps Done, Snooze and Not a commitment", async () => {
+    const ctx = load([dueResponse({
+      overdue: [{ id: "in1", content: "Priya owes a signed contract", label: "Priya owes a signed contract", tags: ["task", "owed-to-me", "counterparty:priya"], when_at: Date.UTC(2026, 8, 1), kind: "inbound" }],
+    })]);
+
+    await ctx.loadDueQueue();
+
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toContain("resolveDue('in1', 'done', true");
+    expect(html).toContain("snoozeDue('in1'");
+    expect(html).toContain("resolveDue('in1', 'clear', false");
   });
 });
 

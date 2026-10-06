@@ -171,6 +171,8 @@ describe("update/append re-embed carries the row workspace, not the caller defau
       undefined,
       undefined,
       { workspaceId: "ws-personal", actorId: "user-a" },
+      { actorId: "user-a", channel: "rest" },
+      "ws-company",
     );
     expect(result.status).toBe("updated");
     expect(upsert).toHaveBeenCalledTimes(1);
@@ -184,7 +186,12 @@ describe("update/append re-embed carries the row workspace, not the caller defau
     const env = {
       DB: d1.db as unknown as Env["DB"],
       VECTORIZE: makeVectorizeMock({ upsert }),
-      AI: { run: vi.fn().mockResolvedValue({ data: [new Array(384).fill(0.1)] }) } as unknown as Ai,
+      // R20's batchEmbeds sends every chunk in one call: this must answer with one vector per
+      // requested text, not a fixed single vector, or embedMany's own count check throws.
+      AI: { run: vi.fn().mockImplementation(async (_model: string, opts: any) => {
+        const texts = Array.isArray(opts?.text) ? opts.text : [opts?.text];
+        return { data: texts.map(() => new Array(384).fill(0.1)) };
+      }) } as unknown as Ai,
       OAUTH_KV: makeMemoryKV(),
       AUTH_TOKEN: "test-token",
     } as Env;
@@ -206,6 +213,9 @@ describe("update/append re-embed carries the row workspace, not the caller defau
       DEFAULTS,
       undefined,
       { workspaceId: "ws-personal", actorId: "user-a" },
+      { actorId: "user-a", channel: "rest" },
+      undefined,
+      "ws-company",
     );
 
     expect(upsert).toHaveBeenCalledTimes(1);

@@ -9,6 +9,9 @@ import {
   NEURON_RATES, NeuronBudget, ReplayMissError, ReplayStore, estimateNeurons, estimateTokens, makeReplayAi, producerId, replayKey, stableStringify,
 } from "./ai-replay";
 import { cleanTemp } from "../helpers/tmp";
+import { observeRecallEnv } from "../../src/recall/diagnostics";
+import type { Env } from "../../src/env";
+import type { RecallDiagnostics } from "../../src/recall/types";
 
 afterEach(cleanTemp);
 
@@ -78,6 +81,51 @@ describe("makeReplayAi", () => {
     expect(b).toEqual(a); // record returns the decoded value, so both paths agree exactly
     expect(second.drainCalls()).toMatchObject([{ kind: "embedding", source: "replay" }]);
     expect(second.drainCalls()).toEqual([]); // drained
+  });
+
+  it("a batched call over texts recorded one by one hits the cache, in order, with no live call or miss (T-0102, director follow-up)", async () => {
+    // storeEntry now always batchEmbeds (T-0102 F3), so a production embedding call can carry more
+    // than one text in one env.AI.run. The committed golden fixture was recorded one text per row
+    // (every call was single-text before batching existed); a batched call must still read those
+    // same rows, one per text, rather than missing on the batch's own joined-array key.
+    const root = tmp();
+    const dir = cacheOf(root);
+    const live = { run: vi.fn(async (_model: string, input: { text: string[] }) => ({ data: [[input.text[0].length, 0]] })), producer: () => PRODUCER };
+    const recorder = makeReplayAi({ store: store(root, "c.jsonl"), mode: "record", live: live as never, budget: new NeuronBudget(1000) });
+    await recorder.ai.run(MODEL as never, embedInput("first text") as never);
+    await recorder.ai.run(MODEL as never, embedInput("second text") as never);
+    expect(live.run).toHaveBeenCalledTimes(2); // recorded one text at a time, as production embedMany's pre-batching shape did
+
+    const replay = makeReplayAi({ store: new ReplayStore([join(dir, "c.jsonl")], undefined, { root }), mode: "replay" });
+    const batched = await replay.ai.run(MODEL as never, { text: ["first text", "second text"] } as never) as unknown as { data: number[][] };
+    expect(batched.data).toEqual([[10, 0], [11, 0]]); // "first text".length, "second text".length, in order
+    const calls = replay.drainCalls();
+    expect(calls).toHaveLength(2); // one per text, not one for the whole batch
+    expect(calls).toMatchObject([{ kind: "embedding", source: "replay" }, { kind: "embedding", source: "replay" }]);
+    expect(replay.drainCalls()).toEqual([]); // drained
+  });
+
+  it("a batched embedding call counts as one aiCall and one embeddingCall, not one per text (Codex review, T-0102, director follow-up NIT)", async () => {
+    // The per-text cache split lives inside makeReplayAi's own dispatcher (execOne, called
+    // directly, never back through the exported ai.run) -- so observeRecallEnv, which wraps
+    // whatever env.AI it is handed from the outside, only ever sees the one call a real caller
+    // (embedMany) made, whatever the harness does with it internally. Pinned here so a future
+    // change to how the split is wired can't silently start double-counting eval cost metrics.
+    const root = tmp();
+    const dir = cacheOf(root);
+    const recorder = makeReplayAi({ store: store(root, "c.jsonl"), mode: "record", live: fakeLive(), budget: new NeuronBudget(1000) });
+    await recorder.ai.run(MODEL as never, embedInput("first text") as never);
+    await recorder.ai.run(MODEL as never, embedInput("second text") as never);
+
+    const replay = makeReplayAi({ store: new ReplayStore([join(dir, "c.jsonl")], undefined, { root }), mode: "replay" });
+    const diagnostics: RecallDiagnostics = {};
+    const env = observeRecallEnv(
+      { AI: replay.ai, VECTORIZE: {}, DB: {}, OAUTH_KV: {} } as unknown as Env,
+      diagnostics,
+    );
+    await env.AI.run(MODEL as never, { text: ["first text", "second text"] } as never);
+    expect(diagnostics.operations?.aiCalls).toBe(1);
+    expect(diagnostics.operations?.embeddingCalls).toBe(1);
   });
 
   it("refuses to spend past the neuron budget, before the call", async () => {

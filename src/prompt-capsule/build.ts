@@ -3,6 +3,12 @@ import { initializeDatabase } from "../db/init";
 import type { Identity } from "../lib/identity";
 import { readTeamParam, scopeWhereForRead, type ScopeClause } from "../lib/scope";
 import { STATUS_PREFIX } from "../memory/status";
+// Codex cross-vendor review, T-0102, director follow-up MINOR (round 2 re-review): this used to
+// hand-roll its own quarantine:-prefix instr() check (a bare prefix match, the same class of bug
+// finding 1 fixed elsewhere) instead of the shared exact-match notHeldInstrSql -- this file's own
+// query must avoid LIKE entirely (see the 64-character project id test), so it uses the instr()
+// twin of NOT_HELD_SQL, not NOT_HELD_SQL itself.
+import { notHeldInstrSql } from "../quarantine/tags";
 import { readCachedPromptCapsule, writeCachedPromptCapsule } from "./cache";
 import { sha256Hex, strongEtag } from "./etag";
 import { selectPromptCapsuleEntries } from "./select";
@@ -198,8 +204,13 @@ async function buildPromptCapsuleFromD1(
   cacheWorkspaceId: string | null,
 ): Promise<PromptCapsuleD1Snapshot> {
   const baseTag = capsuleTag(request.kind, request.projectId);
+  // A superseded row keeps its status tag, canonical included (D2.1), so the
+  // existing status:canonical filter alone would still admit it; `now` is
+  // interpolated, not bound, matching dueSql/openLoopSql (T-0089.2.1).
+  const now = Date.now();
   // scope-checked: scopeWhereForRead resolves one identity-owned personal/team
   // workspace before the bounded tag scan; tool and route input never becomes SQL.
+  // validity: current: get_prompt_capsule is a current-facts answer (5.5)
   const candidateStatement = env.DB.prepare(
     `SELECT substr(id, 1, ?) AS id,
             length(id) AS id_length,
@@ -213,6 +224,8 @@ async function buildPromptCapsuleFromD1(
         AND instr(lower(tags), '"capsule:') > 0
         AND instr(lower(tags), ?) > 0
         AND instr(lower(tags), ?) > 0
+        AND ${notHeldInstrSql("lower(tags)")}
+        AND (valid_until IS NULL OR valid_until > ${now})
       ORDER BY id ASC
       LIMIT ?`,
   ).bind(

@@ -115,7 +115,8 @@ describe("POST /append", () => {
     const vectorIds: string[] = JSON.parse(db.entries[0].vector_ids);
     expect(vectorIds).toHaveLength(2);
     expect(vectorIds[0]).toBe("entry-1");
-    expect(vectorIds[1]).toMatch(/^entry-1-update-\d+$/);
+    // A fresh per-upload id for the addition's own chunk (T-0089.1.1), naming its entry.
+    expect(vectorIds[1]).toMatch(/^entry-1:[0-9a-f]{8}:0$/);
     // Old vectors should NOT be deleted on the short path
     expect(deleteByIdsMock).not.toHaveBeenCalled();
   });

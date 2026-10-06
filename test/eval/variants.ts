@@ -47,6 +47,13 @@ const builtin: VariantSpec[] = [
   { name: "rerank", description: "Cross-encoder reranking forced on for every eligible recall (auto's ambiguity gate bypassed).", internal: { variant: { rerank: true } }, targetCategories: ["paraphrase"] },
   { name: "dense-only", description: "Ablation: keyword arm skipped. Must lose on identifier and rare-word queries.", internal: { variant: { arms: "dense-only" } }, config: NO_RERANK },
   { name: "keyword-only", description: "Ablation: embedding and Vectorize skipped. Must lose on paraphrase queries.", internal: { variant: { arms: "keyword-only" } }, config: NO_RERANK },
+  // The mirror/share occupancy cap (src/recall/search.ts capActive, T-0089.3.1) ships off:
+  // DEFAULTS.MIRROR_MAX_SHARE is 1.0, so `cfg.MIRROR_MAX_SHARE < 1.0` is always false. 0.4 is
+  // D3.1's own approved starting value (noise-oracle.ts's TUNED_CFG), the live-recall knob's
+  // only proposed non-default value anywhere in this repo -- used here for the poisoning page's
+  // "with the cap" measurement against the injection corpus (T-0089.1.4/05-proof.md), and again
+  // by R6's own grid.
+  { name: "occupancy-cap", description: "The mirror/share occupancy cap on at D3.1's tuned value (MIRROR_MAX_SHARE 0.4), otherwise shipped defaults.", config: { MIRROR_MAX_SHARE: 0.4 } },
 ];
 
 export const VARIANTS: Record<string, VariantSpec> = Object.fromEntries(builtin.map(v => [v.name, v]));

@@ -310,21 +310,32 @@ describe("compressTag()", () => {
     },
   );
 
-  // ── Marking sources rolled-up (#278) ─────────────────────────────────────────
+  // ── Marking sources rolled-up (#278, round 2: byte-size fix) ─────────────────
   //
   // All four nightly jobs share one scheduled() invocation and therefore one
   // subrequest budget, and marking sources one statement at a time was ~88% of the
   // whole cron's D1 cost. These pin the batching, and the per-row fallback that
   // keeps a single bad row from rolling back a whole tag's worth of marks.
+  //
+  // A row's id is no longer a literal bound arg (round 2: the guard moved from full content,
+  // bound per source, to one JSON tuple list of (id, updated_at, byte length) shared by the whole
+  // batch) — so "which statement is this row's" is a substring match on the JSON blob rather than
+  // an exact bound-arg match, which is deliberately looser: it also still finds the id in whatever
+  // shape a future guard takes, the same way it did before this round's change.
 
   /** Counts subrequests the way D1 bills them: a batch is one, whatever it carries. */
   function countingDb(db: D1Mock, failBatch = false, failRowIds: string[] = []) {
     const calls = { batches: 0, batchedStatements: 0, individualRuns: 0 };
-    const wrap = (stmt: any, boundId?: string): any => ({
-      bind: (...args: any[]) => wrap(stmt.bind(...args), args[args.length - 1]),
+    // Fires once: it stands in for the whole 15-row batch hitting a transient D1 rejection,
+    // not every batch call forever — the per-row fallback batches must be free to succeed.
+    let armFailBatch = failBatch;
+    const rowsIn = (args: any[]) => failRowIds.filter(id => args.some(a => typeof a === "string" && a.includes(id)));
+    const wrap = (stmt: any, boundIds: string[] = []): any => ({
+      bind: (...args: any[]) => wrap(stmt.bind(...args), rowsIn(args)),
+      boundIds,
       run: async () => {
         calls.individualRuns++;
-        if (boundId && failRowIds.includes(boundId)) throw new Error(`row ${boundId} rejected`);
+        if (boundIds.length) throw new Error(`row ${boundIds[0]} rejected`);
         return stmt.run();
       },
       first: () => stmt.first(),
@@ -337,7 +348,10 @@ describe("compressTag()", () => {
       batch: (stmts: any[]) => {
         calls.batches++;
         calls.batchedStatements += stmts.length;
-        if (failBatch) throw new Error("batch rejected");
+        if (armFailBatch) { armFailBatch = false; throw new Error("batch rejected"); }
+        // D1 batches are all-or-nothing: a single bad row anywhere in the batch fails the whole thing.
+        const failing = stmts.find((s: any) => s.boundIds?.length);
+        if (failing) throw new Error(`row ${failing.boundIds[0]} rejected`);
         return db.batch(stmts.map(s => s.__inner ?? s));
       },
     } as unknown as D1Database;
@@ -357,7 +371,14 @@ describe("compressTag()", () => {
 
     expect(result.synthesizedId).not.toBeNull();
     expect(calls.batches).toBe(1);
-    expect(calls.batchedStatements).toBe(15);
+    // MOVED 17 -> 31 (ADV-3/ADV-9 fix) -> 3 (round 2 byte-size fix): the per-source compare-and-set
+    // (workspace and content, so a source that moved or was edited mid-run is skipped rather than
+    // corrupted) moved from a per-source statement pair to one JSON tuple list shared by a single
+    // snapshot and a single mark — one snapshot + one mark + the one prune, whatever the source
+    // count, measured against real workerd D1 at 50 sources of up to 1 MB
+    // (digest-rollup-batch-size.workerd.test.ts): 2N+1 statements and ~100 MB in one batch before,
+    // 3 statements and a few KB after.
+    expect(calls.batchedStatements).toBe(3);
     expect(rolledUp(db)).toHaveLength(15);
   });
 
@@ -373,7 +394,8 @@ describe("compressTag()", () => {
     await drain();
 
     expect(result.synthesizedId).not.toBeNull();
-    expect(calls.batches).toBe(1);
+    // The rejected big batch, plus one small [snapshot, mark, prune] batch per row on the fallback.
+    expect(calls.batches).toBe(16);
     expect(rolledUp(db)).toHaveLength(15);
   });
 

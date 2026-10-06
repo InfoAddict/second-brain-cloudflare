@@ -120,6 +120,9 @@ async function sendRecall(retryQuery) {
       throw new Error(data.error || 'recall failed')
     }
     loadingEl.remove()
+    // Standing instructions render above the results regardless of whether
+    // recall found any (spec 15 2.8 step 5: a fire can happen on zero matches).
+    renderStandingFires(msgs, data.standing)
     if (!data.results || !data.results.length) {
       appendBrainBubble(msgs, t('recall.empty'), 'recall-sys')
     } else {
@@ -137,6 +140,15 @@ async function sendRecall(retryQuery) {
         created_at: m.created_at,
         source: m.source,
         workspace: m.workspace || null,
+        // T-0101.6.1: dropped here, makeRecallCard's validity chip and True-since label read
+        // undefined for every result - the six-field validity contract GET /recall already
+        // sends (src/routes/recall.ts) has to actually survive this re-map to reach the card.
+        valid_from: m.valid_from,
+        valid_from_stated: m.valid_from_stated,
+        valid_until: m.valid_until,
+        validity_state: m.validity_state,
+        superseded_by: m.superseded_by,
+        retracted_source: m.retracted_source,
       }))
       const answerBubble = document.createElement('div')
       answerBubble.className = 'ex-a-row'
@@ -245,6 +257,57 @@ async function sendRecall(retryQuery) {
   msgs.scrollTop = msgs.scrollHeight
 }
 
+/**
+ * T7-E Task 14 (15-t7-wow-spec.md 7.3, 2.9): a standing instruction that
+ * fired above the results, as its own card — "Standing instruction" (never
+ * "you set": the server cannot verify authorship, director decision 1),
+ * "(set by {name})" for a company-layer fire by someone else, the text, and
+ * Open (the memory sheet) / Stop.
+ */
+function makeStandingCard(fire) {
+  const card = document.createElement('div')
+  card.className = 'standing-card'
+  const title = fire.actor_name
+    ? t('standing.recallCardTitleBy', { name: fire.actor_name, date: formatDateUI(fire.created_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
+    : t('standing.recallCardTitle')
+  card.innerHTML = `
+    <div class="standing-card-title"><i class="ti ti-pin"></i> ${escHtml(title)}</div>
+    <div class="standing-card-text">${escHtml(fire.content)}</div>
+    <div class="standing-card-actions">
+      <button type="button" class="card-action-btn standing-card-open">${escHtml(t('standing.recallOpen'))}</button>
+      <button type="button" class="card-action-btn standing-card-stop">${escHtml(t('standing.recallStop'))}</button>
+    </div>`
+  const pseudoEntry = { id: fire.id, content: fire.content, tags: ['standing:active'], created_at: fire.created_at, workspace: fire.workspace }
+  card.querySelector('.standing-card-open').onclick = () => {
+    if (typeof openView === 'function') openView(pseudoEntry, card)
+  }
+  const stopBtn = card.querySelector('.standing-card-stop')
+  stopBtn.onclick = async () => {
+    stopBtn.disabled = true
+    try {
+      const res = await fetch(`${WORKER_URL}/standing/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+        body: JSON.stringify({ id: fire.id }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.ok) throw new Error(data.error || '')
+      card.remove()
+      if (typeof showToast === 'function') showToast(t('standing.stopped'))
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(t('standing.stopFailed', { message: e.message || '' }))
+      stopBtn.disabled = false
+    }
+  }
+  return card
+}
+
+/** At most `maxFires` cards (the server already caps it), each independently Open/Stop-able. */
+function renderStandingFires(container, fires) {
+  if (!container || !fires || !fires.length) return
+  fires.forEach((fire) => container.appendChild(makeStandingCard(fire)))
+}
+
 function makeRecallCard(entry, citeIndex) {
   const card = document.createElement('div')
   const isSynthesized = entry.tags.includes('synthesized')
@@ -262,14 +325,24 @@ ${entry.hop > 0 ? `<span class="tag-chip tag-chip--hop">${escHtml(tPlural('recal
     ${(() => {
       const badge = sourceBadge(entry.source)
       const at = Number(entry.created_at) || 0
-      if (!entry.source && !at) return ''
+      const stated = entry.valid_from_stated && entry.validity_state === 'current'
+        ? `<span class="card-time">${escHtml(t('validity.trueSince', { from: formatDateUI(entry.valid_from, { year: 'numeric', month: 'short', day: 'numeric' }) }))}</span>`
+        : ''
+      // T-0101.6.1 (spec 14 7.7 item 6, UI review round 3): a retracted-source card carries
+      // the Check chip below (validityChipHtml), matching every other list surface, but that
+      // chip alone never says WHAT the check is about - the sheet's own retractedSource
+      // sentence does, so it reads the same way here.
+      const retracted = entry.retracted_source ? `<span class="card-time">${escHtml(t('validity.retractedSource'))}</span>` : ''
+      if (!entry.source && !at && !stated && !retracted) return ''
       return `<div class="card-meta">
         <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
         ${at ? `<span class="card-time" title="${escAttr(new Date(at).toLocaleString(localeTag()))}">${escHtml(relativeTime(at))}</span>` : ''}
+        ${retracted}
+        ${stated}
       </div>`
     })()}
     <div class="card-footer">
-<div class="card-tags">${projectChipsHtml(entry.tags)}${humanTags(entry.tags).map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>
+<div class="card-tags">${validityChipHtml(entry)}${standingBadgeHtml(entry.tags)}${projectChipsHtml(entry.tags)}${humanTags(entry.tags).map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>
 <div class="card-actions">
   ${
     entry.id

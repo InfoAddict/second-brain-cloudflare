@@ -84,7 +84,6 @@ function load() {
     console,
     document: doc,
     fetch: async () => ({ ok: true, json: async () => ({ ok: true }) }),
-    apiMcp: async () => "",
     refreshAll: () => {},
     setTimeout: (fn: () => void) => fn(),
     clearTimeout: () => {},

@@ -8,7 +8,7 @@ import vm from "node:vm";
 import { describe, it, expect } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "../..");
-const src = ["public/js/i18n.js", "public/utils.js", "public/js/state.js", "public/js/api.js", "public/js/board.js", "public/js/chart.js"]
+const src = ["public/js/i18n.js", "public/utils.js", "public/js/state.js", "public/js/api.js", "public/js/loops.js", "public/js/ledger.js", "public/js/ai-changes.js", "public/js/board.js", "public/js/chart.js"]
   .map((f) => readFileSync(resolve(ROOT, f), "utf8"))
   .join("\n");
 
@@ -310,6 +310,7 @@ describe("decisions thread refit", () => {
   it("spans exactly the first dot to the last stop's dot, and updates when a stop settles and shrinks the layout", () => {
     const ctx: any = { console };
     vm.createContext(ctx);
+    vm.runInContext(readFileSync(resolve(ROOT, "public/js/ai-changes.js"), "utf8"), ctx);
     vm.runInContext(readFileSync(resolve(ROOT, "public/js/board.js"), "utf8"), ctx);
 
     const body = makeNode();
@@ -917,6 +918,115 @@ describe("open loops panel", () => {
     ctx.renderLoopsPanel(board, {});
 
     expect(board.children).toHaveLength(0);
+  });
+
+  it("loops panel renders two groups and hides empty ones", () => {
+    const ctx = ctxFor();
+    const both = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(both, {
+      loops: {
+        open: 1,
+        items: [
+          { id: "out1", content: "Send the contract back", source: "cli", tags: ["task"], created_at: Date.now(), direction: "out" },
+          { id: "in1", content: "the write-up from Priya", source: "cli", tags: ["task", "owed-to-me", "counterparty:priya"], created_at: Date.now(), direction: "in" },
+        ],
+      },
+      owed_to_me: 1,
+    });
+    const bothHtml = both.children[0].body.innerHTML;
+    expect(bothHtml).toContain("You owe");
+    expect(bothHtml).toContain("Owed to you");
+    expect(bothHtml).toContain("Send the contract back");
+    expect(bothHtml).toContain("the write-up from Priya");
+    expect(bothHtml).toContain("resolveLoop('in1', 'done'");
+
+    // Outbound only: the "Owed to you" group is omitted entirely, not shown empty.
+    const outOnly = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(outOnly, {
+      loops: { open: 1, items: [{ id: "out1", content: "Send the contract back", source: "cli", tags: ["task"], created_at: Date.now(), direction: "out" }] },
+      owed_to_me: 0,
+    });
+    const outHtml = outOnly.children[0].body.innerHTML;
+    expect(outHtml).toContain("You owe");
+    expect(outHtml).not.toContain("Owed to you");
+
+    // Inbound only, no outbound open loops at all: the panel still shows, with only its one group.
+    const inOnly = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(inOnly, {
+      loops: { open: 0, items: [{ id: "in1", content: "the write-up from Priya", source: "cli", tags: ["task", "owed-to-me"], created_at: Date.now(), direction: "in" }] },
+      owed_to_me: 1,
+    });
+    expect(inOnly.children).toHaveLength(1);
+    const inHtml = inOnly.children[0].body.innerHTML;
+    expect(inHtml).toContain("Owed to you");
+    expect(inHtml).not.toContain("You owe");
+
+    // Both empty: the panel itself is hidden, per the existing contract.
+    const neither = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(neither, { loops: { open: 0, items: [] }, owed_to_me: 0 });
+    expect(neither.children).toHaveLength(0);
+  });
+});
+
+describe("decision log panel (T7-E, Design 7.4)", () => {
+  function ctxFor() {
+    const { document } = fakeDoc();
+    const ctx: any = { document, window: {}, console, Intl, WORKER_URL: "http://x", AUTH_TOKEN: "t" };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    return ctx;
+  }
+
+  it("panel hidden with zero decisions", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+
+    ctx.renderLedgerPanel(board, { ok: true, total: 4, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
+
+    expect(board.children).toHaveLength(0);
+  });
+
+  it("shows the calibration sentence and a way to the full log once the brief carries one", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+
+    ctx.renderLedgerPanel(board, { calibration: { ready: false, n: 4, needed: 10, line: "You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 4 so far." } });
+
+    expect(board.children).toHaveLength(1);
+    const html = board.children[0].body.innerHTML;
+    expect(html).toContain("You have 4 so far");
+    expect(html).toContain("openLedgerSheet()");
+  });
+
+  it("falls back to the server's own sentence when calibration is ready but kind is absent (a Worker that predates it)", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+
+    ctx.renderLedgerPanel(board, { calibration: { ready: true, n: 14, line: "So far, your 74% calls came true 52% of the time, based on 14 decisions." } });
+
+    expect(board.children[0].body.innerHTML).toContain("came true 52%");
+  });
+
+  // UI reviewer final pass: the board card used to read calibration.line
+  // directly, so it kept showing the server's raw English sentence even
+  // after the sheet moved to the localized, kind-built one. Both now go
+  // through the same calibrationSentence(), so this proves they can never
+  // drift apart again.
+  it("renders the same sentence the ledger sheet builds, via the shared calibrationSentence", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+    const calibration = {
+      ready: true, kind: "rate", stated: 74, hit: 52, n: 14, nInferred: 0, headlineBucket: "70-79",
+      buckets: [{ bucket: "70-79", n: 14, nInferred: 0 }],
+      line: "So far, your 74% calls came true 52% of the time, based on 14 decisions.",
+    };
+
+    ctx.renderLedgerPanel(board, { calibration });
+
+    const expected = ctx.calibrationSentence(calibration);
+    expect(expected).toBe("So far, when you were about 74% sure, you were right 52% of the time, based on 14 decisions.");
+    expect(board.children[0].body.innerHTML).toContain(expected);
+    expect(board.children[0].body.innerHTML).not.toContain(calibration.line);
   });
 });
 

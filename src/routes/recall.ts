@@ -10,10 +10,25 @@ import { layerOf, scopeWhereForRead, readScopeWorkspaces } from "../lib/scope";
 import { lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { recallEntries } from "../recall/search";
+import type { StandingFire } from "../recall/types";
 import { readProjectParam } from "./project-param";
 import { allowanceFor, snippetOf } from "../recall/snippet";
+import { editedCanonicalAt } from "../quarantine/tags";
+import { parseSupersededBy, validitySummary } from "../recall/validity-view";
+import { parseValidityDate } from "../memory/validity";
 
-/** Add the caller's workspace predicate before ORDER BY and LIMIT. */
+/**
+ * Add the caller's workspace predicate before ORDER BY and LIMIT.
+ *
+ * Finds the OUTER query's own WHERE/ORDER BY, not the first occurrence in the
+ * string: buildEntryFilterQuery's superseded_by subquery (T-0089.2.1) carries
+ * its own WHERE and ORDER BY, textually earlier, which a first-match
+ * `.replace()` would splice the scope clause into instead — landing on a bare
+ * `workspace_id` inside a subquery that joins `edges` and `entries`, where it
+ * is ambiguous between the two. The outer " ORDER BY" is always the LAST one;
+ * the subquery's own FROM clause is "FROM edges g JOIN entries s", never the
+ * literal "FROM entries", so the last occurrence of that is always the outer one too.
+ */
 function scopeEntryFilterQuery(
   identity: Identity,
   q: { sql: string; bindings: unknown[] },
@@ -21,11 +36,24 @@ function scopeEntryFilterQuery(
   teamId?: string,
 ): { sql: string; bindings: unknown[] } {
   const scope = scopeWhereForRead(identity, { layer, teamId });
-  const sql = q.sql.includes("WHERE")
-    ? q.sql.replace(" ORDER BY", ` AND ${scope.clause} ORDER BY`)
-    : q.sql.replace(" ORDER BY", ` WHERE ${scope.clause} ORDER BY`);
+  const orderByAt = q.sql.lastIndexOf(" ORDER BY");
+  // scope-exempt: string search over q.sql, which buildEntryFilterQuery already produced and this function is about to scope; not a query of its own
+  const fromEntriesAt = q.sql.lastIndexOf("FROM entries");
+  const hasOuterWhere = q.sql.slice(fromEntriesAt, orderByAt).includes("WHERE");
+  const sql = `${q.sql.slice(0, orderByAt)} ${hasOuterWhere ? "AND" : "WHERE"} ${scope.clause}${q.sql.slice(orderByAt)}`;
   return { sql, bindings: [...q.bindings.slice(0, -1), ...scope.bindings, ...q.bindings.slice(-1)] };
 }
+
+const standingJson = (f: StandingFire) => ({
+  id: f.id,
+  content: f.content,
+  created_at: f.createdAt,
+  workspace: f.workspace,
+  actor_name: f.actorName ?? null,
+  project: f.project,
+  score: parseFloat((f.score * 100).toFixed(1)),
+  ...(f.why ? { why: f.why } : {}),
+});
 
 export async function handleRecallRoutes(
   request: Request,
@@ -80,6 +108,14 @@ export async function handleRecallRoutes(
     );
     return json(rows.map((r) => {
       const layer = layerOf(identity, r.workspace_id);
+      const { superseded_by_json, ...rest } = r as Record<string, unknown> & { superseded_by_json?: string | null };
+      const validity = validitySummary({
+        createdAt: Number(r.created_at),
+        validFrom: r.valid_from as number | null | undefined,
+        validUntil: r.valid_until as number | null | undefined,
+        tags: JSON.parse((r.tags as string) ?? "[]"),
+        supersededBy: parseSupersededBy(superseded_by_json),
+      });
       // actor_name is always present, null where there is no author to name —
       // the same contract GET /recall's results carry. It used to be added only
       // on company rows, which made the KEY's existence depend on whether the
@@ -87,8 +123,14 @@ export async function handleRecallRoutes(
       // appeared at all, so a client could not tell "nobody wrote this" from
       // "this deployment does not report authors".
       return {
-        ...r,
+        ...rest,
         workspace: layer,
+        valid_from: validity.validFrom,
+        valid_from_stated: validity.validFromStated,
+        valid_until: validity.validUntil,
+        validity_state: validity.validityState,
+        superseded_by: validity.supersededBy,
+        retracted_source: validity.retractedSource,
         // The same answer GET /entry gives, from the same predicate the mutation
         // routes enforce with: a card the caller cannot edit says so before they
         // try. Computed for every row, not only company ones, so a client can
@@ -138,11 +180,29 @@ export async function handleRecallRoutes(
     // payload. Renderers that show the whole memory (the dashboard) pass full=1.
     const full = ["1", "true", "yes"].includes((url.searchParams.get("full") ?? "").toLowerCase());
 
+    // Off by default: `why` adds a structured trace to every result.
+    const explain = ["1", "true", "yes"].includes((url.searchParams.get("explain") ?? "").toLowerCase());
+
+    // Opt-out only: recallEntries already defaults synthesize to true (src/recall/search.ts), so
+    // omitting this or passing anything else keeps every existing caller byte-identical. Hooks
+    // that want recall without an LLM synthesis call (e.g. Cursor's per-prompt recall, R1 in
+    // 20-free-tier-ledger.md) pass synthesize=false or synthesize=0.
+    const synthesizeParam = url.searchParams.get("synthesize");
+    const synthesize = synthesizeParam === "false" || synthesizeParam === "0" ? false : undefined;
+
     const project = await readProjectParam(env, identity, url, { layer: workspace, teamId: team });
     if (project instanceof Response) return project;
 
     const cfg = await resolveConfig(env);
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops, project }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
+    const asOfParam = url.searchParams.get("as_of")?.trim();
+    let asOf: number | undefined;
+    if (asOfParam) {
+      if (after !== undefined || before !== undefined) return json({ ok: false, error: "Pass as_of, or after/before, not both." }, 400);
+      const parsed = parseValidityDate(asOfParam, Date.now(), cfg.TIMEZONE, "end");
+      if (typeof parsed !== "number") return json({ ok: false, error: parsed.error }, 400);
+      asOf = parsed;
+    }
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale, asOf: asOfHeader, standing, receipt } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize, channel: "rest" }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team, asOf });
 
     if (!matches.length) {
       return json({
@@ -150,6 +210,10 @@ export async function handleRecallRoutes(
         results: [],
         query_used: queryUsed,
         semantic_unavailable: semanticUnavailable,
+        receipt,
+        ...(asOfHeader ? { as_of: { at: asOfHeader.at, not_recorded_before: asOfHeader.notRecordedBefore } } : {}),
+        // A standing instruction can fire above zero results (spec 15 2.8 step 5).
+        ...(standing?.length ? { standing: standing.map(standingJson) } : {}),
         message: semanticUnavailable
           ? `Semantic search was unavailable or incomplete for this query, so only keyword and tag matches were considered. ${SEMANTIC_UNAVAILABLE_DETAIL}`
           : "Nothing found matching that query.",
@@ -160,6 +224,9 @@ export async function handleRecallRoutes(
       ok: true,
       query_used: queryUsed,
       compound_stale: compoundStale ?? null,
+      receipt,
+      ...(asOfHeader ? { as_of: { at: asOfHeader.at, not_recorded_before: asOfHeader.notRecordedBefore } } : {}),
+      ...(standing?.length ? { standing: standing.map(standingJson) } : {}),
       results: matches.map((m, i) => {
         const s = full
           ? { text: m.content, truncated: false, fullLength: (m.content ?? "").length }
@@ -183,6 +250,21 @@ export async function handleRecallRoutes(
           via_type: m.viaType ?? null,
           linked_at: m.viaLinkedAt ?? null,
           related_to: m.viaFrom ?? null,
+          similar: m.similar?.map(s => ({ id: s.id, created_at: s.createdAt })) ?? [],
+          edited_canonical_at: editedCanonicalAt(m.tags),
+          valid_from: m.validFrom,
+          valid_from_stated: m.validFromStated,
+          valid_until: m.validUntil,
+          validity_state: m.validityState,
+          superseded_by: m.supersededBy,
+          retracted_source: m.retractedSource,
+          ...(asOfHeader ? {
+            as_of_text_changed_at: m.asOfTextChangedAt ?? null,
+            status_at: m.statusAt ?? null,
+            recorded_after_as_of: m.recordedAfterAsOf ?? false,
+            retracted_belief: m.retractedBelief ? { retracted_at: m.retractedBelief.retractedAt, attached_to: m.retractedBelief.attachedTo } : null,
+          } : {}),
+          ...(explain ? { why: m.why ?? null } : {}),
         };
       }),
       insight: insight || null,
@@ -263,7 +345,7 @@ Be specific and complete. Concision means leaving out filler, never leaving out 
         project: rows,
       });
       if (!projectResult.synthesizedId) {
-        return json({ project: slug, error: "Could not create digest — project may have fewer than 10 eligible entries or was recently compressed", source_count: projectResult.entriesUsed });
+        return json({ project: slug, error: "Could not create digest: the project may have fewer than 10 eligible entries, or it was recently compressed.", source_count: projectResult.entriesUsed });
       }
       return json({ project: slug, synthesis: projectResult.text, entry_id: projectResult.synthesizedId, source_count: projectResult.entriesUsed });
     }
@@ -273,7 +355,7 @@ Be specific and complete. Concision means leaving out filler, never leaving out 
     });
 
     if (!result.synthesizedId) {
-      return json({ tag, error: "Could not create digest — tag may have fewer than 10 eligible entries or was recently compressed", source_count: result.entriesUsed });
+      return json({ tag, error: "Could not create digest: the tag may have fewer than 10 eligible entries, or it was recently compressed.", source_count: result.entriesUsed });
     }
 
     return json({ tag, synthesis: result.text, entry_id: result.synthesizedId, source_count: result.entriesUsed });

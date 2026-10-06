@@ -7,13 +7,14 @@ import {
   RECALL_BLOCK,
   RECALL_DEEP_POOL_SIZE,
   RECALL_POOL_SIZE,
+  STANDING_MAX_FIRES,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
 import { isRerankMode, resolveConfig, type Config, type RerankMode } from "../config";
-import { embed } from "../lib/ai";
+import { embed, embedMany } from "../lib/ai";
 import type { Identity } from "../lib/identity";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
-import { layerOf, scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
+import { layerOf, readScopeWorkspaces, scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
 import { expandGraph } from "../graph/traverse";
 import type { GraphNeighbor } from "../graph/types";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
@@ -22,7 +23,7 @@ import { CONTENT_LIKE_ESCAPE, contentLikePattern } from "../text/like";
 import { distillToRareTerms, inferQueryTags, scopedEntryTotal, type DistilledQuery, type TimeBounds } from "./distill";
 import { synthesizeInsight } from "./insight";
 import { hasStaleAsOf } from "../memory/stale";
-import { cosineSim, mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "./math";
+import { cosineSim, mmrRerank, rerankWithTimeDecay, rerankWithTimeDecayTraced, type RankMultipliers, type VectorizeMatch } from "./math";
 import { rrfFuse } from "./rrf";
 import { computeCompoundStale } from "./compound-stale";
 import { exactQueryMatchCount, GRAPH_SLOT_INDEX, GRAPH_SLOT_INDICES, graphSeedLimit, lexicalSeedLimit, RECALL_SEED_TOPK, scoreLinkedEvidence } from "./neighborhood";
@@ -31,16 +32,26 @@ import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from 
 import { localEvidenceOf } from "./root-candidate";
 import { blendRerankerScores, rerankDirectCap, rerankStep } from "./model-reranker";
 import { evidenceScoreOf, selectGraphRoots, type RootCandidate } from "./root-selector";
-import type { KeywordRow, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
+import type { KeywordRow, KeywordTermTrace, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage, StandingFire, WhySlot, WhyTrace } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql, projectMemberTags } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
 import { workspaceFilter, queryVectorizeScoped } from "../vectorize/scope";
 import { observeRecallEnv } from "./diagnostics";
+import { parseSupersededBy, validitySummary } from "./validity-view";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
 import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./keyword-rows";
+import { vectorSortKey } from "../vectorize/ids";
+import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
+import { applyOccupancyCap, CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates, liftFor } from "./source-trust";
+import { enrichWithAsOf, asOfPredicateSql, asOfPredicateBindings } from "./as-of";
+import { getVersionsSince } from "../memory/versions";
+import { currentValidityAt, supersededBySql } from "../memory/validity";
+import { maybeLogRecall, receiptHash, type RecallLogChannel } from "./log";
+import { readStandingCaches } from "../standing/cache";
+import { selectStandingFires } from "../standing/fire";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -72,6 +83,8 @@ async function keywordSearchLike(
   // Corpus df from distillation. With it, rows carrying the rarest terms are kept whole and recency fills the rest;
   // without it the window is the newest rows matching any term, as before.
   corpus?: Pick<DistilledQuery, "df" | "total">,
+  now: number = Date.now(),
+  asOf?: number,
 ): Promise<KeywordRow[]> {
   if (!tokens.length) return [];
   // Capped here rather than at distillation's uncapped exits because this is
@@ -96,6 +109,7 @@ async function keywordSearchLike(
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
   // `not` are terms whose rows are excluded (already read whole by an earlier window); `max` is the window's row cap.
   // The rows come back without their text: each carries, for every term, how the note holds it (see keyword-rows.ts).
+  const validityBindings = asOf === undefined ? [now] : asOfPredicateBindings(asOf);
   const windowFor = (subset: string[], max: number, not: string[] = []) => {
     const where = subset.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
     const exclude = not.length ? ` AND NOT (${not.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ")})` : "";
@@ -104,10 +118,11 @@ async function keywordSearchLike(
     // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
     const tokenWhere = subset.length > 1 && (timeWhere || scopeSql || exclude) ? `(${where})` : where;
     // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name
-    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql}${exclude} ORDER BY created_at DESC LIMIT ?`;
+    // validity: current: a superseded or ended row must not take a keyword pool slot from one that is still true (5.5); as-of (5.7 item 2) also lets through a belief the OR's second arm names, confirmed later by as-of.ts's belief batch
+    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql} AND ${asOf === undefined ? "(valid_until IS NULL OR valid_until > ?)" : asOfPredicateSql()}${exclude} AND ${NOT_HELD_SQL} ORDER BY created_at DESC LIMIT ?`;
     const levels = withMatchLevels(inner, ["id", "created_at", "tags", "source"], terms, "created_at DESC");
     return env.DB.prepare(levels.sql)
-      .bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), ...not.map(contentLikePattern), max, ...levels.binds);
+      .bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), ...validityBindings, ...not.map(contentLikePattern), max, ...levels.binds);
   };
   const split = splitLikeTerms(terms, corpus?.df, limit);
   if (!split) return ((await windowFor(terms, limit).all()).results ?? []).map(r => rowWithLevels(r as Record<string, unknown>, terms));
@@ -150,6 +165,8 @@ async function keywordSearchFts(
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
+  now: number = Date.now(),
+  asOf?: number,
 ): Promise<KeywordRow[][]> {
   let timeWhere = "";
   const timeBindings: number[] = [];
@@ -161,17 +178,20 @@ async function keywordSearchFts(
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
   const shortHits = shortTerms.map(() => `(e.content LIKE ? ${CONTENT_LIKE_ESCAPE})`).join(" + ");
   const shortBindings = shortTerms.map(contentLikePattern);
+  const validityBindings = asOf === undefined ? [now] : asOfPredicateBindings(asOf);
   // Rows come back without their text, with per-term match levels instead (keyword-rows.ts). `sh` and `rk` carry the ranking
   // (short-token hits, then bm25) so the outer SELECT keeps the order the LIMIT chose.
   // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
+  // validity: current: a superseded or ended row must not take a keyword pool slot from one that is still true (5.5); as-of (5.7 item 2) also lets through a belief the OR's second arm names, confirmed later by as-of.ts's belief batch
   const rankedInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, ${shortHits || "0"} AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql} AND ${asOf === undefined ? "(e.valid_until IS NULL OR e.valid_until > ?)" : asOfPredicateSql("e")} AND ${NOT_HELD_SQL}
        ORDER BY sh DESC, rk, ord LIMIT ?`;
   // scope-checked: same clause, same reason as above
+  // validity: current: same predicate as rankedInner above (5.5/5.7 item 2)
   const andTierInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql} AND ${asOf === undefined ? "(e.valid_until IS NULL OR e.valid_until > ?)" : asOfPredicateSql("e")} AND ${NOT_HELD_SQL}
        ORDER BY entries_fts.rowid DESC LIMIT ?`;
   const rankedLevels = withMatchLevels(rankedInner, ["id", "created_at", "tags", "source", "sh", "rk", "ord"], terms, "sh DESC, rk, ord", ["id", "created_at", "tags", "source"]);
   const andTierLevels = withMatchLevels(andTierInner, ["id", "created_at", "tags", "source", "ord"], terms, "ord DESC", ["id", "created_at", "tags", "source"]);
@@ -189,8 +209,8 @@ async function keywordSearchFts(
   // when not live reuses keywordSearch's existing catch-and-fall-back-to-LIKE
   // wiring below, rather than adding a second control path.
   const statementFor = (match: string, i: number, max: number) => andTier && i === 0
-    ? env.DB.prepare(andTierLevels.sql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), max, ...andTierLevels.binds)
-    : env.DB.prepare(rankedLevels.sql).bind(...shortBindings, match, ...timeBindings, ...(scope?.bindings ?? []), max, ...rankedLevels.binds);
+    ? env.DB.prepare(andTierLevels.sql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), ...validityBindings, max, ...andTierLevels.binds)
+    : env.DB.prepare(rankedLevels.sql).bind(...shortBindings, match, ...timeBindings, ...(scope?.bindings ?? []), ...validityBindings, max, ...rankedLevels.binds);
   const [livenessResult, ...firstTier] = await env.DB.batch([
     // scope-exempt: FTS_LIVENESS_SQL reads sqlite_master (schema catalogue),
     // never entries/edges rows — nothing here to scope by workspace.
@@ -226,8 +246,10 @@ export async function keywordSearch(
   only?: "personal" | "company",
   teamId?: string,
   corpus?: Pick<DistilledQuery, "df" | "total">,
+  now: number = Date.now(),
+  asOf?: number,
 ): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"]; idfWindow?: number }> {
-  const result = await keywordSearchRows(tokens, env, limit, bounds, identity, only, teamId, corpus);
+  const result = await keywordSearchRows(tokens, env, limit, bounds, identity, only, teamId, corpus, now, asOf);
   // Levels the SQL could not decide (non-ASCII terms, notes with U+212A or U+0130) are settled from the notes' text, for those rows only (keyword-rows.ts).
   await settleLevels(env, result.rows, tokens.slice(0, KEYWORD_MAX_TOKENS));
   return result;
@@ -245,6 +267,8 @@ async function keywordSearchRows(
   // Absent (or null) on every path that skipped or lost that scan, in which
   // case the cost estimate below cannot run and routing keeps today's rules.
   corpus?: Pick<DistilledQuery, "df" | "total">,
+  now: number = Date.now(),
+  asOf?: number,
 ): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"]; idfWindow?: number }> {
   if (!tokens.length) return { rows: [], fts: false, route: "like-ineligible-token" };
   const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
@@ -265,16 +289,16 @@ async function keywordSearchRows(
     // computes no df for one-word inputs.
     const plan = planFtsMatch(eligible, corpus?.df, limit);
     if (!plan) {
-      return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-match-budget" };
+      return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus, now, asOf), fts: false, route: "like-match-budget" };
     }
     if (await ftsReady(env)) {
       try {
-        const tiers = await keywordSearchFts(plan.matches, plan.andTier, terms.filter(ftsShortToken), terms, env, limit, bounds, identity, only, teamId);
+        const tiers = await keywordSearchFts(plan.matches, plan.andTier, terms.filter(ftsShortToken), terms, env, limit, bounds, identity, only, teamId, now, asOf);
         const rows = tiers.length === 1 ? tiers[0] : mergeTiers(tiers, limit);
         // A bounded plan that found nothing has not proven the tokens absent:
         // the recency window is the pre-bounded answer, so keep it as the floor.
         if (plan.bounded && !rows.length) {
-          return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-match-budget" };
+          return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus, now, asOf), fts: false, route: "like-match-budget" };
         }
         // Without corpus df, fusion estimates IDF from the fetched rows, whose
         // count is the denominator. LIKE always returned a full recency window
@@ -286,12 +310,12 @@ async function keywordSearchRows(
         return { rows, fts: true, route: plan.bounded ? "fts-bounded" : "fts", idfWindow };
       } catch (e) {
         console.error("FTS keyword search failed (degrading to LIKE):", e);
-        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-error" };
+        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus, now, asOf), fts: false, route: "like-error" };
       }
     }
-    return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-not-ready" };
+    return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus, now, asOf), fts: false, route: "like-not-ready" };
   }
-  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-ineligible-token" };
+  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus, now, asOf), fts: false, route: "like-ineligible-token" };
 }
 
 // Tiers arrive in priority order (the AND tier newest-first, the OR tier by
@@ -335,6 +359,8 @@ export function fuseDenseAndKeyword(
   substringWeight: number,
   keywordPreRanked = false,
   idfWindow = 0,
+  // Explain only: filled with each matched row's per-term level and idf, computed here already.
+  keywordTrace?: Map<string, KeywordTermTrace[]>,
 ): VectorizeMatch[] {
   const denseByParent = new Map<string, VectorizeMatch>();
   for (const m of [...denseMatches].sort((a, b) => b.score - a.score)) {
@@ -378,6 +404,17 @@ export function fuseDenseAndKeyword(
     ? keywordScored.sort((a, b) => b.weight - a.weight)
     : keywordScored.sort((a, b) => b.weight - a.weight || b.row.created_at - a.row.created_at || (a.row.id < b.row.id ? -1 : 1));
 
+  if (keywordTrace) {
+    for (const { row } of keywordRanked) {
+      const terms: KeywordTermTrace[] = [];
+      for (const t of tokens) {
+        const level = termLevel(row, t);
+        if (level !== 0) terms.push({ term: t, level, idf: idf(t) });
+      }
+      keywordTrace.set(row.id, terms);
+    }
+  }
+
   const fused = rrfFuse(denseRanked, keywordRanked.map(x => ({ id: x.row.id, weight: x.weight })));
   const keywordRowById = new Map(keywordRows.map(r => [r.id, r]));
 
@@ -395,7 +432,7 @@ export function fuseDenseAndKeyword(
 }
 
 export async function recallEntries(
-  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean; project?: readonly ProjectRow[] },
+  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean; project?: readonly ProjectRow[]; explain?: boolean; channel?: RecallLogChannel },
   env: Env,
   ctx: ExecutionContext,
   // Resolved once at request entry by the route/MCP caller and threaded down.
@@ -417,12 +454,24 @@ export async function recallEntries(
   const cfg = config ?? await resolveConfig(env);
   const { query, topK } = params;
   const synthesize = params.synthesize ?? true;
+  // Off: nothing below records or attaches a trace, so results are what they were before explain existed.
+  const explain = params.explain === true;
   let { tag, after, before, kind } = params;
   // A project narrows exactly like a tag: candidates come from the members first (the tag
   // or any alias), and the same OR group is re-applied at hydration and in the JS re-check.
   const projectFilter = params.project?.length ? projectFilterSql(params.project) : null;
   const projectTags = projectMemberTags(params.project ?? []);
   const memberFirst = Boolean(tag) || projectFilter !== null;
+  // Off unless NOTICE_COLLAPSE is on, and off for this one call when the query
+  // or tag names its own source (a source word, a mirror-written tag, or an
+  // enumerating query): a deliberate "show all my emails" must not be thinned (4.4).
+  const collapseActive = cfg.NOTICE_COLLAPSE === "on" && !collapseLift(query, tag);
+  // Off at share 1.0, and off for this one call when the query or tag names
+  // its own source. A `project` filter never lifts it (P3, Q-C): every
+  // session-start hook passes project on every recall, so a lift there would
+  // switch the defence off exactly where it runs most.
+  const capActive = cfg.MIRROR_MAX_SHARE < 1.0 && !liftFor(query, tag);
+  const lookaheadActive = collapseActive || capActive;
   const hops = Math.max(0, Math.min(cfg.GRAPH_MAX_HOPS, params.hops ?? cfg.DEFAULT_HOPS));
   const now = Date.now();
   let semanticUnavailable = false;
@@ -439,10 +488,19 @@ export async function recallEntries(
     throw new Error(`Unknown recall variant arms: ${String(requestedArms)}`);
   }
   const arms = memberFirst ? "both" : requestedArms ?? "both";
+  // As-of (spec 14 5.7 item 1): treated exactly like an explicit after/before, so phrase parsing is skipped.
+  const asOf = internal.asOf;
+
+  // Standing (spec 15 2.8): started here so its KV read overlaps distillation's D1 scan. An as-of
+  // recall answers what was true then, not what applies now, so it never fires standing.
+  const standingWorkspaceIds = identity ? readScopeWorkspaces(identity, readScope) : [""];
+  const standingCachesPromise = asOf === undefined
+    ? readStandingCaches(env, ctx, cfg, standingWorkspaceIds, now)
+    : Promise.resolve([]);
 
   let semanticQuery = query;
-  if (after === undefined && before === undefined) {
-    const parsed = parseTimePhrase(query, now);
+  if (after === undefined && before === undefined && asOf === undefined) {
+    const parsed = parseTimePhrase(query, now, cfg.TIMEZONE);
     after = parsed.after;
     before = parsed.before;
     semanticQuery = parsed.cleanQuery;
@@ -466,11 +524,81 @@ export async function recallEntries(
   markStage("setup");
 
   const tokens = profile.lexicalTokens;
-  const [values, queryTags] = await Promise.all([
-    arms === "keyword-only" ? Promise.resolve([] as number[]) : embed(embedQuery, env, cfg),
+  const standingCaches = await standingCachesPromise;
+  const standingHasItems = arms !== "keyword-only" && standingCaches.some(c => c.items.length > 0);
+  // One embed call with two texts when standing needs its own (the query text recall embeds
+  // differs from the plain semantic text standing scores against), one text otherwise: never an
+  // extra AI call over today's single embedding request (spec 15 2.8 step 2).
+  const needsStandingEmbed = standingHasItems && profile.semanticQuery !== embedQuery;
+  const embedStep: Promise<{ values: number[]; standingVector?: number[] }> = arms === "keyword-only"
+    ? Promise.resolve({ values: [] })
+    : needsStandingEmbed
+      ? embedMany([embedQuery, profile.semanticQuery], env, cfg).then(([a, b]) => ({ values: a, standingVector: b }))
+      : embed(embedQuery, env, cfg).then(v => ({ values: v, standingVector: standingHasItems ? v : undefined }));
+  const [{ values, standingVector }, queryTags] = await Promise.all([
+    embedStep,
     inferQueryTags(lexicalQuery, env, ctx, identity),
   ]);
   markStage("querySignals");
+
+  // Pure candidate selection (spec 15 2.7): cheap, so computed unconditionally once a vector
+  // exists. Whether it is actually used to fire is gated at each hydration site below by the
+  // recall's own semanticUnavailable, which is not yet known this early in every arm.
+  const standingProject = params.project?.length
+    ? { slug: params.project[0].id, aliases: params.project.flatMap(p => p.aliases) }
+    : undefined;
+  const standingCandidates = standingVector
+    ? selectStandingFires(standingVector, standingCaches, { threshold: cfg.STANDING_THRESHOLD, maxFires: STANDING_MAX_FIRES, project: standingProject })
+    : [];
+
+  /** Hydrated fresh from D1 (never from KV), so a stopped/forgotten/deprecated/moved/held row can never render (spec 15 2.9/2.10). */
+  async function standingFiresFrom(rows: Record<string, any>[]): Promise<StandingFire[]> {
+    if (!rows.length) return [];
+    const scoreById = new Map(standingCandidates.map(c => [c.id, c.score]));
+    const actorIds = [...new Set(rows.map(r => r.actor_id as string).filter(id => id && id !== identity?.userId))];
+    const labelMap = actorIds.length ? await lookupActorLabels(env, actorIds) : new Map<string, string>();
+    return rows
+      .map(r => {
+        const tags = JSON.parse(r.tags ?? "[]") as string[];
+        const projectTag = tags.find(t => t.startsWith("project:"));
+        return {
+          id: r.id as string,
+          content: r.content as string,
+          createdAt: r.created_at as number,
+          workspace: layerOf(identity, r.workspace_id),
+          actorName: r.actor_id && r.actor_id !== identity?.userId
+            ? resolveActorLabel(r.actor_id as string, labelMap, { viewerId: identity?.userId })
+            : undefined,
+          project: projectTag ? projectTag.slice("project:".length) : null,
+          score: scoreById.get(r.id as string) ?? 0,
+          ...(explain ? { why: `standing: similarity ${(scoreById.get(r.id as string) ?? 0).toFixed(2)} >= ${cfg.STANDING_THRESHOLD.toFixed(2)}` } : {}),
+        } satisfies StandingFire;
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, STANDING_MAX_FIRES);
+  }
+
+  /** The standalone arm (spec 15 2.8 step 5): one extra statement, run only when there is a candidate to hydrate. */
+  async function fetchStandingFires(): Promise<StandingFire[]> {
+    if (semanticUnavailable || !standingCandidates.length) return [];
+    const placeholders = standingCandidates.map(() => "?").join(", ");
+    const standingScopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
+    // validity: current: currentValidityAt re-checks what the cache build already filtered, because the cache can be up to 24h stale (spec 15 2.4/2.6)
+    const { results } = await env.DB.prepare(
+      `SELECT id, content, tags, created_at, workspace_id, actor_id FROM entries
+        WHERE id IN (${placeholders}) AND tags LIKE '%"standing:active"%'
+          AND tags NOT LIKE '%"status:deprecated"%' AND ${NOT_HELD_SQL} AND ${currentValidityAt("", "?")}${standingScopeSql}`
+    ).bind(...standingCandidates.map(c => c.id), now, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
+    return standingFiresFrom(results);
+  }
+
+  /** No hydration will run on this path: the standing arm, if any candidate survives, is the only extra statement (spec 15 2.8 step 5). */
+  async function noResultsWithStanding(): Promise<RecallSearchResult> {
+    const standing = await fetchStandingFires();
+    // No recall_log row is written on this path (maybeLogRecall never runs here), so the
+    // receipt is always the hash, whatever RECALL_LOG is set to (Part C, 05-proof.md).
+    return { matches: [], insight: "", semanticUnavailable, receipt: receiptHash(query, now), ...(standing.length ? { standing } : {}) };
+  }
 
   let keywordRows: KeywordRow[] = [];
   let keywordIdfWindow = 0;
@@ -498,11 +626,12 @@ export async function recallEntries(
     const memberBindings: string[] = [];
     if (tag) { memberConds.push(`tags LIKE ? ${TAG_LIKE_ESCAPE}`); memberBindings.push(tagLikePattern(tag)); }
     if (projectFilter) { memberConds.push(projectFilter.clause); memberBindings.push(...projectFilter.bindings); }
+    // validity: current: these ids feed the same final hydration below, whose d1Filters is the authoritative current-only predicate (5.5); no separate pool-slot argument applies to a tag/project scan
     // scope-checked: the caller's clause IS applied — tagScopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus tag scan
     const { results: tagRows } = await env.DB.prepare(
-      `SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE ${memberConds.join(" AND ")}${tagScopeSql}`
+      `SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE ${memberConds.join(" AND ")}${tagScopeSql} AND ${NOT_HELD_SQL}`
     ).bind(...memberBindings, ...(scope?.bindings ?? [])).all();
-    if (!tagRows.length) return { matches: [], insight: "", semanticUnavailable };
+    if (!tagRows.length) return await noResultsWithStanding();
     keywordRows = tagRows as unknown as KeywordRow[];
 
     const vectorIds = [...new Set(
@@ -575,7 +704,7 @@ export async function recallEntries(
       denseQuery(),
       arms === "dense-only"
         ? Promise.resolve({ rows: [] as KeywordRow[], fts: false, route: "skipped-by-variant" as const, idfWindow: undefined })
-        : keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId, distilled),
+        : keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId, distilled, now, asOf),
     ]);
     results = denseResults;
     keywordRows = kw.rows;
@@ -609,7 +738,7 @@ export async function recallEntries(
 
   const semanticRankByParent = new Map<string, number>();
   [...results.matches]
-    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+    .sort((a, b) => b.score - a.score || vectorSortKey(a.id).localeCompare(vectorSortKey(b.id)))
     .forEach(match => {
       const parentId = ((match.metadata as any)?.parentId ?? match.id) as string;
       if (!semanticRankByParent.has(parentId)) semanticRankByParent.set(parentId, semanticRankByParent.size + 1);
@@ -627,18 +756,24 @@ export async function recallEntries(
       corpus = { df, total };
     }
   }
-  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
-  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
+  const rootKeywordTrace = explain ? new Map<string, KeywordTermTrace[]>() : undefined;
+  const lexicalKeywordTrace = explain ? new Map<string, KeywordTermTrace[]>() : undefined;
+  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow, rootKeywordTrace);
+  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow, lexicalKeywordTrace);
   const fusedMatches = lexicalFusedMatches.length ? lexicalFusedMatches : rootFusedMatches;
-  if (!rootFusedMatches.length && !fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
+  const keywordTrace = lexicalFusedMatches.length ? lexicalKeywordTrace : rootKeywordTrace;
+  if (!rootFusedMatches.length && !fusedMatches.length) return await noResultsWithStanding();
 
   const candidateIds = [...new Set([...fusedMatches, ...rootFusedMatches].map(m => (m.metadata as any)?.parentId ?? m.id))] as string[];
   internal.diagnostics && (internal.diagnostics.fusedIds = [...new Set(rootFusedMatches.map(m => (m.metadata as any)?.parentId ?? m.id))] as string[]);
-  type CandidateSignalRow = { id: string; content?: string; source?: string; created_at?: number; last_updated?: number; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number; tags: string };
+  type CandidateSignalRow = { id: string; content?: string; source?: string; created_at?: number; last_updated?: number; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number; tags: string; valid_until?: number | null };
   const rcRows: CandidateSignalRow[] = [];
+  // valid_until rides along so the evidence-slot re-check below (which reads
+  // this row when a candidate never reached d1Map) can still enforce current
+  // validity, not just deprecated status.
   const candidateSignalProjection = hops > 0
-    ? `id, content, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id`
-    : "id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id";
+    ? `id, content, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id, valid_until`
+    : "id, source, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id, valid_until";
   // Scoped too: this is the leak-catcher for unscoped Vectorize hits — until
   // namespaces land (P3) the dense arm can surface a stranger's id, and the
   // scope clause here is what stops that id from hydrating into signals. The
@@ -649,6 +784,7 @@ export async function recallEntries(
   for (let i = 0; i < candidateIds.length; i += rcBatchSize) {
     const batch = candidateIds.slice(i, i + rcBatchSize);
     const rcPlaceholders = batch.map(() => "?").join(", ");
+    // validity: current: valid_until rides in candidateSignalProjection; the evidence-slot JS re-check below is this read's only current-only enforcement (5.5)
     // scope-checked: rcScopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
     const { results: rows } = await env.DB.prepare(
       `SELECT ${candidateSignalProjection} FROM entries WHERE id IN (${rcPlaceholders})${rcScopeSql}`
@@ -660,17 +796,48 @@ export async function recallEntries(
   const contradictionWins = new Map(rcRows.map(r => [r.id, r.contradiction_wins ?? 0]));
   const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
   const d1Tags = new Map(rcRows.map(r => [r.id, JSON.parse(r.tags ?? "[]") as string[]]));
+  const d1Sources = new Map(rcRows.filter(r => r.source !== undefined).map(r => [r.id, r.source as string]));
+  // Held rows: dropped here, before rerank, rather than only at hydration. A
+  // held row briefly still carrying vectors (the race window between its hold
+  // commit and its vector delete) would otherwise take a dense or keyword
+  // slot and rank before the model ever runs (5.3).
+  const notHeld = (list: VectorizeMatch[]) => list.filter(m => {
+    const tags = d1Tags.get(((m.metadata as any)?.parentId ?? m.id) as string);
+    return !tags || !isHeld(tags);
+  });
+  const fusedForRerank = notHeld(fusedMatches);
+  const rootFusedForRerank = notHeld(rootFusedMatches);
 
-  let directReranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  // The traced variant is for explain only: off, recall runs the plain reranker it always ran.
+  // intent (5.8/B6): stale_penalty applies only under "current" — profile.intent is the same
+  // classification authorityAlignment already reads above, not a second guess.
+  const directOptions = { d1Sources, intent: profile.intent };
+  const directTraced = explain ? rerankWithTimeDecayTraced(fusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions) : undefined;
+  let directReranked = directTraced ? directTraced.map(t => t.match) : rerankWithTimeDecay(fusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions);
   // The root view is computed here, beside the direct one, so a single model batch can cover both.
-  let rootReranked = hops > 0
-    ? rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false })
-    : [];
+  const rootOptions = { useRecallFrequency: false, d1Sources, intent: profile.intent };
+  const rootTraced = explain && hops > 0 ? rerankWithTimeDecayTraced(rootFusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
+  let rootReranked = rootTraced.length ? rootTraced.map(t => t.match)
+    : hops > 0 ? rerankWithTimeDecay(rootFusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
   const rerankMode: RerankMode = internal.variant?.rerank === true ? "on" : internal.variant?.rerank === false ? "off" : isRerankMode(cfg.RERANK_MODE) ? cfg.RERANK_MODE : "off";
   // Only parents the scoped D1 read returned may reach the model: a foreign Vectorize hit has no row here.
   const scopedParents = new Set(rcRows.map(r => r.id));
   const inScope = (m: VectorizeMatch) => scopedParents.has(((m.metadata as any)?.parentId ?? m.id) as string);
   const parentOfMatch = (m: VectorizeMatch) => ((m.metadata as any)?.parentId ?? m.id) as string;
+  // Explain shows only what the caller's own rows justify: a foreign vector D1 dropped must leave no trace in any rank.
+  const scopedOrder = (list: VectorizeMatch[]) => {
+    const order = new Map<string, number>();
+    for (const m of list) if (inScope(m) && !order.has(parentOfMatch(m))) order.set(parentOfMatch(m), order.size);
+    return order;
+  };
+  const displayedDenseRank = new Map<string, number>();
+  if (explain) {
+    [...results.matches].sort((a, b) => b.score - a.score || vectorSortKey(a.id).localeCompare(vectorSortKey(b.id))).forEach(match => {
+      const id = parentOfMatch(match as VectorizeMatch);
+      if (scopedParents.has(id) && !displayedDenseRank.has(id)) displayedDenseRank.set(id, displayedDenseRank.size + 1);
+    });
+  }
+  const beforeBlend = explain ? { direct: scopedOrder(directReranked), root: scopedOrder(rootReranked) } : undefined;
   // Keyword evidence: rows the keyword arm returned that hold every distilled query term, in fused order. Scoped like
   // everything else here (inScope), and used only to choose ids: the model reads D1 text.
   const fusedOrder = new Map<string, number>();
@@ -695,8 +862,14 @@ export async function recallEntries(
     queryTokens: profile.evidenceTokens, evidenceTokens: profile.evidenceTokens, direct: directReranked.filter(inScope), root: rootReranked.filter(inScope),
     loadContent: async ids => {
       const known = new Map(rcRows.filter(r => r.content !== undefined).map(r => [r.id, r.content as string]));
-      const need = ids.filter(id => !known.has(id) && scopedParents.has(id));
+      // Codex review class E (T-0089.4.2): defense-in-depth, not the only guard — every id here
+      // already passed notHeld() upstream (it entered directReranked/rootReranked through it), but
+      // this reuses d1Tags (no extra read: rcRows already carries it) to keep loadContent's own
+      // fallback fetch from ever becoming the one path that forgot to check, whatever feeds `ids`
+      // in the future.
+      const need = ids.filter(id => !known.has(id) && scopedParents.has(id) && !isHeld(d1Tags.get(id) ?? []));
       if (need.length) {
+        // validity: current: every id here already passed the current-only filters above (d1Map or the evidence-slot re-check); this is a content-only re-fetch, not a new candidate source
         // scope-exempt: by-id: every id here came from rcRows, the scoped candidate-signal read above (inScope filters to it). The scope clause is left out on purpose: with it SQLite plans a scan of the caller's whole workspace instead of <=30 primary-key lookups, which costs rows_read in proportion to the brain's size on every recall
         const { results } = await env.DB.prepare(
           `SELECT id, content FROM entries WHERE id IN (${need.map(() => "?").join(", ")})`
@@ -719,6 +892,16 @@ export async function recallEntries(
     directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
     rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
   }
+  const rerankMove = new Map<string, "up" | "down">();
+  if (beforeBlend) {
+    for (const [before, after] of [[beforeBlend.root, scopedOrder(rootReranked)], [beforeBlend.direct, scopedOrder(directReranked)]] as const) {
+      for (const [id, pos] of after) {
+        const was = before.get(id);
+        if (was !== undefined && was !== pos) rerankMove.set(id, pos < was ? "up" : "down");
+        else if (was !== undefined) rerankMove.delete(id);
+      }
+    }
+  }
   internal.diagnostics && (internal.diagnostics.candidateIds = directReranked.map(m => ((m.metadata as any)?.parentId ?? m.id) as string));
 
   const seen = new Set<string>();
@@ -731,7 +914,7 @@ export async function recallEntries(
   // MMR is greedy, so its first n picks do not depend on how many are asked for. Rounding the depth up to whole
   // blocks (each ordered by score below) keeps every block a topK cuts the same block a larger topK sees, and a
   // default topK 5 call diversifies and hydrates exactly the five it always did.
-  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, Math.ceil(topK / RECALL_BLOCK) * RECALL_BLOCK);
+  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, Math.ceil(topK / RECALL_BLOCK) * RECALL_BLOCK + (lookaheadActive ? CAP_LOOKAHEAD : 0));
   // A topK larger than the diversified list draws the rest from a deeper dense list, after everything above. The
   // fetch happens only then, but what it adds is the same whatever topK is, and it only ever follows the list, so the
   // head of a smaller topK is a prefix of it.
@@ -747,7 +930,7 @@ export async function recallEntries(
   }
   markStage("candidateHydration");
 
-  if (!directCandidates.length) return { matches: [], insight: "", semanticUnavailable };
+  if (!directCandidates.length) return await noResultsWithStanding();
 
   const directParentIds = directCandidates.map((m) => (m.metadata as any)?.parentId ?? m.id);
   let selectedRoots: ReturnType<typeof selectGraphRoots> = [];
@@ -755,7 +938,13 @@ export async function recallEntries(
   if (hops > 0) {
     const candidateContent = new Map(rcRows.map(r => [r.id, r.content ?? ""]));
     const rootSeen = new Set<string>();
-    rootCandidates = rootReranked.flatMap(match => {
+    // Scoped like everything else here (inScope): a root the caller cannot read must
+    // never anchor a traversal, or its id rides out on a readable neighbour's viaFrom
+    // (why.graph.from, the MCP "linked from" line, REST related_to). This is a no-op
+    // whenever the workspace filter held, since rootReranked already held only the
+    // caller's own rows; it only bites when Vectorize rejected the filter and the
+    // unfiltered retry handed back another member's private vector.
+    rootCandidates = rootReranked.filter(inScope).flatMap(match => {
       const parentId = ((match.metadata as any)?.parentId ?? match.id) as string;
       if (rootSeen.has(parentId)) return [];
       rootSeen.add(parentId);
@@ -803,7 +992,7 @@ export async function recallEntries(
 
   let expanded: GraphNeighbor[] = [];
   if (hops > 0) {
-    expanded = await expandGraph(graphSeedIds, { hops, only: internal.workspaceFilter, teamId: internal.teamId }, env, cfg, identity);
+    expanded = await expandGraph(graphSeedIds, { hops, only: internal.workspaceFilter, teamId: internal.teamId, asOf }, env, cfg, identity);
   }
   markStage("graphExpansion");
   if (internal.diagnostics && hops > 0) internal.diagnostics.expandedIds = expanded.map(x => x.id);
@@ -818,8 +1007,11 @@ export async function recallEntries(
     ...graphSeedIds,
     ...expanded.map(e => e.id),
   ])];
-  let d1Filters = ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'`;
-  const filterBindings: (string | number)[] = [];
+  // validity: current: a replaced or ended fact must never be presented as current (5.5); as-of (5.7 item 3) instead keeps what was true at T plus belief candidates (confirmed by as-of.ts's belief batch)
+  let d1Filters = asOf === undefined
+    ? ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%' AND (valid_until IS NULL OR valid_until > ?) AND ${NOT_HELD_SQL}`
+    : ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND ${asOfPredicateSql()} AND ${NOT_HELD_SQL}`;
+  const filterBindings: (string | number)[] = asOf === undefined ? [now] : asOfPredicateBindings(asOf);
   if (tag) {
     d1Filters += ` AND tags LIKE ? ${TAG_LIKE_ESCAPE}`;
     filterBindings.push(tagLikePattern(tag));
@@ -840,15 +1032,47 @@ export async function recallEntries(
     d1Filters += ` AND ${scopeWhereForIdRead(scope).clause}`;
     filterBindings.push(...scope.bindings);
   }
+  // Standing (spec 15 2.8 step 4): appended to the FIRST hydration statement only, as an OR arm that
+  // ignores the caller's tag/project/kind/time filters on purpose — a standing instruction fires on
+  // topic, not on the caller's result filters. A row this arm returns is never added to allParentIds,
+  // so it can only ever leave d1Map unread (below) or be pulled out explicitly for `standing`; it can
+  // never enter `matches`.
+  const standingArmActive = !semanticUnavailable && standingCandidates.length > 0;
+  const standingIds = standingCandidates.map(c => c.id);
+  // validity: current: currentValidityAt re-checks what the cache build already filtered, because the cache can be up to 24h stale (spec 15 2.4/2.6)
+  // scope-checked: the standing arm carries its own scopeWhereForIdRead(scope) copy, a second predicate group inside the same statement, not inside d1Filters
+  const standingClause = standingArmActive
+    ? ` OR (id IN (${standingIds.map(() => "?").join(", ")}) AND tags LIKE '%"standing:active"%' AND tags NOT LIKE '%"status:deprecated"%' AND ${NOT_HELD_SQL} AND ${currentValidityAt("", "?")}${scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : ""})`
+    : "";
+  const standingBindings: (string | number)[] = standingArmActive
+    ? [...standingIds, now, ...(scope?.bindings ?? [])]
+    : [];
+
   const d1Rows: Record<string, any>[] = [];
-  const idBatchSize = D1_MAX_BOUND_PARAMS - filterBindings.length;
+  const idBatchSize = D1_MAX_BOUND_PARAMS - filterBindings.length - standingBindings.length;
   for (let i = 0; i < allParentIds.length; i += idBatchSize) {
     const batch = allParentIds.slice(i, i + idBatchSize);
     const placeholders = batch.map(() => "?").join(", ");
+    // The unmarked form on an ordinary batch (or every batch when no standing candidate exists)
+    // is BYTE-IDENTICAL to before the standing arm existed (spec 15 2.8's own invariant) — no
+    // extra parenthesis, no extra bytes — which a D1 double that matches on the SQL string, not
+    // just its meaning, also depends on.
+    const withStanding = i === 0 && standingArmActive;
     const { results } = await env.DB.prepare(
-      // scope-checked: d1Filters applies scopeWhereForIdRead(scope) above; the lexer cannot see the leading AND inside that JS fragment
-      `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (${placeholders})${d1Filters}`
-    ).bind(...batch, ...filterBindings).all() as { results: Record<string, any>[] };
+      withStanding
+        // scope-checked: d1Filters applies scopeWhereForIdRead(scope) above; the standing arm carries its own scopeWhereForIdRead(scope) copy above in standingClause; the lexer cannot see the leading AND inside either JS fragment
+        // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by d1Filters above — so it can never cross a workspace boundary
+        // validity: current: d1Filters carries the predicate, and the standing arm carries currentValidityAt separately (5.5)
+        ? `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id, valid_from, valid_until,
+                  ${supersededBySql("entries")} AS superseded_by_json
+             FROM entries WHERE (id IN (${placeholders})${d1Filters})${standingClause}`
+        // scope-checked: d1Filters applies scopeWhereForIdRead(scope) above; the lexer cannot see the leading AND inside that JS fragment
+        // scope-checked: the superseded_by subquery pins its closer `s` to entries.workspace_id — the outer row's own, already scoped by d1Filters above — so it can never cross a workspace boundary
+        // validity: current: d1Filters carries the predicate (5.5)
+        : `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id, valid_from, valid_until,
+              ${supersededBySql("entries")} AS superseded_by_json
+         FROM entries WHERE id IN (${placeholders})${d1Filters}`
+    ).bind(...batch, ...filterBindings, ...(withStanding ? standingBindings : [])).all() as { results: Record<string, any>[] };
     d1Rows.push(...results);
   }
 
@@ -858,6 +1082,12 @@ export async function recallEntries(
   // system insights) reads as "system". Clients use this to offer share/unshare
   // and to badge results.
   const candidateSignalById = new Map(rcRows.map(row => [row.id, row]));
+  // Pulled out by id membership, never by iterating d1Rows/d1Map wholesale (spec 15 2.8 step 4): a
+  // row that is both a fire and a direct/graph result is looked up separately by each side below, so
+  // the result keeps its place in `matches` and the fire still appears in `standing`.
+  const standing = standingArmActive
+    ? await standingFiresFrom(d1Rows.filter(r => standingIds.includes(r.id as string)))
+    : [];
   markStage("finalHydration");
 
   // Blocks of five in MMR order, each ordered by score: the first block is what a topK 5 call always returned, and a
@@ -869,18 +1099,27 @@ export async function recallEntries(
     const parentId = (meta?.parentId ?? m.id) as string;
     const row = d1Map.get(parentId);
     if (!row) return [];
+    const tags = JSON.parse(row.tags ?? "[]");
+    const validity = validitySummary({
+      createdAt: row.created_at as number,
+      validFrom: row.valid_from as number | null | undefined,
+      validUntil: row.valid_until as number | null | undefined,
+      tags,
+      supersededBy: parseSupersededBy(row.superseded_by_json as string | null | undefined),
+    });
     return [{
       id: parentId,
       content: row.content as string,
       score,
       createdAt: row.created_at as number,
       updatedAt: (row.updated_at as number | null) ?? (row.created_at as number),
-      tags: JSON.parse(row.tags ?? "[]"),
+      tags,
       source: row.source as string,
       isUpdate: !!meta?.isUpdate,
       hop: 0,
       workspace: layerOf(identity, row.workspace_id),
-      staleAsOf: hasStaleAsOf(JSON.parse(row.tags ?? "[]")),
+      staleAsOf: hasStaleAsOf(tags),
+      ...validity,
     }];
   };
   // The direct matches that hydrated, per block. Every position below is decided against these blocks and the picks
@@ -938,6 +1177,14 @@ export async function recallEntries(
     );
     const evidenceText = `${root?.localEvidence ?? ""}\n${linkedEvidence}`;
     const coverage = queryCoverage(evidenceText, profile.evidenceTokens, distilled).score;
+    const tags = JSON.parse(row.tags ?? "[]");
+    const validity = validitySummary({
+      createdAt: row.created_at as number,
+      validFrom: row.valid_from as number | null | undefined,
+      validUntil: row.valid_until as number | null | undefined,
+      tags,
+      supersededBy: parseSupersededBy(row.superseded_by_json as string | null | undefined),
+    });
     return [{
       eligible: evidence.eligible,
       evidenceText,
@@ -948,22 +1195,23 @@ export async function recallEntries(
         score: evidence.score,
         createdAt: row.created_at as number,
         updatedAt: (row.updated_at as number | null) ?? (row.created_at as number),
-        tags: JSON.parse(row.tags ?? "[]"),
+        tags,
         source: row.source as string,
         isUpdate: false,
         hop: e.hop,
         workspace: layerOf(identity, row.workspace_id),
-        staleAsOf: hasStaleAsOf(JSON.parse(row.tags ?? "[]")),
+        staleAsOf: hasStaleAsOf(tags),
         viaProvenance: e.viaProvenance,
         viaType: e.viaType,
         viaLinkedAt: e.viaLinkedAt,
         viaFrom: e.viaFrom,
+        ...validity,
       },
     }];
   });
 
   const sortedExpanded = expandedMatches
-    .sort((a, b) => b.match.score - a.match.score || a.match.id.localeCompare(b.match.id));
+    .sort((a, b) => b.match.score - a.match.score || vectorSortKey(a.match.id).localeCompare(vectorSortKey(b.match.id)));
   if (internal.diagnostics) {
     internal.diagnostics.eligibleRelatedIds = sortedExpanded
       .filter(entry => entry.eligible && !headParentIds.includes(entry.match.id))
@@ -988,6 +1236,7 @@ export async function recallEntries(
   let window: RecallMatch[] = baselineMatches;
   // A direct match the evidence slot pushed out, to be shown where the chosen match used to sit if that was further down.
   let displaced: RecallMatch | undefined;
+  let evidenceSlotId: string | undefined;
   if (hops > 0 && baselineMatches.length > GRAPH_SLOT_INDEX) {
     const replacementIndex = GRAPH_SLOT_INDEX;
     const replacementMatch = baselineMatches[replacementIndex];
@@ -1018,6 +1267,10 @@ export async function recallEntries(
       const rowTags = JSON.parse(row.tags ?? "[]") as string[];
       const normalizedRowTags = rowTags.map(value => value.toLowerCase());
       if (normalizedRowTags.some(value => ["auto-pattern", "auto-insight", "status:deprecated"].includes(value))) continue;
+      // validity: current: candidateSignalById's read has no validity predicate of its own — this is its only current-only check
+      const rowValidUntil = (row as { valid_until?: number | null }).valid_until;
+      if (rowValidUntil !== null && rowValidUntil !== undefined && Number(rowValidUntil) <= now) continue;
+      if (isHeld(rowTags)) continue;
       if (tag && !normalizedRowTags.includes(tag.toLowerCase())) continue;
       if (projectFilter && !normalizedRowTags.some(value => projectTags.has(value))) continue;
       if (kind && !rowTags.includes(`kind:${kind}`)) continue;
@@ -1038,6 +1291,17 @@ export async function recallEntries(
         hop: 0,
         workspace: layerOf(identity, (row as Record<string, unknown>).workspace_id),
         staleAsOf: hasStaleAsOf(rowTags),
+        // candidateSignalById's narrower projection carries no valid_from or
+        // superseded_by_json; a row that fell back to it degrades to "ended"
+        // rather than "replaced" if it was in fact superseded (rare: only hit
+        // when a candidate escaped the full hydration read).
+        ...validitySummary({
+          createdAt: row.created_at as number,
+          validFrom: (row as { valid_from?: number | null }).valid_from,
+          validUntil: (row as { valid_until?: number | null }).valid_until,
+          tags: rowTags,
+          supersededBy: parseSupersededBy((row as { superseded_by_json?: string | null }).superseded_by_json),
+        }),
       };
       matchById.set(match.id, match);
       candidates.push({
@@ -1076,6 +1340,7 @@ export async function recallEntries(
     }, candidates);
     const chosenMatch = chosen && matchById.get(chosen.id);
     if (chosenMatch) {
+      evidenceSlotId = chosenMatch.id;
       window = [...baselineMatches.slice(0, replacementIndex), chosenMatch];
       if (replacementMatch.hop === 0) displaced = replacementMatch;
     }
@@ -1097,7 +1362,52 @@ export async function recallEntries(
     region.splice(Math.min(GRAPH_SLOT_INDICES[1] - window.length, region.length), 0, secondRelated);
   }
   const listed = new Set([...window, ...region, ...later].map(match => match.id));
-  const matches = [...window, ...region, ...later, ...fillMatches.filter(match => !listed.has(match.id))].slice(0, topK);
+  const preCollapse = [...window, ...region, ...later, ...fillMatches.filter(match => !listed.has(match.id))];
+  // Collapse runs before the final cut so duplicates do not use up a result
+  // slot; the lookahead above is what leaves later candidates to fill the
+  // freed position (4.4, 4.5).
+  const { kept: uncollapsed, similarById } = collapseActive ? collapseNearDuplicates(preCollapse) : { kept: preCollapse, similarById: new Map<string, { id: string; createdAt: number }[]>() };
+  for (const m of uncollapsed) {
+    const similar = similarById.get(m.id);
+    if (similar) m.similar = similar;
+  }
+  // The occupancy cap runs last, on the assembled list, immediately before
+  // the final cut (4.3). The graph-linked-evidence slot keeps its position
+  // even when collapse moved it, so its pin is resolved against this
+  // (post-collapse) list, not the original one.
+  const pinnedAt = evidenceSlotId ? uncollapsed.findIndex(m => m.id === evidenceSlotId) : -1;
+  const uncapped = capActive ? applyOccupancyCap(uncollapsed, cfg.MIRROR_MAX_SHARE, pinnedAt >= 0 ? pinnedAt : null) : uncollapsed;
+  // As-of (5.7 item 7): a belief candidate the as-of hydration predicate let through never takes a
+  // ranked slot from an actually-true result; it is set aside here and appended after topK below.
+  const standaloneBeliefCandidates = asOf !== undefined ? uncapped.filter(m => m.validityState === "wrong") : [];
+  const trueUncapped = asOf !== undefined ? uncapped.filter(m => m.validityState !== "wrong") : uncapped;
+  let matches = trueUncapped.slice(0, topK);
+  if (explain) {
+    // Only what the stages above already computed: nothing is queried or scored here.
+    const multipliers = new Map<string, { multipliers: RankMultipliers; ageKnown: boolean }>();
+    for (const t of [...(directTraced ?? []), ...rootTraced]) {
+      const id = parentOfMatch(t.match);
+      if (!multipliers.has(id)) multipliers.set(id, t);
+    }
+    const fillIds = new Set(fillMatches.map(match => match.id));
+    const r3 = (n: number) => Math.round(n * 1000) / 1000;
+    for (const m of matches) {
+      const applied = multipliers.get(m.id);
+      const percentile = rerank.percentiles?.get(m.id);
+      const slot: WhySlot = m.id === evidenceSlotId ? "evidence" : m.hop > 0 ? "linked" : fillIds.has(m.id) ? "deeper" : "direct";
+      const why: WhyTrace = {
+        dense_rank: displayedDenseRank.get(m.id) ?? null,
+        keyword_terms: (keywordTrace?.get(m.id) ?? []).map(t => ({ term: t.term, level: t.level, idf: r3(t.idf) })),
+        multipliers: applied ? Object.fromEntries(Object.entries(applied.multipliers).map(([k, v]) => [k, r3(v)])) as unknown as RankMultipliers : null,
+        rerank_percentile: percentile === undefined ? null : r3(percentile),
+        rerank_move: rerankMove.get(m.id) ?? null,
+        age_known: applied ? applied.ageKnown : null,
+        graph: m.hop > 0 && m.viaProvenance && m.viaType && m.viaFrom ? { provenance: m.viaProvenance, type: m.viaType, from: m.viaFrom } : null,
+        slot,
+      };
+      m.why = why;
+    }
+  }
   const finalDirectIds = new Set(matches.filter(match => match.hop === 0).map(match => match.id));
   const finalRelated = matches.filter(match => match.hop > 0);
   if (internal.diagnostics) internal.diagnostics.selectedRelatedIds = finalRelated.map(x => x.id);
@@ -1105,13 +1415,36 @@ export async function recallEntries(
   markStage("selection");
 
   const presentedDirectIds = finalDirectIds;
-  ctx.waitUntil(
-    Promise.all(
-      [...presentedDirectIds].map(id =>
-        env.DB.prepare(`UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?`).bind(id).run()
-      )
-    ).catch(e => console.error("recall_count update failed (non-fatal):", e))
-  );
+  // One statement for every presented id (topK is capped well under D1_MAX_BOUND_PARAMS), so the
+  // bump is one subrequest however many results came back.
+  if (presentedDirectIds.size) {
+    const bumpIds = [...presentedDirectIds];
+    ctx.waitUntil(
+      // versioning: exempt: counter, not undoable content
+      env.DB.prepare(
+        `UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (${bumpIds.map(() => "?").join(", ")})`
+      ).bind(...bumpIds).run()
+        .catch(e => console.error("recall_count update failed (non-fatal):", e))
+    );
+  }
+
+  // T-0089.5.2 Part A: opt-in (RECALL_LOG, off by default everywhere) and sampled — a
+  // no-op below cfg.RECALL_LOG === "on", so this costs nothing on every brain that never
+  // turns it on. Never touches `matches`, so ranking is unaffected either way.
+  // Part C (05-proof.md, T-0089.5.3): pre-generated here so the response's receipt matches
+  // the row this write might land, with no read-back. The write itself stays fire-and-forget
+  // (ctx.waitUntil), so a call that loses the daily-cap race still returns this receipt, just
+  // with no row behind it — the same "sampled" honesty the log itself already has.
+  const receipt = cfg.RECALL_LOG === "on" ? crypto.randomUUID() : receiptHash(query, now);
+  ctx.waitUntil(maybeLogRecall(env, cfg, {
+    id: receipt,
+    workspaceId: identity?.personalWorkspaceId ?? "",
+    channel: params.channel ?? "rest",
+    query,
+    params: { topK, tag: tag ?? null, after: after ?? null, before: before ?? null, kind: kind ?? null, hops, project: params.project?.map(p => p.id) ?? null },
+    returnedIds: matches.map(m => m.id),
+    now,
+  }));
 
   const maxScore = matches.reduce((mx, m) => Math.max(mx, m.score), 0);
   if (maxScore > 0) for (const m of matches) m.score = m.score / maxScore;
@@ -1128,10 +1461,25 @@ export async function recallEntries(
     }
   }
 
+  // As-of (5.7 items 5-8): the one extra D1 execution, reconstructing text/status at T and
+  // attaching retracted beliefs, appended after every actually-true result — never above one.
+  let asOfHeader: RecallSearchResult["asOf"];
+  if (asOf !== undefined) {
+    const enriched = await enrichWithAsOf(matches, standaloneBeliefCandidates, asOf, env, identity, { workspaceFilter: internal.workspaceFilter, teamId: internal.teamId });
+    matches = [...enriched.trueMatches, ...enriched.beliefMatches];
+    const versionsSince = await getVersionsSince(env);
+    asOfHeader = { at: asOf, notRecordedBefore: asOf < versionsSince ? versionsSince : null };
+  }
+
   const compoundStale = computeCompoundStale(matches);
 
-  const insight = synthesize && matches.length > 1
-    ? await synthesizeInsight(lexicalQuery, matches.map(m => ({ id: m.id, content: m.content })), env, cfg)
+  // T-0102 (final cloud review, MAJOR class): as-of's own redaction already empties `content` for
+  // a held-at-T match (resolveAtT), but an entry with no text to add is still noise in a synthesis
+  // prompt -- drop it here rather than pass an empty-content row through, so the model never even
+  // sees a marker that something was hidden.
+  const synthesizable = matches.filter(m => !m.asOfHeld);
+  const insight = synthesize && synthesizable.length > 1
+    ? await synthesizeInsight(lexicalQuery, synthesizable.map(m => ({ id: m.id, content: m.content })), env, cfg)
     : "";
 
   markStage("synthesis");
@@ -1140,5 +1488,5 @@ export async function recallEntries(
     internal.diagnostics.stageMs.total = performance.now() - totalStartedAt;
   }
 
-  return { matches, insight, semanticUnavailable, queryUsed: lexicalQuery, queryTokens: tokens, compoundStale };
+  return { matches, insight, semanticUnavailable, queryUsed: lexicalQuery, queryTokens: tokens, compoundStale, receipt, ...(asOfHeader ? { asOf: asOfHeader } : {}), ...(standing.length ? { standing } : {}) };
 }

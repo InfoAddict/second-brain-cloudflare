@@ -384,7 +384,7 @@ describe("#347 move already-synced integration memories", () => {
 
     // One entry's own SELECT throws (errored); one re-stamp upsert rejects
     // (vectorFailures). Armed after seeding so capture's own upserts succeed.
-    (env as any).DB = poisonedD1(d1.db, "SELECT id, workspace_id, actor_id, vector_ids FROM entries", ids[1]);
+    (env as any).DB = poisonedD1(d1.db, "SELECT id, workspace_id, actor_id, vector_ids, tags FROM entries", ids[1]);
     upsert.mockRejectedValueOnce(new Error("vectorize is down"));
     await connectNotion(env, itemMapFor(ids), "company");
 
@@ -441,7 +441,7 @@ describe("#347 move already-synced integration memories", () => {
 
     // Poison the MIDDLE entry's own scoped SELECT (share.ts's moveEntry), so
     // the first and third entries in the batch still succeed around it.
-    (env as any).DB = poisonedD1(d1.db, "SELECT id, workspace_id, actor_id, vector_ids FROM entries", ids[1]);
+    (env as any).DB = poisonedD1(d1.db, "SELECT id, workspace_id, actor_id, vector_ids, tags FROM entries", ids[1]);
     await connectNotion(env, itemMapFor(ids), "company");
 
     const res = await worker.fetch(moveRequest(), env, makeCtx().ctx);

@@ -2,7 +2,104 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
-## [Unreleased]
+## [4.0.0] — 2026-09-30
+
+**Session hooks**
+
+- Session start no longer spends Workers AI allowance: hooks inject your ranked memories directly.
+- Session capture keeps only what you typed and the assistant's replies: instruction files, environment details and tool context are left out, and likely secrets are masked.
+- Cursor recall comes from session start; use the MCP recall tool for guaranteed recall.
+
+**Activity history**
+
+- A failed edit no longer shows up in a memory's history as an update. When the search re-index failed and the memory was left unchanged, the dashboard's edit still recorded an "updated" event; now only a saved edit does.
+- A memory replaced by a newer, contradicting one now records that in its history (status changed to deprecated, with the reason and the newer memory's id).
+- Memories removed by an integration are now recorded in the audit trail: a trashed Notion page, a cancelled or pruned calendar event, or "delete synced memories" on disconnect. Each record names the reason and the integration. The dashboard does not show these records yet, and the trail is best effort: if a batch of records fails to write, it is logged and skipped, and the deletion still goes through. The audit records for a large deletion are written in batches of 50.
+- Every memory audit record now says where the change came from: `mcp` for an AI assistant, `rest` for the dashboard and API, or `system:<job>` for a background job.
+- A memory's version history now records which AI tool made the change on every kind of change: edits, status changes, actions, validity changes and undo. Before, only some of these recorded it.
+
+**Saving**
+
+- Nine tag prefixes are reserved for the brain's own use: `quarantine:`, `edited-canonical:`, `standing:`, `ledger:`, `confidence:`, `confidence-source:`, `outcome:`, `review-rearms:`, `counterparty:`, plus the bare `owed-to-me` marker. A tag in one of these that a person or an AI tool tries to set directly on `remember` or `update` is not saved, and the reply says so. A tag you already had that merely looks like one of these (an `outcome:won` or `confidence:high` from before this change) keeps showing normally; nothing stored is rewritten. In the rare case where an older tag happens to exactly match the value format the brain itself writes (an `outcome:right` from before this change, say), it is treated the same as one the brain wrote itself: shown as a system tag, and left off a replacement unless you name it again. The features that use these prefixes (standing instructions, decisions, commitments and self-protecting quarantine) are described below.
+- The nightly digest and the weekly insight pass never merge into or replace a memory you or an assistant wrote. If one of them writes something that looks like an existing memory, it saves a new memory flagged as a possible duplicate and leaves yours untouched (a digest merges only into an earlier digest, and an insight only into an earlier insight, and never into one you have edited). If what they write contradicts one of your memories, they save it as a draft and leave your memory as it was, instead of marking yours deprecated. A digest that contradicts one of your memories is saved as a held draft instead, and that topic is not digested again while the draft stays as it is. Edit it, confirm it, delete it or mark it deprecated and the next nightly run digests the topic normally.
+- A single memory is now capped at about 20,000 words (128 KB). Saving, appending or updating past that cap saves nothing and tells you to split it into smaller memories.
+- A memory too long for the automatic hidden-instruction check (well past the 128 KB cap's own text) is held rather than scanned. It never reaches an AI prompt; read it in the dashboard and release it, or save it shorter next time.
+
+**Trash and undo**
+
+- Forgetting a memory now moves it to the trash instead of deleting it right away. It stays there for 14 days by default (7, 14, 30 or 90 in Advanced Settings), and drops out of recall and search immediately. Restore it from the trash, or say "undo that" to bring it straight back.
+- Every change to a memory is kept: up to 20 versions by default (10, 20 or 50 in Advanced Settings). Say "undo that" to reverse your most recent change, ask for an older version by date, or use the dashboard's history view. Undoing a burst of related changes (a big cleanup, several contradictions in a row) can be reversed in one step, both from chat and from the dashboard's "Changed by AI tools" panel.
+- A memory that was permanently deleted before this release, or a version written before the brain was updated, cannot be brought back. Everything since update day can.
+
+**Time and validity**
+
+- Say when something became true or stopped being true, and recall keeps both the current fact and its history straight: "I moved to Austin in June" records the date; "I lived in Boston until 2020" records that it ended. When you ask your AI about a memory, it can tell you whether it is current, replaced by a newer one (and by which one, and when), or ended outright; the same status is in the REST and MCP response for anyone building on the API. The dashboard shows it too: a memory's sheet reads "True from ... until ..." or names "Replaced by" with a link to the newer memory, cards and recall results carry a Replaced, No longer true or Needs a check chip, history names each validity change by its own cause, and the graph dims a replaced or ended memory, with a ring in its legend.
+- A new fact that contradicts an older one no longer marks the older one "wrong": it closes the older fact's own validity window and keeps it as history, so asking what was true on a past date still gets the right answer. Marking a memory "wrong" is now reserved for something that was never true, or a plan that was cancelled, and doing so makes any memory it had replaced current again.
+- Ask "what was true on such-and-such a date" and recall answers as of that date, including facts later corrected, each labelled as a belief that was later retracted rather than shown as the answer.
+- The nightly pass that flags a memory as possibly out of date now waits longer for a fact that rarely changes (90 days) and less long for one that changes often (14 days), and flags a memory immediately once a date you gave it has passed. The "may be out of date" review lists why: not confirmed in a while, its date has passed, or it was built on a memory that was later marked wrong.
+- If a memory you built on gets marked wrong later, anything built on it is flagged for a second look, not deleted or blocked.
+
+**Self-protecting quarantine**
+
+- A memory that looks like an instruction to an AI, contains hidden text, changes what your AI tools always see, arrives as part of an unusually large burst of writes, or is too long to check automatically, is held out of recall automatically. The AI tool that wrote it is told why at once, and the user can release it with "undo" once they have read it. Nothing is ever released automatically.
+
+**Standing instructions, decisions and commitments**
+
+- Ask your AI to remember something "whenever a topic comes up" and it becomes a standing instruction: it fires inside relevant searches from then on, without you repeating it. The dashboard lists every standing instruction and whether it is currently firing.
+- A decision you make, with how confident you were, can be brought back up for review later and its outcome recorded (right, wrong, mixed, or too early to tell). Over time the dashboard shows how well your stated confidence has tracked what actually happened.
+- Something someone owes you, or something you owe someone else, is tracked as an open commitment with a due date, and shows up in your due items and in the dashboard's commitments list until it is marked done.
+
+**Recall log and implicit feedback**
+
+- Recall can log the searches it runs and which of the results you opened afterward, entirely for improving future search quality. It is off everywhere by default; turning it on is an admin setting, and even then it samples at most about 200 searches a day and keeps them for 30 days.
+
+**Search**
+
+- Search records which memories it showed with one database call instead of one per result, so a 20-result search makes up to 19 fewer database calls.
+- Searches built around a common word now read about 65 to 73% fewer database rows. A heavy solo brain of 10,000 memories now uses about 62% of the free plan's daily database reads, down from about 91%. Search results and their ranking are unchanged.
+- Recall can now say why a memory came back. Ask for it with `explain: true` on the MCP `recall` tool, or `explain=1` on `GET /recall`. The MCP tool adds one line under each result, for example `why: meaning #2 · keywords "gatewright" (rare) · canonical · recent (Sep 20) · reranked up`. The REST API adds a `why` object per result: its rank in the meaning search, the keyword terms it matched (with how rare each is), the ranking multipliers applied (recency, frequency, importance, tag boost), the reranker's percentile, the link it was reached through, and which result slot it took. It is off by default, results and their order are identical either way, and it uses no extra database queries or AI calls.
+- Every recall now comes back with a short `receipt`, in the MCP reply and as a `receipt` field on `GET /recall`. It costs nothing extra to get, and an agent can name it when it answers from a specific search, so you or a later conversation can trace the answer back to it.
+
+**Agents**
+
+- Agents can ask for a short brief of due items, open commitments, stale memories, and pending insights, optionally scoped to a project. The dashboard brief also accepts a project filter.
+- Agents can resolve a specific task, due date, stale fact, or pending insight when the user says what to do.
+- Agents can read the latest existing project or tag digest without starting a new summary or model call.
+- Agents can inspect who changed a memory, through which channel, and its supersedes links.
+- The session-start brief reads only the rows of its own queues, so it stays cheap on a large brain, and it lists only items you can act on. History for a shared memory starts at the moment it was shared unless you wrote it.
+- Every AI tool's session-start message now names what changed since last time: how many memories were edited, by which tool, and when, with a burst of related changes counted together. You can say "undo all" to reverse a burst, from chat or from the dashboard.
+
+**Dashboard**
+
+- A new "Changed by AI tools" panel on the home screen lists recent edits, groups a burst of related ones together, and lets you undo one change, undo a whole group, or release a held one, without leaving the panel.
+- Standing instructions have their own list, showing whether each one is currently firing or held back, and why.
+- Decisions you logged have their own review queue, with your stated confidence next to how things actually turned out over time.
+- Commitments (something owed to you, or by you) show up alongside due items until they are marked done.
+- A held memory shows a banner with the reason and a Release button. Nothing is held silently.
+- A held memory's sheet no longer also suggests Index now. It is out of search by policy while held, not because it needs indexing.
+
+**Desktop app**
+
+- The Worker update screen now shows what changed for a major version. For 4.0: "Changes to your memories are now recorded, so you can undo them in the dashboard or by asking your AI. Forgotten memories wait in the trash for 14 days before they are removed for good. Edits made before this update were not recorded, so undo starts from today." Shown to the brain's owner only, and the Done screen adds a line reading the brain's actual trash retention once the update has finished.
+- Advanced Settings has a new "History and trash" section: how long forgotten memories wait in the trash (7, 14, 30 or 90 days) and how many changes are kept per memory (10, 20 or 50). Owners and admins can change these; members see them read-only, with a line saying who can change them.
+- The app's self-update dialog now says that 4.0's features arrive once the Second Brain itself is updated. English: "Second Brain 4.0 adds undo and a history of changes for every memory. Forgotten memories now wait in a trash for 14 days, by default, before they are removed for good. You get these once your Second Brain itself is updated; this app update alone does not bring them. If you own your Second Brain, the app offers that update when it next starts (not for Second Brains on a custom domain). If someone else owns it, they update it for everyone." Italian: "Second Brain 4.0 aggiunge l'annullamento e la cronologia delle modifiche di ogni ricordo. I ricordi dimenticati ora restano nel cestino per 14 giorni, per impostazione predefinita, prima di essere eliminati definitivamente. Queste novità arrivano quando viene aggiornato il tuo Second Brain: il solo aggiornamento dell'app non basta. Se il Second Brain è tuo, l'app ti propone l'aggiornamento al prossimo avvio (non per i Second Brain su un dominio personalizzato). Altrimenti lo aggiorna il proprietario, per tutti."
+
+**Upgrading from 3.7**
+
+- The database schema updates itself automatically the first time 4.0 runs: no manual migration step, and no existing memory is rewritten or rescored.
+- The recall log is off by default on every brain, new or upgraded; turning it on is an explicit admin choice.
+- A batch of new admin config keys ships with this release, for trash and history retention, staleness thresholds, quarantine sensitivity, standing instructions and decision review. Every one keeps its shipped default until you change it, so an upgrade changes nothing on its own.
+- Rolling back to 3.7 after using 4.0: 3.7 does not know the `quarantine:` or `edited-canonical:` tags. A held memory would be readable again in 3.7, but only by keyword search, since a held memory is never given search vectors.
+
+**API and MCP contract changes for 3.7 clients**
+
+- `forget` no longer deletes immediately: the memory moves to trash and stays there for 14 days by default (see "Trash and undo" above). A client that treated `forget` as final should treat it as reversible instead.
+- Permanent delete is a separate, REST-only step (`POST /forget` with `permanent: true` and `confirm` set to the id): no MCP tool exposes it. It also requires the trash row's own `nonce`, read from the trash listing, so a stale id alone no longer deletes anything.
+- Reply wording changed on several tools that report a memory could not be found or acted on (see "Trash and undo" and "Time and validity" above for the current text); a client that pattern-matches an exact reply string should match on structure or a stable prefix instead.
+- A memory over about 128 KB is now refused rather than accepted: REST returns 413, and the MCP reply says so and asks for the memory to be split (see "Saving" above).
+- More than 40 MCP writes from one identity inside a 10-minute window are held for review rather than saved outright, as part of the burst detection under "Self-protecting quarantine" above.
+- New optional fields this release adds to existing tools and routes (among them `valid_from`, `valid_until`, `volatility`, `nonce`, `permanent`, `confirm`, `to_version`) now return a 400 when given the wrong type, rather than being silently ignored.
+- Every recall reply now carries a short `receipt` suffix (see "Recall log and implicit feedback" above); existing fields are unchanged, so this is additive, not breaking.
 
 ## [3.7.0] — Search that puts the right answer first
 
@@ -16,7 +113,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Older memories are found on large brains. A search containing a short word ("io", "id", "k8") or several very common words used to be answered from only the newest 500 matches, so an old memory matching on those words never appeared once a brain passed a few thousand memories. Those searches now rank through the index like any other, and the short word still counts toward the ranking.
 - Those searches also read far fewer rows: on a 20,000-memory brain a search with a short word reads about half as many rows, and the average search about 11% fewer, so the free plan's daily limit goes further on large brains.
 - Searches read far fewer database rows when loading candidate memories, so growing brains stay within the D1 free tier much longer. Workspace visibility remains enforced.
-- Searching a brain with many long notes (session logs, transcripts) costs far less compute. A search used to read every candidate note in full just to see where the words sit; the database now reports that and sends back no note text. On a test brain where one note in five is 20-100 KB, a search fell from about 160 ms of Worker CPU to about 11 ms; brains of ordinary short notes are unchanged. The same change stops a search from asking for the same candidate rows twice when it plans two passes.
+- Searching a brain with many long notes (session logs, transcripts) costs far less compute. A search used to read every candidate note in full just to see where the words sit; the database now reports that and sends back no note text. On a test brain where one note in five is 20-100 KB, a search fell from about 90 ms of Worker CPU on 3.6.0 to about 11 ms, measured locally (not yet on Cloudflare); brains of ordinary short notes are unchanged. The same change stops a search from asking for the same candidate rows twice when it plans two passes.
 - Searches no longer spend AI calls guessing topic tags. They return faster and use far less of the Workers AI allowance.
 - A thin, generic memory that happens to share two words with your question can no longer take the last result slot from a strong answer. Recall keeps one slot for a memory linked to (or sitting just behind) the ones it found; a memory that reached that slot on keyword matching alone now has to cover most of what you asked for, not a word or two of boilerplate. Memories the semantic search itself ranked, and memories reached through a link, are judged as before.
 - The search that follows links between memories now starts from the memories the semantic search actually ranked. It used to share one fixed number of starting points between semantic and keyword matches, and keyword matches won nearly all of them, so a memory the semantic search had found could be left out of the link search entirely. Each side now gets its own starting points. Only questions that follow links do any extra work, and they read about half a percent more rows to do it.
@@ -29,7 +126,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **For contributors**
 
-- A recall evaluation, `npm run eval:recall`, runs the real search pipeline against a fixed, fully synthetic set of 1,683 questions in 1,475 independent groups. It reports quality for each kind of search (exact identifiers, CJK, rare, common and short words, paraphrase, linked memories, long notes) and cost (D1 statements and rows read, AI calls, neurons), and ends in a PASS, FAIL or INCONCLUSIVE verdict with confidence intervals. It needs no Cloudflare account: embeddings and reranker scores come from pinned open-weights models run locally and are replayed from a committed cache, so it runs offline. Continuous integration runs a fast synthetic smoke check on every pull request; the full evaluation, including a lock test that fails whenever a change alters default search ranking without a deliberate re-lock, runs by hand with `npm run test:eval:full` (or the manual `eval-full` workflow) before merging a ranking change. `src/ARCHITECTURE.md` describes it.
+- A recall evaluation, `npm run eval:recall`, runs the real search pipeline against a fixed, fully synthetic set of 1,751 questions in more than 1,400 independent groups. It reports quality for each kind of search (exact identifiers, CJK, rare, common and short words, paraphrase, linked memories, long notes) and cost (D1 statements and rows read, AI calls, neurons), and ends in a PASS, FAIL or INCONCLUSIVE verdict with confidence intervals. It needs no Cloudflare account: embeddings and reranker scores come from pinned open-weights models run locally and are replayed from a committed cache, so it runs offline. Continuous integration runs a fast synthetic smoke check on every pull request; the full evaluation, including a lock test that fails whenever a change alters default search ranking without a deliberate re-lock, runs by hand with `npm run test:eval:full` (or the manual `eval-full` workflow) before merging a ranking change. `src/ARCHITECTURE.md` describes it.
 
 ## [3.6.0] — Search that finds the exact thing
 
@@ -44,7 +141,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Brief and open loops**
 
-- The resurface card is honest about what it picks now: it excludes memories that were only true in the moment (episodic) and commitments already marked done, prefers whatever shares one of today's top topics, and never repeats the same pick within 30 days. A Dismiss control retires a pick for good instead of only hiding it for the session.
+- The resurface card now excludes memories that were only true in the moment (episodic) and commitments already marked done, prefers whatever shares one of today's top topics, and never repeats the same pick within 30 days. A Dismiss control retires a pick for good instead of only hiding it for the session.
 - A new open-loops queue tracks commitments (entries tagged "task") that have no completion signal yet, with Done and Not a task actions on each one. The home board shows up to three with a "See all" sheet for the rest, and the attention count already on the brief folds loops in alongside unindexed and stale memories.
 
 **Reminders and due dates**

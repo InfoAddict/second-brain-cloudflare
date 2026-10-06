@@ -37,6 +37,7 @@ jobs:
       conflict_files: ${{ steps.merge.outputs.conflict_files }}
       conflict_pr_url: ${{ steps.merge.outputs.pr_url }}
       conflict_pr_created: ${{ steps.merge.outputs.pr_created }}
+      workflow_review_required: ${{ steps.merge.outputs.workflow_review_required }}
     env:
       UPSTREAM_REPO: ${{ github.event.inputs.upstream_repo || 'rahilp/second-brain-cloudflare' }}
     steps:
@@ -173,6 +174,35 @@ jobs:
           WORKER_VERSION: ${{ steps.release.outputs.worker_version }}
         run: |
           set -euo pipefail
+
+          # GitHub does not allow a workflow token to push a commit that changes
+          # workflow files. Check the release's own diff before staging a branch:
+          # comparing HEAD to the tag would wrongly include fork-only workflows.
+          workflow_changes="$(node scripts/check-upstream-workflows.mjs "$SOURCE_TAG")"
+          if [[ -n "$workflow_changes" ]]; then
+            mapfile -t conflict_files <<< "$workflow_changes"
+            {
+              echo "blocked=true"
+              echo "pr_created=false"
+              echo "pr_url="
+              echo "workflow_review_required=true"
+              echo "conflict_files<<EOF"
+              printf '%s\n' "${conflict_files[@]}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+
+            {
+              echo "### Upstream release $RELEASE_TAG needs maintainer review"
+              echo
+              echo "The upstream release changes GitHub Actions workflow files. The GitHub Actions token cannot publish workflow changes, so a maintainer must review and merge the release manually."
+              echo
+              echo "Workflow files changed upstream:"
+              printf -- "- %s\n" "${conflict_files[@]}"
+              echo
+              echo "Main and the live Worker were not changed."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -398,7 +428,10 @@ jobs:
       (
         (
           needs.update-from-upstream-release.outputs.update_blocked == 'true' &&
-          needs.update-from-upstream-release.outputs.conflict_pr_created == 'true'
+          (
+            needs.update-from-upstream-release.outputs.conflict_pr_created == 'true' ||
+            needs.update-from-upstream-release.outputs.workflow_review_required == 'true'
+          )
         ) ||
         needs.update-from-upstream-release.outputs.update_applied == 'true' ||
         (
@@ -428,6 +461,7 @@ jobs:
           DEPLOY_RESULT: ${{ needs.deploy-upstream-release.result }}
           CONFLICT_FILES: ${{ needs.update-from-upstream-release.outputs.conflict_files }}
           CONFLICT_PR_URL: ${{ needs.update-from-upstream-release.outputs.conflict_pr_url }}
+          WORKFLOW_REVIEW_REQUIRED: ${{ needs.update-from-upstream-release.outputs.workflow_review_required }}
           IS_TEST_REQUEST: ${{ github.event_name == 'workflow_dispatch' && inputs.test_notification == true }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -449,7 +483,11 @@ jobs:
           action_url="$RUN_URL"
           if [[ "$UPDATE_BLOCKED" == "true" ]]; then
             notification_status="blocked"
-            details="$(printf 'Merge conflicts:\n%s' "$CONFLICT_FILES")"
+            if [[ "$WORKFLOW_REVIEW_REQUIRED" == "true" ]]; then
+              details="$(printf 'Upstream workflow files require maintainer credentials and review:\n%s' "$CONFLICT_FILES")"
+            else
+              details="$(printf 'Merge conflicts:\n%s' "$CONFLICT_FILES")"
+            fi
             action_url="${CONFLICT_PR_URL:-$RUN_URL}"
           elif [[ "$UPDATE_RESULT" == "failure" || ( "$UPDATE_APPLIED" == "true" && "$DEPLOY_RESULT" != "success" ) ]]; then
             notification_status="failed"
@@ -523,6 +561,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.update-from-upstream-release.outputs.release_tag }}
           PR_URL: ${{ needs.update-from-upstream-release.outputs.conflict_pr_url }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          echo "::error::Upstream release $RELEASE_TAG requires conflict resolution: $PR_URL"
+          echo "::error::Upstream release $RELEASE_TAG requires conflict resolution or maintainer review: ${PR_URL:-$RUN_URL}"
           exit 1
