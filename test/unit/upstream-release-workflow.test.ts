@@ -52,6 +52,17 @@ describe("upstream release workflow safety", () => {
     expect(versionsChain).toContain("expect(ms).toBeLessThan(10 * scale)");
   });
 
+  it("uses the shared curl verifier for deploys and verify-only diagnostics", () => {
+    expect(deployWorkflow).toContain("verify_only:");
+    expect(deployWorkflow).toContain("verify-live-worker:");
+    expect(deployWorkflow).toContain("inputs.verify_only != true");
+    expect(deployWorkflow).toContain("inputs.verify_only == true");
+    expect(deployWorkflow).toContain("'verify-live-worker' || 'deploy-cloudflare-worker'");
+    expect(deployWorkflow).toContain("cancel-in-progress: false");
+    expect(deployWorkflow.match(/node scripts\/verify-live-worker\.mjs/g)).toHaveLength(2);
+    expect(deployWorkflow).not.toContain("AbortSignal.timeout");
+  });
+
   it("turns merge conflicts into a draft PR without deploying them", () => {
     expect(updateWorkflow).toContain("git checkout --ours --");
     expect(updateWorkflow).toContain("gh pr create");
