@@ -371,7 +371,7 @@ describe("withFtsWriteGuard", () => {
       const coldDb = {
         prepare(sql: string) {
           const raw = s.db.prepare(sql);
-          if (!sql.startsWith("SELECT type AS kind, name")) return raw;
+          if (!sql.startsWith("WITH probe(kind, tbl) AS (VALUES")) return raw;
           return { all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; } };
         },
         exec: s.db.exec.bind(s.db),
@@ -434,7 +434,7 @@ describe("withFtsWriteGuard", () => {
       const coldDb = {
         prepare(sql: string) {
           const raw = s.db.prepare(sql);
-          if (!sql.startsWith("SELECT type AS kind, name")) return raw;
+          if (!sql.startsWith("WITH probe(kind, tbl) AS (VALUES")) return raw;
           return { all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; } };
         },
         exec: s.db.exec.bind(s.db),

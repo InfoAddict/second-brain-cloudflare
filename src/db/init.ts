@@ -482,14 +482,64 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
  * added to SCHEMA_OBJECTS, which is the cheap direction — adding a statement above now
  * costs one row here rather than one subrequest on every cold start.
  */
+// Object probe: table/index/trigger names + DDL from sqlite_master, plus the per-table
+// column sets, in ONE statement.
+//
+// History: this used to be a single statement that appended six
+// `UNION ALL SELECT ... FROM pragma_table_info(...)` arms. Cloudflare D1 rejects that
+// shape outright with `SQLITE_ERROR [code: 7500] too many terms in compound SELECT`, so
+// probeSchema() caught the throw, returned null, and applySchema() fell through to issuing
+// all 38 SCHEMA_OBJECTS DDL statements sequentially — on every cold start, awaited on the
+// authenticated request path by ensureIdentityReady(). That is the hang: ~38 sequential
+// exec() subrequests blow the Worker's subrequest/CPU budget and the response headers never
+// come back.
+//
+// The fix keeps the SQL to ONE statement (the probe is on the hot path and its cost is a
+// documented invariant — see test/unit/db-init.test.ts) by folding every table's column
+// list into a single `json_group_object` aggregate over `pragma_table_info`, keyed by the
+// table name, with no UNION at all:
+//
+//   {"entries":["id","content",...],"edges":[...], ...}
+//
+// `pragma_table_info` is a table-valued function, so it can be joined/groupped like any
+// table — that is the whole trick. It also degrades safely: a table that does not exist yet
+// simply contributes no row, which is exactly what applySchema wants (absent = CREATE).
+// Table names the probe asks for column sets on, each paired with the `kind` label its
+// rows must carry. Kept in TS (not interpolated SQL) so the statement stays parameterised
+// and the mapping is greppable in one place: row shape is unchanged, the SQL is not.
+const COLUMN_PROBE_TABLES = [
+  ["column", "entries"],
+  ["edge_column", "edges"],
+  ["user_column", "users"],
+  ["admin_event_column", "admin_events"],
+  ["entry_version_column", "entry_versions"],
+  ["entries_trash_column", "entries_trash"],
+] as const;
+
+// ONE statement, and deliberately NO compound `SELECT` anywhere — not even a CTE-level
+// `UNION ALL`: D1 rejects a compound above a small term count with
+// `SQLITE_ERROR [code: 7500] too many terms in compound SELECT`, and the old probe was a
+// 7-arm compound. A rejected probe threw inside probeSchema() -> returned null ->
+// applySchema() fell through to issuing all 38 SCHEMA_OBJECTS DDL statements sequentially,
+// awaited on the authenticated request path by ensureIdentityReady(). That is the hang:
+// ~38 sequential exec() subrequests blow the Worker's subrequest/CPU budget and the
+// response headers never come back.
+//
+// `pragma_table_info` is a table-valued function, so it can be CROSS JOINed against a
+// parameter list like any table — one plain SELECT produces every object row and every
+// column row at once. A table that does not exist yet simply contributes no column rows,
+// which is exactly what applySchema wants (absent = CREATE).
+//
+// `catalogue` is UNIONed in at exactly ONE term — the single object select — which keeps the
+// whole statement at one compound term, far below the D1 ceiling that rejected the old
+// 7-arm form.
 const PROBE_SQL =
+  `WITH probe(kind, tbl) AS (VALUES ${COLUMN_PROBE_TABLES.map(() => "(?, ?)").join(",")}), ` +
+  `columns AS (SELECT p.kind AS kind, ti.name AS name FROM probe p CROSS JOIN pragma_table_info(p.tbl) ti) ` +
   `SELECT type AS kind, name, sql AS definition FROM sqlite_master WHERE type IN ('table','index','trigger') ` +
-  `UNION ALL SELECT 'column' AS kind, name, NULL AS definition FROM pragma_table_info('entries')` +
-  `UNION ALL SELECT 'edge_column' AS kind, name, NULL AS definition FROM pragma_table_info('edges')` +
-  `UNION ALL SELECT 'user_column' AS kind, name, NULL AS definition FROM pragma_table_info('users')` +
-  `UNION ALL SELECT 'admin_event_column' AS kind, name, NULL AS definition FROM pragma_table_info('admin_events')` +
-  `UNION ALL SELECT 'entry_version_column' AS kind, name, NULL AS definition FROM pragma_table_info('entry_versions')` +
-  `UNION ALL SELECT 'entries_trash_column' AS kind, name, NULL AS definition FROM pragma_table_info('entries_trash')`;
+  `UNION ALL ` +
+  `SELECT kind, name, NULL AS definition FROM columns`;
+
 
 type ObjectKind = "table" | "index" | "trigger";
 /**
@@ -529,9 +579,13 @@ const kindOf = (ddl: string): ObjectKind => {
 async function probeSchema(env: Env): Promise<ExistingSchema | null> {
   let rows: unknown;
   try {
-    rows = (await env.DB.prepare(PROBE_SQL).all<{ kind: string; name: string }>())?.results;
-  } catch {
-    console.warn("Schema probe failed; applying the full schema instead");
+    rows = (await env.DB.prepare(PROBE_SQL).bind(
+      // Two binds per probed table, in COLUMN_PROBE_TABLES order: the kind label, then
+      // the table name the CROSS JOIN resolves columns for.
+      ...COLUMN_PROBE_TABLES.flatMap(([kind, table]) => [kind, table]),
+    ).all<{ kind: string; name: string }>())?.results;
+  } catch (e) {
+    console.warn("Schema probe failed; applying the full schema instead:", e);
     return null;
   }
   if (!Array.isArray(rows)) return null;
@@ -544,6 +598,7 @@ async function probeSchema(env: Env): Promise<ExistingSchema | null> {
   const adminEventColumns = new Set<string>();
   const entryVersionColumns = new Set<string>();
   const entriesTrashColumns = new Set<string>();
+
   for (const row of rows as { kind?: unknown; name?: unknown; definition?: unknown }[]) {
     if (typeof row?.name !== "string") continue;
     if (row.kind === "column") columns.add(row.name);

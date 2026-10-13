@@ -112,7 +112,7 @@ const FULLY_MIGRATED = {
 };
 
 /** The catalogue read that opens every init. Spelled out so tests can exclude it by name. */
-const PROBE = /^SELECT type AS kind, name, sql AS definition FROM sqlite_master\b/;
+const PROBE = /^WITH probe\(kind, tbl\) AS \(VALUES \(\?, \?\)/;
 
 type Row = { created_at: number; updated_at?: number | null };
 
@@ -911,7 +911,10 @@ describe("initializeDatabase against real SQLite", () => {
       }));
 
       await expectFullyMigrated();
-      expect(console.warn).toHaveBeenCalledWith("Schema probe failed; applying the full schema instead");
+      expect(console.warn).toHaveBeenCalledWith(
+        "Schema probe failed; applying the full schema instead:",
+        expect.any(Error),
+      );
     });
 
     it("applies the whole schema when the probe returns a shape it cannot read", async () => {
