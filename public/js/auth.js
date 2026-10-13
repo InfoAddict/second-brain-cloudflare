@@ -1,3 +1,9 @@
+// The Worker normally answers an authenticated request in under a second. A
+// bounded wait keeps a lost connection from leaving the sign-in form disabled
+// on "Connecting..." forever, while leaving room for the measured post-release
+// cold start.
+const CONNECT_TIMEOUT_MS = 30_000
+
 async function connect() {
   const url = document.getElementById('auth-url').value.trim().replace(/\/$/, '')
   const tok = document.getElementById('auth-token').value.trim()
@@ -10,8 +16,13 @@ async function connect() {
   btn.textContent = t('auth.connecting')
   btn.disabled = true
   err.textContent = ''
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS)
   try {
-    const res = await fetch(`${url}/list?n=1`, { headers: { Authorization: `Bearer ${tok}` } })
+    const res = await fetch(`${url}/list?n=1`, {
+      headers: { Authorization: `Bearer ${tok}` },
+      signal: controller.signal,
+    })
     if (res.status === 401) {
       // The Worker says WHY (src/lib/identity.ts): a suspended or removed member
       // holds a token that is not wrong, so "Invalid token" sent them off to
@@ -33,9 +44,13 @@ async function connect() {
     AUTH_TOKEN = tok
     showApp()
   } catch (e) {
-    err.textContent = e.message || t('auth.couldNotConnect')
+    err.textContent = e?.name === 'AbortError'
+      ? t('auth.connectionTimedOut')
+      : e?.message || t('auth.couldNotConnect')
     btn.textContent = t('auth.connect')
     btn.disabled = false
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
 

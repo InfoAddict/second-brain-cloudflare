@@ -371,11 +371,17 @@ describe("withFtsWriteGuard", () => {
       const coldDb = {
         prepare(sql: string) {
           const raw = s.db.prepare(sql);
-          if (!sql.startsWith("SELECT type AS kind, name")) return raw;
-          return { all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; } };
+          if (!/^SELECT (?:type AS kind, name, sql AS definition FROM sqlite_master|'(?:column|edge_column|user_column|admin_event_column|entry_version_column|entries_trash_column)' AS kind, name, NULL AS definition FROM pragma_table_info)/.test(sql)) return raw;
+          return {
+            __schemaProbe: true,
+            all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; },
+          };
         },
         exec: s.db.exec.bind(s.db),
-        batch: s.db.batch.bind(s.db),
+        batch(statements: ({ __schemaProbe?: boolean; all?: () => Promise<unknown> })[]) {
+          if (statements.every(statement => statement.__schemaProbe)) return Promise.all(statements.map(statement => statement.all!()));
+          return s.db.batch(statements as Parameters<typeof s.db.batch>[0]);
+        },
       } as unknown as D1Database;
       resetDatabaseInit();
       const cold = initializeDatabase(makeTestEnv(undefined, { DB: coldDb, OAUTH_KV: kv }));
@@ -434,11 +440,17 @@ describe("withFtsWriteGuard", () => {
       const coldDb = {
         prepare(sql: string) {
           const raw = s.db.prepare(sql);
-          if (!sql.startsWith("SELECT type AS kind, name")) return raw;
-          return { all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; } };
+          if (!/^SELECT (?:type AS kind, name, sql AS definition FROM sqlite_master|'(?:column|edge_column|user_column|admin_event_column|entry_version_column|entries_trash_column)' AS kind, name, NULL AS definition FROM pragma_table_info)/.test(sql)) return raw;
+          return {
+            __schemaProbe: true,
+            all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; },
+          };
         },
         exec: s.db.exec.bind(s.db),
-        batch: s.db.batch.bind(s.db),
+        batch(statements: ({ __schemaProbe?: boolean; all?: () => Promise<unknown> })[]) {
+          if (statements.every(statement => statement.__schemaProbe)) return Promise.all(statements.map(statement => statement.all!()));
+          return s.db.batch(statements as Parameters<typeof s.db.batch>[0]);
+        },
       } as unknown as D1Database;
       resetDatabaseInit();
       const cold = initializeDatabase(makeTestEnv(undefined, { DB: coldDb, OAUTH_KV: kv }));

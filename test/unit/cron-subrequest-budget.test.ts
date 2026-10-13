@@ -133,12 +133,18 @@ function countingEnv(db: D1Mock, overrides: Partial<Env> = {}) {
     first: (...a: any[]) => { bill(sql); return stmt.first(...a); },
     all: () => { bill(sql); return stmt.all(); },
     __inner: stmt,
+    __sql: sql,
   });
   const prepared: string[] = [];
+  const batches: string[][] = [];
   const DB = {
     prepare(sql: string) { prepared.push(sql.replace(/\s+/g, " ").trim()); return wrap(db.prepare(sql), sql); },
     exec(sql: string) { bill(sql); return db.exec(sql); },
-    batch: (stmts: any[]) => { bill("BATCH"); return db.batch(stmts.map((s: any) => s.__inner ?? s)); },
+    batch: (stmts: any[]) => {
+      batches.push(stmts.map((s: any) => s.__sql ?? "[wrapped D1 statement]"));
+      bill("BATCH");
+      return db.batch(stmts.map((s: any) => s.__inner ?? s));
+    },
   } as unknown as D1Database;
 
   const baseKV = overrides.OAUTH_KV ?? makeTestEnv(db).OAUTH_KV;
@@ -148,7 +154,7 @@ function countingEnv(db: D1Mock, overrides: Partial<Env> = {}) {
     put: (...a: Parameters<KVNamespace["put"]>) => { bill(`KV PUT ${a[0]}`); return (baseKV.put as any)(...a); },
   } as unknown as KVNamespace;
 
-  return { env: makeTestEnv(db, { DB, VECTORIZE: makeVectorizeMock(), ...overrides, OAUTH_KV }), statements, prepared };
+  return { env: makeTestEnv(db, { DB, VECTORIZE: makeVectorizeMock(), ...overrides, OAUTH_KV }), statements, prepared, batches };
 }
 
 // Each tag gets more than the ten eligible entries a digest needs, so nightly compression
@@ -268,12 +274,16 @@ describe("nightly cron D1 subrequest cost", () => {
         source: "api", created_at: old + i, updated_at: old + i, vector_ids: "[]",
       });
     }
-    const { env, statements } = countingEnv(db);
+    const { env, statements, prepared } = countingEnv(db);
 
     await runCron(env);
 
-    // The signature statement of initializeDatabase, once for the whole cron.
-    expect(statements.filter(s => s.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master"))).toHaveLength(1);
+    // The seven metadata reads are prepared once for the whole cron. The FTS
+    // guard wraps statements before passing them to batch(), so this ledger is
+    // the stable boundary for proving the one cold-start probe here.
+    const probeStatements = prepared.filter(sql => sql.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master"));
+    expect(probeStatements).toHaveLength(1);
+    expect(prepared.filter(sql => sql.includes("pragma_table_info"))).toHaveLength(6);
     // #282: the schema is already there, and the whole point is that finding that out no
     // longer costs a CREATE and an ALTER per object.
     expect(statements.filter(s => /^(CREATE|ALTER)\b/.test(s))).toEqual([]);

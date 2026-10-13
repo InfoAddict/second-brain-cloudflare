@@ -1,0 +1,941 @@
+[
+  {
+    "results": [
+      {
+        "kind": "table",
+        "name": "_cf_KV",
+        "definition": "CREATE TABLE _cf_KV (\n        key TEXT PRIMARY KEY,\n        value BLOB\n      ) WITHOUT ROWID"
+      },
+      {
+        "kind": "table",
+        "name": "entries",
+        "definition": "CREATE TABLE entries (\n  id               TEXT PRIMARY KEY,\n  content          TEXT NOT NULL,\n  tags             TEXT NOT NULL DEFAULT '[]',   -- JSON array\n  source           TEXT NOT NULL DEFAULT 'api',  -- 'phone', 'browser', 'voice', 'claude', 'api'\n  created_at       INTEGER NOT NULL,             -- Unix ms timestamp\n  vector_ids       TEXT NOT NULL DEFAULT '[]',   -- JSON array of Vectorize vector IDs\n  recall_count     INTEGER DEFAULT 0,\n  importance_score INTEGER DEFAULT 0\n, contradiction_wins INTEGER DEFAULT 0, contradiction_losses INTEGER DEFAULT 0, updated_at INTEGER, staleness_checked_at INTEGER, workspace_id TEXT NOT NULL DEFAULT '', actor_id TEXT NOT NULL DEFAULT '', when_at INTEGER, when_kind TEXT, when_source TEXT, when_label TEXT, valid_from INTEGER, valid_until INTEGER)"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_entries_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_created_at",
+        "definition": "CREATE INDEX idx_entries_created_at ON entries(created_at DESC)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_source",
+        "definition": "CREATE INDEX idx_entries_source ON entries(source)"
+      },
+      {
+        "kind": "table",
+        "name": "edges",
+        "definition": "CREATE TABLE edges (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, target_id TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'relates_to', weight REAL NOT NULL DEFAULT 0.5, provenance TEXT NOT NULL DEFAULT 'inferred', metadata TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, workspace_id TEXT NOT NULL DEFAULT '', UNIQUE(source_id, target_id, type))"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_edges_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_edges_2",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_edges_source",
+        "definition": "CREATE INDEX idx_edges_source ON edges(source_id)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_edges_target",
+        "definition": "CREATE INDEX idx_edges_target ON edges(target_id)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_edges_weight",
+        "definition": "CREATE INDEX idx_edges_weight ON edges(weight DESC)"
+      },
+      {
+        "kind": "table",
+        "name": "insight_candidates",
+        "definition": "CREATE TABLE insight_candidates (id TEXT PRIMARY KEY, a_id TEXT NOT NULL, b_id TEXT NOT NULL, similarity REAL NOT NULL, gap_ms INTEGER NOT NULL, score REAL NOT NULL, signal TEXT NOT NULL DEFAULT 'vector', status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, UNIQUE(a_id, b_id))"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_insight_candidates_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_insight_candidates_2",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_insight_candidates_queue",
+        "definition": "CREATE INDEX idx_insight_candidates_queue ON insight_candidates(status, score DESC)"
+      },
+      {
+        "kind": "table",
+        "name": "workspaces",
+        "definition": "CREATE TABLE workspaces (id TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'personal', name TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_workspaces_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_workspaces_kind",
+        "definition": "CREATE INDEX idx_workspaces_kind ON workspaces(kind)"
+      },
+      {
+        "kind": "table",
+        "name": "users",
+        "definition": "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', email TEXT, role TEXT NOT NULL DEFAULT 'member', token_hash TEXT NOT NULL, suspended INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, default_share TEXT NOT NULL DEFAULT '', removed_at INTEGER, last_used_at INTEGER)"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_users_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_users_token_hash",
+        "definition": "CREATE UNIQUE INDEX idx_users_token_hash ON users(token_hash)"
+      },
+      {
+        "kind": "table",
+        "name": "memberships",
+        "definition": "CREATE TABLE memberships (user_id TEXT NOT NULL, workspace_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member', created_at INTEGER NOT NULL, PRIMARY KEY (user_id, workspace_id))"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_memberships_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_memberships_workspace",
+        "definition": "CREATE INDEX idx_memberships_workspace ON memberships(workspace_id)"
+      },
+      {
+        "kind": "table",
+        "name": "entry_events",
+        "definition": "CREATE TABLE entry_events (id TEXT PRIMARY KEY, entry_id TEXT NOT NULL, actor_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL)"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_entry_events_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_entry_events_entry",
+        "definition": "CREATE INDEX idx_entry_events_entry ON entry_events(entry_id, created_at DESC)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entry_events_created",
+        "definition": "CREATE INDEX idx_entry_events_created ON entry_events(created_at DESC)"
+      },
+      {
+        "kind": "table",
+        "name": "admin_events",
+        "definition": "CREATE TABLE admin_events (id TEXT PRIMARY KEY, actor_id TEXT NOT NULL DEFAULT '', target_user_id TEXT NOT NULL DEFAULT '', workspace_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL)"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_admin_events_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_admin_events_created",
+        "definition": "CREATE INDEX idx_admin_events_created ON admin_events(created_at DESC)"
+      },
+      {
+        "kind": "table",
+        "name": "maintenance_cursor",
+        "definition": "CREATE TABLE maintenance_cursor (id INTEGER PRIMARY KEY CHECK (id = 1), workspace_id TEXT NOT NULL DEFAULT '', advanced_at INTEGER NOT NULL DEFAULT 0)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_users_email",
+        "definition": "CREATE UNIQUE INDEX idx_users_email ON users(email)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_workspace_created",
+        "definition": "CREATE INDEX idx_entries_workspace_created ON entries(workspace_id, created_at DESC)"
+      },
+      {
+        "kind": "table",
+        "name": "prompt_capsule_revisions",
+        "definition": "CREATE TABLE prompt_capsule_revisions (workspace_id TEXT PRIMARY KEY, revision TEXT NOT NULL)"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_prompt_capsule_revisions_1",
+        "definition": null
+      },
+      {
+        "kind": "table",
+        "name": "projects",
+        "definition": "CREATE TABLE projects (id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', aliases TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER, PRIMARY KEY (workspace_id, id))"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_projects_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_projects_workspace",
+        "definition": "CREATE INDEX idx_projects_workspace ON projects(workspace_id, status)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_project",
+        "definition": "CREATE INDEX idx_entries_project ON entries(workspace_id, id) WHERE instr(lower(tags), '\"project:') > 0"
+      },
+      {
+        "kind": "table",
+        "name": "push_subscriptions",
+        "definition": "CREATE TABLE push_subscriptions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', endpoint_hash TEXT NOT NULL, subscription_json TEXT NOT NULL, content_free INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_ok_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0, UNIQUE(endpoint_hash))"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_push_subscriptions_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_push_subscriptions_2",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_push_subscriptions_workspace",
+        "definition": "CREATE INDEX idx_push_subscriptions_workspace ON push_subscriptions(workspace_id)"
+      },
+      {
+        "kind": "table",
+        "name": "entries_fts",
+        "definition": "CREATE VIRTUAL TABLE entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')"
+      },
+      {
+        "kind": "table",
+        "name": "entries_fts_data",
+        "definition": "CREATE TABLE 'entries_fts_data'(id INTEGER PRIMARY KEY, block BLOB)"
+      },
+      {
+        "kind": "table",
+        "name": "entries_fts_idx",
+        "definition": "CREATE TABLE 'entries_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID"
+      },
+      {
+        "kind": "table",
+        "name": "entries_fts_content",
+        "definition": "CREATE TABLE 'entries_fts_content'(id INTEGER PRIMARY KEY, c0, c1)"
+      },
+      {
+        "kind": "table",
+        "name": "entries_fts_docsize",
+        "definition": "CREATE TABLE 'entries_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB)"
+      },
+      {
+        "kind": "table",
+        "name": "entries_fts_config",
+        "definition": "CREATE TABLE 'entries_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID"
+      },
+      {
+        "kind": "trigger",
+        "name": "entries_fts_insert",
+        "definition": "CREATE TRIGGER entries_fts_insert\n    AFTER INSERT ON entries\n    BEGIN\n      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);\n    END"
+      },
+      {
+        "kind": "trigger",
+        "name": "entries_fts_update",
+        "definition": "CREATE TRIGGER entries_fts_update\n    AFTER UPDATE ON entries\n    WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content\n    BEGIN\n      DELETE FROM entries_fts WHERE rowid = OLD.rowid;\n      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);\n    END"
+      },
+      {
+        "kind": "trigger",
+        "name": "entries_fts_delete",
+        "definition": "CREATE TRIGGER entries_fts_delete\n    AFTER DELETE ON entries\n    BEGIN\n      DELETE FROM entries_fts WHERE rowid = OLD.rowid;\n    END"
+      },
+      {
+        "kind": "table",
+        "name": "entry_counts",
+        "definition": "CREATE TABLE entry_counts (workspace_id TEXT PRIMARY KEY, n INTEGER NOT NULL)"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_entry_counts_1",
+        "definition": null
+      },
+      {
+        "kind": "trigger",
+        "name": "entry_counts_insert",
+        "definition": "CREATE TRIGGER entry_counts_insert\n    AFTER INSERT ON entries\n    BEGIN\n      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)\n      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;\n    END"
+      },
+      {
+        "kind": "trigger",
+        "name": "entry_counts_update",
+        "definition": "CREATE TRIGGER entry_counts_update\n    AFTER UPDATE OF workspace_id ON entries\n    WHEN OLD.workspace_id IS NOT NEW.workspace_id\n    BEGIN\n      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)\n      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;\n      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)\n      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;\n    END"
+      },
+      {
+        "kind": "trigger",
+        "name": "entry_counts_delete",
+        "definition": "CREATE TRIGGER entry_counts_delete\n    AFTER DELETE ON entries\n    BEGIN\n      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)\n      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;\n    END"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entry_events_actor",
+        "definition": "CREATE INDEX idx_entry_events_actor ON entry_events(actor_id, created_at DESC)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entry_events_held",
+        "definition": "CREATE INDEX idx_entry_events_held ON entry_events(created_at DESC) WHERE event = 'held'"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entry_events_life_end",
+        "definition": "CREATE INDEX idx_entry_events_life_end ON entry_events(entry_id) WHERE event IN ('purged', 'deleted')"
+      },
+      {
+        "kind": "table",
+        "name": "recall_log",
+        "definition": "CREATE TABLE recall_log (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, created_at INTEGER NOT NULL, channel TEXT NOT NULL, query TEXT NOT NULL, params TEXT NOT NULL, returned_ids TEXT NOT NULL, followed_ids TEXT NOT NULL DEFAULT '[]')"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_recall_log_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_recall_log_ws",
+        "definition": "CREATE INDEX idx_recall_log_ws ON recall_log(workspace_id, created_at DESC)"
+      },
+      {
+        "kind": "table",
+        "name": "entry_versions",
+        "definition": "CREATE TABLE entry_versions (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT '', seq INTEGER NOT NULL, content TEXT, prior_length INTEGER, prior_length_utf16 INTEGER, tags TEXT NOT NULL, state TEXT NOT NULL DEFAULT '{}', actor_id TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', valid_from INTEGER, created_at INTEGER NOT NULL, CHECK ((content IS NULL) <> (prior_length IS NULL)), CHECK (prior_length_utf16 IS NULL OR prior_length IS NOT NULL))"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entry_versions_entry",
+        "definition": "CREATE UNIQUE INDEX idx_entry_versions_entry ON entry_versions(entry_id, seq)"
+      },
+      {
+        "kind": "table",
+        "name": "entries_trash",
+        "definition": "CREATE TABLE entries_trash (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', actor_id TEXT NOT NULL DEFAULT '', content TEXT NOT NULL, row_json TEXT NOT NULL, edges_json TEXT NOT NULL DEFAULT '[]', vector_ids TEXT NOT NULL DEFAULT '[]', deleted_at INTEGER NOT NULL, deleted_by TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT 'forget', nonce TEXT NOT NULL DEFAULT '')"
+      },
+      {
+        "kind": "index",
+        "name": "sqlite_autoindex_entries_trash_1",
+        "definition": null
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_trash_deleted",
+        "definition": "CREATE INDEX idx_entries_trash_deleted ON entries_trash(deleted_at)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_trash_workspace_deleted",
+        "definition": "CREATE INDEX idx_entries_trash_workspace_deleted ON entries_trash(workspace_id, deleted_at DESC)"
+      },
+      {
+        "kind": "table",
+        "name": "entries_fts_vocab",
+        "definition": "CREATE VIRTUAL TABLE entries_fts_vocab USING fts5vocab(entries_fts, row)"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_conflict_held",
+        "definition": "CREATE INDEX idx_entries_conflict_held ON entries(workspace_id, id) WHERE instr(lower(tags), '\"conflict-held\"') > 0"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_when",
+        "definition": "CREATE INDEX idx_entries_when ON entries(workspace_id, when_at) WHERE when_at IS NOT NULL"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_task",
+        "definition": "CREATE INDEX idx_entries_task ON entries(workspace_id, created_at) WHERE instr(lower(tags), '\"task\"') > 0"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_insight",
+        "definition": "CREATE INDEX idx_entries_insight ON entries(workspace_id, created_at) WHERE instr(lower(tags), '\"auto-insight\"') > 0"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_stale",
+        "definition": "CREATE INDEX idx_entries_stale ON entries(workspace_id, id) WHERE instr(lower(tags), '\"stale:as-of\"') > 0"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_ledger",
+        "definition": "CREATE INDEX idx_entries_ledger ON entries(workspace_id, created_at) WHERE instr(lower(tags), '\"ledger:decision\"') > 0"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_standing",
+        "definition": "CREATE INDEX idx_entries_standing ON entries(workspace_id, created_at) WHERE instr(lower(tags), '\"standing:active\"') > 0"
+      },
+      {
+        "kind": "index",
+        "name": "idx_entries_capsule",
+        "definition": "CREATE INDEX idx_entries_capsule ON entries(workspace_id, id) WHERE instr(lower(tags), '\"capsule:') > 0"
+      },
+      {
+        "kind": "trigger",
+        "name": "prompt_capsule_entry_insert",
+        "definition": "CREATE TRIGGER prompt_capsule_entry_insert\n    AFTER INSERT ON entries\n    WHEN instr(lower(NEW.tags), '\"capsule:') > 0 OR instr(lower(NEW.tags), '\"capsule-slot:') > 0\n    BEGIN\n      INSERT INTO prompt_capsule_revisions (workspace_id, revision) VALUES (NEW.workspace_id, lower(hex(randomblob(16))))\n      ON CONFLICT(workspace_id) DO UPDATE SET revision = lower(hex(randomblob(16)));\n    END"
+      },
+      {
+        "kind": "trigger",
+        "name": "prompt_capsule_entry_update",
+        "definition": "CREATE TRIGGER prompt_capsule_entry_update\n    AFTER UPDATE OF id, content, tags, workspace_id ON entries\n    WHEN instr(lower(OLD.tags), '\"capsule:') > 0 OR instr(lower(OLD.tags), '\"capsule-slot:') > 0\n      OR instr(lower(NEW.tags), '\"capsule:') > 0 OR instr(lower(NEW.tags), '\"capsule-slot:') > 0\n    BEGIN\n      INSERT INTO prompt_capsule_revisions (workspace_id, revision) VALUES (OLD.workspace_id, lower(hex(randomblob(16))))\n      ON CONFLICT(workspace_id) DO UPDATE SET revision = lower(hex(randomblob(16)));\n      INSERT INTO prompt_capsule_revisions (workspace_id, revision)\n      SELECT NEW.workspace_id, lower(hex(randomblob(16))) WHERE NEW.workspace_id <> OLD.workspace_id\n      ON CONFLICT(workspace_id) DO UPDATE SET revision = lower(hex(randomblob(16)));\n    END"
+      },
+      {
+        "kind": "trigger",
+        "name": "prompt_capsule_entry_delete",
+        "definition": "CREATE TRIGGER prompt_capsule_entry_delete\n    AFTER DELETE ON entries\n    WHEN instr(lower(OLD.tags), '\"capsule:') > 0 OR instr(lower(OLD.tags), '\"capsule-slot:') > 0\n    BEGIN\n      INSERT INTO prompt_capsule_revisions (workspace_id, revision) VALUES (OLD.workspace_id, lower(hex(randomblob(16))))\n      ON CONFLICT(workspace_id) DO UPDATE SET revision = lower(hex(randomblob(16)));\n    END"
+      },
+      {
+        "kind": "trigger",
+        "name": "prompt_capsule_workspace_delete",
+        "definition": "CREATE TRIGGER prompt_capsule_workspace_delete\n    AFTER DELETE ON workspaces\n    BEGIN\n      DELETE FROM prompt_capsule_revisions WHERE workspace_id = OLD.id;\n    END"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "OC",
+      "served_by_colo": "BNE",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.9552
+      },
+      "duration": 0.9552,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 94801920,
+      "rows_read": 83,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  },
+  {
+    "results": [
+      {
+        "kind": "column",
+        "name": "id",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "content",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "tags",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "source",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "created_at",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "vector_ids",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "recall_count",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "importance_score",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "contradiction_wins",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "contradiction_losses",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "updated_at",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "staleness_checked_at",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "workspace_id",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "actor_id",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "when_at",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "when_kind",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "when_source",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "when_label",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "valid_from",
+        "definition": null
+      },
+      {
+        "kind": "column",
+        "name": "valid_until",
+        "definition": null
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "OC",
+      "served_by_colo": "BNE",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.2859
+      },
+      "duration": 0.2859,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 94801920,
+      "rows_read": 20,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  },
+  {
+    "results": [
+      {
+        "kind": "edge_column",
+        "name": "id",
+        "definition": null
+      },
+      {
+        "kind": "edge_column",
+        "name": "source_id",
+        "definition": null
+      },
+      {
+        "kind": "edge_column",
+        "name": "target_id",
+        "definition": null
+      },
+      {
+        "kind": "edge_column",
+        "name": "type",
+        "definition": null
+      },
+      {
+        "kind": "edge_column",
+        "name": "weight",
+        "definition": null
+      },
+      {
+        "kind": "edge_column",
+        "name": "provenance",
+        "definition": null
+      },
+      {
+        "kind": "edge_column",
+        "name": "metadata",
+        "definition": null
+      },
+      {
+        "kind": "edge_column",
+        "name": "created_at",
+        "definition": null
+      },
+      {
+        "kind": "edge_column",
+        "name": "updated_at",
+        "definition": null
+      },
+      {
+        "kind": "edge_column",
+        "name": "workspace_id",
+        "definition": null
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "OC",
+      "served_by_colo": "BNE",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.8527
+      },
+      "duration": 0.8527,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 94801920,
+      "rows_read": 10,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  },
+  {
+    "results": [
+      {
+        "kind": "user_column",
+        "name": "id",
+        "definition": null
+      },
+      {
+        "kind": "user_column",
+        "name": "name",
+        "definition": null
+      },
+      {
+        "kind": "user_column",
+        "name": "email",
+        "definition": null
+      },
+      {
+        "kind": "user_column",
+        "name": "role",
+        "definition": null
+      },
+      {
+        "kind": "user_column",
+        "name": "token_hash",
+        "definition": null
+      },
+      {
+        "kind": "user_column",
+        "name": "suspended",
+        "definition": null
+      },
+      {
+        "kind": "user_column",
+        "name": "created_at",
+        "definition": null
+      },
+      {
+        "kind": "user_column",
+        "name": "default_share",
+        "definition": null
+      },
+      {
+        "kind": "user_column",
+        "name": "removed_at",
+        "definition": null
+      },
+      {
+        "kind": "user_column",
+        "name": "last_used_at",
+        "definition": null
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "OC",
+      "served_by_colo": "BNE",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.2018
+      },
+      "duration": 0.2018,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 94801920,
+      "rows_read": 10,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  },
+  {
+    "results": [
+      {
+        "kind": "admin_event_column",
+        "name": "id",
+        "definition": null
+      },
+      {
+        "kind": "admin_event_column",
+        "name": "actor_id",
+        "definition": null
+      },
+      {
+        "kind": "admin_event_column",
+        "name": "target_user_id",
+        "definition": null
+      },
+      {
+        "kind": "admin_event_column",
+        "name": "workspace_id",
+        "definition": null
+      },
+      {
+        "kind": "admin_event_column",
+        "name": "event",
+        "definition": null
+      },
+      {
+        "kind": "admin_event_column",
+        "name": "payload",
+        "definition": null
+      },
+      {
+        "kind": "admin_event_column",
+        "name": "created_at",
+        "definition": null
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "OC",
+      "served_by_colo": "BNE",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.1886
+      },
+      "duration": 0.1886,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 94801920,
+      "rows_read": 7,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  },
+  {
+    "results": [
+      {
+        "kind": "entry_version_column",
+        "name": "id",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "entry_id",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "workspace_id",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "seq",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "content",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "prior_length",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "prior_length_utf16",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "tags",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "state",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "actor_id",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "channel",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "reason",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "meta",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "valid_from",
+        "definition": null
+      },
+      {
+        "kind": "entry_version_column",
+        "name": "created_at",
+        "definition": null
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "OC",
+      "served_by_colo": "BNE",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.2241
+      },
+      "duration": 0.2241,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 94801920,
+      "rows_read": 15,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  },
+  {
+    "results": [
+      {
+        "kind": "entries_trash_column",
+        "name": "id",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "workspace_id",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "actor_id",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "content",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "row_json",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "edges_json",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "vector_ids",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "deleted_at",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "deleted_by",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "channel",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "reason",
+        "definition": null
+      },
+      {
+        "kind": "entries_trash_column",
+        "name": "nonce",
+        "definition": null
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "OC",
+      "served_by_colo": "BNE",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.2144
+      },
+      "duration": 0.2144,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 94801920,
+      "rows_read": 12,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

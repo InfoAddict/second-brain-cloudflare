@@ -66,6 +66,8 @@ async function seedNearDuplicateNeighbor(sq: SqliteD1) {
 describe("a held MCP remember commits INSERT, hold version and tags UPDATE in one batch", () => {
   it("no vectors; status draft; tag quarantine:instruction", async () => {
     sq = await migrated();
+    sq.issued.length = 0;
+    sq.batches.length = 0;
     const env = envFor(sq);
     const { ctx } = makeCtx();
 
@@ -83,7 +85,11 @@ describe("a held MCP remember commits INSERT, hold version and tags UPDATE in on
     expect(heldReason(tags)).toBe("instruction");
     expect(getStatus(tags)).toBe("draft");
 
-    // One batch: the facade collapses a batch() call to a single "BATCH" issued-statement entry.
+    // The fixture has already completed its read-only schema probe. From this
+    // capture boundary, only the held write's one atomic mutation batch remains.
+    const mutationBatches = sq.batches.filter(batch => batch.some(sql => /^INSERT INTO entries\b/.test(sql)));
+    expect(mutationBatches).toHaveLength(1);
+    expect(sq.batches).toHaveLength(1);
     expect(sq.issued.filter(s => s === "BATCH")).toHaveLength(1);
 
     const versions = sq.db.prepare(`SELECT * FROM entry_versions WHERE entry_id = ?`).bind(result.id) as unknown as { all(): Promise<{ results: any[] }> };

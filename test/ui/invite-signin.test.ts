@@ -73,6 +73,7 @@ function setup(fetchImpl: (url: string, init?: any) => Promise<any> = async () =
       removeItem: (k: string) => stored.delete(k),
     },
     navigator: { language: "en-US" },
+    AbortController,
     fetch: fetchImpl,
     setTimeout,
     clearTimeout,

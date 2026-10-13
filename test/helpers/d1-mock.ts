@@ -81,6 +81,17 @@ const SCHEMA_PROBE_RESULTS = [
   { kind: "entries_trash_column", name: "nonce" },
 ];
 
+/** Match init.ts's independent metadata reads while keeping this deployed-brain double honest. */
+function schemaProbeResults(sql: string): { kind: string; name: string; definition?: string }[] | null {
+  if (sql.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master")) {
+    return SCHEMA_PROBE_RESULTS.filter(row => row.kind === "table" || row.kind === "index" || row.kind === "trigger");
+  }
+  const table = sql.match(/^SELECT '(column|edge_column|user_column|admin_event_column|entry_version_column|entries_trash_column)' AS kind, name, NULL AS definition FROM pragma_table_info\('(entries|edges|users|admin_events|entry_versions|entries_trash)'\)$/);
+  if (!table) return null;
+  const [, kind] = table;
+  return SCHEMA_PROBE_RESULTS.filter(row => row.kind === kind);
+}
+
 /**
  * Values bound through a Params-numbered statement (`?1..?n`, dense, values reused by identity —
  * ADV-1/ADV-2/Task 6), in the order their placeholders appear in the SQL text. `Params` gives a
@@ -942,7 +953,8 @@ export class D1Mock {
           }
           return { results: [...byWorkspace.entries()].map(([workspace_id, n]) => ({ workspace_id, n })) };
         }
-        if (s.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master")) {
+        const schemaProbe = schemaProbeResults(s);
+        if (schemaProbe) {
           // src/db/init.ts's schema probe. This mock stands in for a deployed brain, and
           // a deployed brain is migrated — its rows carry every ALTER column below — so
           // the honest answer is "all present", which is also what makes the mock report
@@ -951,7 +963,7 @@ export class D1Mock {
           // mock that derives its answer from the code under test can only ever agree
           // with it. Fresh and partially-migrated brains are covered against real SQLite
           // in test/unit/db-init.test.ts.
-          return { results: SCHEMA_PROBE_RESULTS };
+          return { results: schemaProbe };
         }
         if (s === "SELECT id FROM entries") {
           return { results: db.entries.map((e: any) => ({ id: e.id })) };
@@ -1451,7 +1463,9 @@ export class D1Mock {
   }
 
   async exec(_sql: string) { }
-  async batch(stmts: any[]) { return Promise.all(stmts.map((s: any) => s.run())); }
+  async batch(stmts: any[]) {
+    return Promise.all(stmts.map(async (statement: any) => ({ success: true, ...(await statement.run()) })));
+  }
   reset() {
     this.entries = [];
     this.edges = [];

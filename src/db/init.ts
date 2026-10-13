@@ -454,10 +454,11 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
 };
 
 /**
- * One statement that reports every schema object this file knows how to create: table,
- * index, and trigger names out of sqlite_master, and entries' columns out of the
- * table-valued form of PRAGMA table_info (SQLite rewrites neither list lazily — an
- * ALTER shows up immediately).
+ * Seven independent read-only statements that report every schema object this file knows
+ * how to create: table, index, and trigger names out of sqlite_master, and columns out
+ * of the table-valued form of PRAGMA table_info (SQLite rewrites neither list lazily —
+ * an ALTER shows up immediately). They run in one D1 batch, preserving the one-subrequest
+ * cold-start budget without relying on D1's small compound-SELECT term limit.
  * `kind` is what stops a name that appears on both sides from being read as the wrong one.
  *
  * This exists because the fifteen statements it replaces cost fifteen D1 calls to
@@ -469,27 +470,18 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
  * that self-imposed budget that a cold isolate pushed it over — 59 against a target of
  * 50, now 47.
  *
- * Cost is one subrequest and one row read per catalogue entry, flat in the number of
- * entries because neither side of the UNION touches table data — measured on real D1
- * (workerd via Miniflare), not the mock, which is not something that can be re-verified
- * from a laptop. rows_read = 23 was that measurement, taken when SCHEMA_OBJECTS held
- * seven objects. It holds 26 now (team edition, projects, push subscriptions, and their
- * indexes all landed since), plus entries_fts, entry_counts, and their six triggers
- * (created outside SCHEMA_OBJECTS — see the ownership note above — but still read by
- * this same probe), so 23 is long stale and should be re-measured against a live
- * database rather than trusted as today's figure. What the measurement did establish,
- * and what still holds regardless of the exact count: it grows by one row per object
- * added to SCHEMA_OBJECTS, which is the cheap direction — adding a statement above now
- * costs one row here rather than one subrequest on every cold start.
+ * Cost is one subrequest and one row read per catalogue entry. It grows with the schema,
+ * never with entry data, because none of the statements reads an application table.
  */
-const PROBE_SQL =
-  `SELECT type AS kind, name, sql AS definition FROM sqlite_master WHERE type IN ('table','index','trigger') ` +
-  `UNION ALL SELECT 'column' AS kind, name, NULL AS definition FROM pragma_table_info('entries')` +
-  `UNION ALL SELECT 'edge_column' AS kind, name, NULL AS definition FROM pragma_table_info('edges')` +
-  `UNION ALL SELECT 'user_column' AS kind, name, NULL AS definition FROM pragma_table_info('users')` +
-  `UNION ALL SELECT 'admin_event_column' AS kind, name, NULL AS definition FROM pragma_table_info('admin_events')` +
-  `UNION ALL SELECT 'entry_version_column' AS kind, name, NULL AS definition FROM pragma_table_info('entry_versions')` +
-  `UNION ALL SELECT 'entries_trash_column' AS kind, name, NULL AS definition FROM pragma_table_info('entries_trash')`;
+const PROBE_SQLS = [
+  `SELECT type AS kind, name, sql AS definition FROM sqlite_master WHERE type IN ('table','index','trigger')`,
+  `SELECT 'column' AS kind, name, NULL AS definition FROM pragma_table_info('entries')`,
+  `SELECT 'edge_column' AS kind, name, NULL AS definition FROM pragma_table_info('edges')`,
+  `SELECT 'user_column' AS kind, name, NULL AS definition FROM pragma_table_info('users')`,
+  `SELECT 'admin_event_column' AS kind, name, NULL AS definition FROM pragma_table_info('admin_events')`,
+  `SELECT 'entry_version_column' AS kind, name, NULL AS definition FROM pragma_table_info('entry_versions')`,
+  `SELECT 'entries_trash_column' AS kind, name, NULL AS definition FROM pragma_table_info('entries_trash')`,
+] as const;
 
 type ObjectKind = "table" | "index" | "trigger";
 /**
@@ -527,14 +519,24 @@ const kindOf = (ddl: string): ObjectKind => {
  * future D1 from bricking first-request migration for every new install.
  */
 async function probeSchema(env: Env): Promise<ExistingSchema | null> {
-  let rows: unknown;
+  let rows: unknown[];
   try {
-    rows = (await env.DB.prepare(PROBE_SQL).all<{ kind: string; name: string }>())?.results;
+    const resultSets = await env.DB.batch<{ kind: string; name: string; definition?: string | null }>(
+      PROBE_SQLS.map(sql => env.DB.prepare(sql)),
+    );
+    if (!Array.isArray(resultSets) || resultSets.length !== PROBE_SQLS.length) return null;
+
+    rows = [];
+    for (const result of resultSets) {
+      // A partial probe must never be treated as proof that schema objects exist. D1's
+      // batch response is ordered, so require every expected result set before merging.
+      if (!result || result.success !== true || !Array.isArray(result.results)) return null;
+      rows.push(...result.results);
+    }
   } catch {
     console.warn("Schema probe failed; applying the full schema instead");
     return null;
   }
-  if (!Array.isArray(rows)) return null;
 
   const objects = new Map<string, ObjectKind>();
   const definitions = new Map<string, string>();

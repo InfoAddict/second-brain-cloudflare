@@ -44,7 +44,12 @@ function makeEl() {
 }
 
 /** Boots the overlay with a /list that answers `status` and `body`. */
-function setup(status: number, body: unknown, locale: "en" | "it" = "en") {
+function setup(
+  status: number,
+  body: unknown,
+  locale: "en" | "it" = "en",
+  opts: { fetch?: (url: string, init?: Record<string, unknown>) => Promise<any> } = {},
+) {
   const elements = new Map<string, any>();
   for (const id of IDS) {
     const el = makeEl();
@@ -55,6 +60,9 @@ function setup(status: number, body: unknown, locale: "en" | "it" = "en") {
   elements.get("auth-token").value = "a-real-looking-token";
 
   const stored = new Map<string, string>();
+  const pendingTimers = new Map<number, () => void>();
+  const clearedTimers: number[] = [];
+  let nextTimerId = 1;
   const ctx: any = {
     console,
     document: {
@@ -73,13 +81,21 @@ function setup(status: number, body: unknown, locale: "en" | "it" = "en") {
       removeItem: (k: string) => stored.delete(k),
     },
     navigator: { language: "en-US" },
-    fetch: async () => ({
+    AbortController,
+    fetch: opts.fetch ?? (async () => ({
       ok: status >= 200 && status < 300,
       status,
       json: async () => body,
-    }),
-    setTimeout,
-    clearTimeout,
+    })),
+    setTimeout: (callback: () => void) => {
+      const id = nextTimerId++;
+      pendingTimers.set(id, callback);
+      return id;
+    },
+    clearTimeout: (id: number) => {
+      clearedTimers.push(id);
+      pendingTimers.delete(id);
+    },
   };
   ctx.window = ctx;
   vm.createContext(ctx);
@@ -87,12 +103,72 @@ function setup(status: number, body: unknown, locale: "en" | "it" = "en") {
   ctx.initI18n(locale);
   // showApp() reaches into the rest of the dashboard, which is not loaded here.
   vm.runInContext(`showApp = function () { shown = true }; var shown = false`, ctx);
-  return { ctx, els: elements, stored };
+  return {
+    ctx,
+    els: elements,
+    stored,
+    timers: {
+      pending: pendingTimers,
+      cleared: clearedTimers,
+      fireNext: () => {
+        const next = pendingTimers.entries().next().value as [number, () => void] | undefined;
+        if (!next) throw new Error("no timer is pending");
+        pendingTimers.delete(next[0]);
+        next[1]();
+      },
+    },
+  };
 }
 
 const errorText = (els: Map<string, any>) => els.get("auth-error").textContent;
 
 describe("sign-in 401 messages", () => {
+  it("stores the connection only after the bounded sign-in probe succeeds", async () => {
+    let requestInit: Record<string, unknown> | undefined;
+    const { ctx, stored, timers } = setup(200, [], "en", {
+      fetch: async (_url, init) => {
+        requestInit = init;
+        return { ok: true, status: 200, json: async () => [] };
+      },
+    });
+
+    await ctx.connect();
+
+    expect((requestInit?.headers as { Authorization?: string }).Authorization).toBe("Bearer a-real-looking-token");
+    expect(requestInit?.signal).toBeDefined();
+    expect(stored.get("sb_url")).toBe("https://brain.example");
+    expect(stored.get("sb_token")).toBe("a-real-looking-token");
+    expect(timers.pending).toHaveLength(0);
+    expect(timers.cleared).toHaveLength(1);
+  });
+
+  it("recovers from a sign-in request that never answers", async () => {
+    let signal: AbortSignal | undefined;
+    const { ctx, els, stored, timers } = setup(200, [], "en", {
+      fetch: async (_url, init) => new Promise((_resolve, reject) => {
+        signal = init?.signal as AbortSignal;
+        signal.addEventListener("abort", () => {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        });
+      }),
+    });
+
+    const connecting = ctx.connect();
+    expect(signal).toBeDefined();
+    expect(els.get("auth-connect").disabled).toBe(true);
+
+    timers.fireNext();
+    await connecting;
+
+    expect(errorText(els)).toBe("Second Brain is taking longer than usual. Please try again.");
+    expect(els.get("auth-connect").textContent).toBe("Connect");
+    expect(els.get("auth-connect").disabled).toBe(false);
+    expect(stored.get("sb_url")).toBeUndefined();
+    expect(stored.get("sb_token")).toBeUndefined();
+    expect(timers.pending).toHaveLength(0);
+    expect(timers.cleared).toHaveLength(1);
+  });
+
   it("tells a suspended member to ask an admin, not to check their token", async () => {
     const { ctx, els } = setup(401, {
       ok: false,
@@ -112,9 +188,12 @@ describe("sign-in 401 messages", () => {
   });
 
   it("still says Invalid token for a token that is simply wrong", async () => {
-    const { ctx, els } = setup(401, { ok: false, error: "Unauthorized", code: "invalid_token" });
+    const { ctx, els, timers } = setup(401, { ok: false, error: "Unauthorized", code: "invalid_token" });
     await ctx.connect();
     expect(errorText(els)).toBe("Invalid token");
+    expect(els.get("auth-connect").disabled).toBe(false);
+    expect(timers.pending).toHaveLength(0);
+    expect(timers.cleared).toHaveLength(1);
   });
 
   it("says Invalid token against a Worker too old to send a code", async () => {

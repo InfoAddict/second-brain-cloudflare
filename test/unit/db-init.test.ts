@@ -10,6 +10,10 @@ import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../../src/constants";
 
+const PRODUCTION_SCHEMA_BATCH = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, "../fixtures/production-schema-probe.json"), "utf8"),
+) as { results: unknown[] }[];
+
 const MIGRATION: [column: string, alter: string][] = [
   ["recall_count", `ALTER TABLE entries ADD COLUMN recall_count INTEGER DEFAULT 0`],
   ["importance_score", `ALTER TABLE entries ADD COLUMN importance_score INTEGER DEFAULT 0`],
@@ -113,6 +117,8 @@ const FULLY_MIGRATED = {
 
 /** The catalogue read that opens every init. Spelled out so tests can exclude it by name. */
 const PROBE = /^SELECT type AS kind, name, sql AS definition FROM sqlite_master\b/;
+const PROBE_COLUMNS = /FROM pragma_table_info\('(entries|edges|users|admin_events|entry_versions|entries_trash)'\)$/;
+const isSchemaProbe = (sql: string) => PROBE.test(sql) || PROBE_COLUMNS.test(sql);
 
 type Row = { created_at: number; updated_at?: number | null };
 
@@ -171,27 +177,31 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
     },
     prepare(sql: string) {
       prepared.push(sql);
+      const probeTable = sql.match(PROBE_COLUMNS)?.[1];
+      const probeRows = PROBE.test(sql)
+        ? [
+          ...[...objects].map(name => ({
+            kind: name.startsWith("idx_")
+              ? "index"
+              : PROMPT_CAPSULE_TRIGGERS.includes(name) || FTS_TRIGGERS.includes(name) || ENTRY_COUNTS_TRIGGERS.includes(name) ? "trigger" : "table",
+            name,
+            definition: name === "idx_entries_capsule" ? `CREATE INDEX IF NOT EXISTS idx_entries_capsule ON entries(workspace_id, id) WHERE instr(lower(tags), '"capsule:') > 0` : TRIGGER_DDL.get(name),
+          })),
+        ]
+        : probeTable === "entries" ? [...columns].map(name => ({ kind: "column", name }))
+          : probeTable === "edges" ? [...edgeColumns].map(name => ({ kind: "edge_column", name }))
+            : probeTable === "users" ? [...userColumns].map(name => ({ kind: "user_column", name }))
+              : probeTable === "admin_events" ? [...adminEventColumns].map(name => ({ kind: "admin_event_column", name }))
+                : probeTable === "entry_versions" ? [...entryVersionColumns].map(name => ({ kind: "entry_version_column", name }))
+                  : probeTable === "entries_trash" ? [...entriesTrashColumns].map(name => ({ kind: "entries_trash_column", name }))
+                    : [];
       const make = (args: unknown[]) => ({
+        __schemaProbe: isSchemaProbe(sql),
         bind: (...next: unknown[]) => make(next),
         first: async () => null,
         all: async () => ({
-          results: PROBE.test(sql)
-            ? [
-              ...[...objects].map(name => ({
-                kind: name.startsWith("idx_")
-                  ? "index"
-                  : PROMPT_CAPSULE_TRIGGERS.includes(name) || FTS_TRIGGERS.includes(name) || ENTRY_COUNTS_TRIGGERS.includes(name) ? "trigger" : "table",
-                name,
-                definition: name === "idx_entries_capsule" ? `CREATE INDEX IF NOT EXISTS idx_entries_capsule ON entries(workspace_id, id) WHERE instr(lower(tags), '"capsule:') > 0` : TRIGGER_DDL.get(name),
-              })),
-              ...[...columns].map(name => ({ kind: "column", name })),
-              ...[...edgeColumns].map(name => ({ kind: "edge_column", name })),
-              ...[...userColumns].map(name => ({ kind: "user_column", name })),
-              ...[...adminEventColumns].map(name => ({ kind: "admin_event_column", name })),
-              ...[...entryVersionColumns].map(name => ({ kind: "entry_version_column", name })),
-              ...[...entriesTrashColumns].map(name => ({ kind: "entries_trash_column", name })),
-            ]
-            : [],
+          success: true,
+          results: probeRows,
         }),
         run: async () => {
           recordCreatedObject(sql);
@@ -203,7 +213,8 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
     // v2.2 ownership rule: entries_fts and its triggers are created in one
     // batch (src/db/init.ts). Mirrors D1Mock's own batch(): run each
     // statement through run(), which is what already tracks created objects.
-    async batch(stmts: { run(): Promise<unknown> }[]) {
+    async batch(stmts: { __schemaProbe?: boolean; all(): Promise<unknown>; run(): Promise<unknown> }[]) {
+      if (stmts.every(statement => statement.__schemaProbe)) return Promise.all(stmts.map(statement => statement.all()));
       return Promise.all(stmts.map(s => s.run()));
     },
   } as unknown as D1Database;
@@ -214,7 +225,7 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
 const rowsAged = (n: number): Row[] => Array.from({ length: n }, (_, i) => ({ created_at: 1000 + i }));
 /** Statements that touch entry *rows*. The probe reads the catalogue, not the table. */
 const touchesEntries = (statements: string[]) =>
-  statements.filter(s => /\bentries\b/.test(s) && !/^(CREATE|ALTER)\b/.test(s) && !PROBE.test(s));
+  statements.filter(s => /\bentries\b/.test(s) && !/^(CREATE|ALTER)\b/.test(s) && !isSchemaProbe(s));
 
 describe("initializeDatabase updated_at migration", () => {
   // initializeDatabase memoises per isolate, so each case needs a clean slate.
@@ -231,7 +242,7 @@ describe("initializeDatabase updated_at migration", () => {
 
     await initializeDatabase(env);
 
-    expect(prepared.filter(s => !PROBE.test(s) && !s.startsWith("CREATE TRIGGER") && !s.startsWith("CREATE VIRTUAL TABLE")
+    expect(prepared.filter(s => !isSchemaProbe(s) && !s.startsWith("CREATE TRIGGER") && !s.startsWith("CREATE VIRTUAL TABLE")
       && !s.startsWith("CREATE TABLE entry_counts") && !s.startsWith("INSERT INTO entry_counts"))).toEqual([]);
     expect(touchesEntries(execd)).toEqual([]);
     // The rows are left NULL on purpose — readers coalesce updated_at to created_at.
@@ -243,7 +254,7 @@ describe("initializeDatabase updated_at migration", () => {
 
     await initializeDatabase(env);
 
-    expect(prepared.filter(s => !PROBE.test(s))).toEqual([]);
+    expect(prepared.filter(s => !isSchemaProbe(s))).toEqual([]);
     expect(touchesEntries(execd)).toEqual([]);
   });
 
@@ -251,7 +262,7 @@ describe("initializeDatabase updated_at migration", () => {
   // brain — every brain after its first request — needed none of them, out of a 50-per-
   // invocation free-plan budget that ensureDbReady spends inside the triggering request.
   describe("cost on a migrated brain", () => {
-    it("costs one statement and issues no DDL when the schema is already complete", async () => {
+    it("costs one D1 batch and issues no DDL when the schema is already complete", async () => {
       const { env, execd, prepared } = makeMigrationDb(
         FULLY_MIGRATED.entryColumns, rowsAged(1), FULLY_MIGRATED.objects, FULLY_MIGRATED.edgeColumns, FULLY_MIGRATED.userColumns, FULLY_MIGRATED.adminEventColumns, FULLY_MIGRATED.entryVersionColumns, FULLY_MIGRATED.entriesTrashColumns,
       );
@@ -259,16 +270,16 @@ describe("initializeDatabase updated_at migration", () => {
       await initializeDatabase(env);
 
       expect(execd).toEqual([]);
-      expect(prepared).toHaveLength(1);
-      expect(prepared[0]).toMatch(PROBE);
+      expect(prepared).toHaveLength(7);
+      expect(prepared.every(isSchemaProbe)).toBe(true);
     });
 
-    it("costs one statement on every cold start after the first", async () => {
+    it("costs one D1 batch on every cold start after the first", async () => {
       const { env, execd, prepared } = makeMigrationDb([], rowsAged(1));
 
       // Each reset stands in for a fresh isolate, which is what a cold start actually is.
       await initializeDatabase(env);
-      const migrated = execd.length + prepared.length - 1; // exclude the first probe
+      const migrated = execd.length + prepared.length - 7; // exclude the first probe batch's seven statements
       resetDatabaseInit();
       await initializeDatabase(env);
       resetDatabaseInit();
@@ -307,8 +318,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 81 -> 82 (R23, budget auditor BLOCK) by idx_entry_events_life_end.
       // MOVED 82 -> 83 by entries_fts_vocab, the fts5vocab table that prices distillation's df counts.
       expect(migrated).toBe(83); // measured on the merged tree (T5 recall_log objects + Track 2 validity ALTERs + T7 ledger/standing indexes + entry_events actor/held/life_end indexes)
-      expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
-      expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
+      expect(execd.length + prepared.length).toBe(migrated + 21); // three probe batches, seven reads each
+      expect(prepared).toHaveLength(34); // three probe batches plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
     });
 
@@ -327,7 +338,7 @@ describe("initializeDatabase updated_at migration", () => {
         ...ENTRIES_TRASH_ALTERS,
       ].map(([, alter]) => alter);
       expect(execd).toEqual(missingAlters);
-      expect(prepared).toHaveLength(1);
+      expect(prepared).toHaveLength(7);
     });
   });
 
@@ -344,7 +355,7 @@ describe("initializeDatabase updated_at migration", () => {
 
       expect(execd).toHaveLength(once);
       // MOVED 9 -> 14 (T-0065): entry_counts + its three triggers + its seed.
-      expect(prepared).toHaveLength(14); // one probe + thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed); no repeat work
+      expect(prepared).toHaveLength(20); // one seven-statement probe batch + thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed); no repeat work
     });
 
     it("shares one in-flight promise across concurrent callers", async () => {
@@ -365,7 +376,7 @@ describe("initializeDatabase updated_at migration", () => {
       await initializeDatabase(env);
 
       // MOVED 10 -> 15 (T-0065): entry_counts + its three triggers + its seed.
-      expect(prepared).toHaveLength(15); // first probe + thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed) + second probe
+      expect(prepared).toHaveLength(27); // two seven-statement probe batches + thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
     });
   });
 
@@ -482,7 +493,7 @@ describe("initializeDatabase updated_at migration", () => {
       if (["recall_count", "importance_score"].includes(column)) continue;
       expect(execd).toContain(alter);
     }
-    expect(prepared.filter(s => !PROBE.test(s))).toEqual([]);
+    expect(prepared.filter(s => !isSchemaProbe(s))).toEqual([]);
   });
 
   // The backfill this replaced wrote one row per entry. On a 50,000-entry brain that was
@@ -642,7 +653,7 @@ describe("initializeDatabase against real SQLite", () => {
     }]);
   });
 
-  it("costs one statement on an already-migrated brain", async () => {
+  it("costs one D1 batch on an already-migrated brain", async () => {
     d1 = makeSqliteD1({ schema: false });
     await initializeDatabase(envFor(d1));
     const cold = d1.issued.length;
@@ -680,7 +691,49 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 76 -> 77 by entries_fts_vocab.
     expect(cold).toBe(77); // one probe, then the 76 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
-    expect(d1.issued[0]).toMatch(PROBE);
+    expect(d1.issued[0]).toBe("BATCH");
+  });
+
+  it("accepts the captured production schema through one batch without scheduling DDL", async () => {
+    // Production rejects a compound SELECT of seven terms with code 7500 (five terms
+    // succeed). Keep that platform constraint at the D1 boundary: this facade rejects
+    // the old seven-term probe, while its captured successful response proves the new
+    // independent reads still recognise the live schema as complete.
+    d1 = makeSqliteD1({ schema: false });
+    const raw = d1.db;
+    const scheduledDdl: string[] = [];
+    let resultSet = 0;
+    const batch = vi.fn(async (statements: { __productionProbe?: boolean; all?: () => Promise<unknown> }[]) => {
+      if (statements.every(statement => statement.__productionProbe)) {
+        return Promise.all(statements.map(statement => statement.all!()));
+      }
+      return raw.batch(statements as Parameters<typeof raw.batch>[0]);
+    });
+    const DB = {
+      prepare(sql: string) {
+        const terms = (sql.match(/\bUNION\s+ALL\b/gi)?.length ?? 0) + 1;
+        if (terms >= 7) throw new Error("D1_ERROR: code: 7500, too many terms in compound SELECT: SQLITE_ERROR");
+        if (isSchemaProbe(sql)) {
+          return {
+            __productionProbe: true,
+            all: async () => ({ success: true, ...PRODUCTION_SCHEMA_BATCH[resultSet++] }),
+          };
+        }
+        scheduledDdl.push(sql);
+        return raw.prepare(sql);
+      },
+      exec(sql: string) {
+        scheduledDdl.push(sql);
+        return raw.exec(sql);
+      },
+      batch,
+    } as unknown as D1Database;
+
+    await initializeDatabase(makeTestEnv(undefined, { DB }));
+
+    expect(resultSet).toBe(7);
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(scheduledDdl).toEqual([]);
   });
 
   it("adds only what a partially-migrated brain is missing", async () => {
@@ -728,7 +781,7 @@ describe("initializeDatabase against real SQLite", () => {
     await initializeDatabase(envFor(d1));
 
     expect(d1.issued).toEqual([
-      expect.stringMatching(PROBE),
+      "BATCH",
       `CREATE INDEX IF NOT EXISTS idx_edges_weight ON edges(weight DESC)`,
     ]);
     expect(await objectNames(d1)).toContain("idx_edges_weight");
@@ -755,7 +808,7 @@ describe("initializeDatabase against real SQLite", () => {
     await initializeDatabase(envFor(d1));
 
     expect(d1.issued).toEqual([
-      expect.stringMatching(PROBE),
+      "BATCH",
       `CREATE INDEX IF NOT EXISTS idx_entry_events_created ON entry_events(created_at DESC)`,
     ]);
     expect(await objectNames(d1)).toContain("idx_entry_events_created");
@@ -885,11 +938,18 @@ describe("initializeDatabase against real SQLite", () => {
   // leave a brand-new brain resolving initializeDatabase against tables that do not exist.
   describe("a probe that cannot be trusted still migrates", () => {
     /** Real SQLite for the DDL, `probe` for what the probe appears to return. */
-    function dbWhoseProbe(probe: () => unknown) {
+    function dbWhoseProbe(probe: () => unknown, resultSetCount = 7) {
+      const probeStatement = () => ({
+        __schemaProbe: true,
+        all: async () => probe(),
+      });
       return {
-        prepare: (sql: string) => (PROBE.test(sql) ? { all: async () => probe() } : d1.db.prepare(sql)),
+        prepare: (sql: string) => (isSchemaProbe(sql) ? probeStatement() : d1.db.prepare(sql)),
         exec: (sql: string) => d1.db.exec(sql),
-        batch: (statements: Parameters<typeof d1.db.batch>[0]) => d1.db.batch(statements),
+        batch: async (statements: ({ __schemaProbe?: boolean; all?: () => Promise<unknown> })[]) =>
+          statements.every(statement => statement.__schemaProbe)
+            ? (await Promise.all(statements.map(statement => statement.all!()))).slice(0, resultSetCount)
+            : d1.db.batch(statements as Parameters<typeof d1.db.batch>[0]),
       } as unknown as D1Database;
     }
 
@@ -920,6 +980,18 @@ describe("initializeDatabase against real SQLite", () => {
       await expectFullyMigrated();
     });
 
+    it("applies the whole schema when a probe result reports failure", async () => {
+      await initializeDatabase(makeTestEnv(undefined, { DB: dbWhoseProbe(() => ({ success: false, results: [] })) }));
+
+      await expectFullyMigrated();
+    });
+
+    it("applies the whole schema when the probe batch is partial", async () => {
+      await initializeDatabase(makeTestEnv(undefined, { DB: dbWhoseProbe(() => ({ success: true, results: [] }), 6) }));
+
+      await expectFullyMigrated();
+    });
+
     it("does not accept a name held by the wrong kind of object", async () => {
       // SQLite puts tables, indexes, and triggers in one namespace. A user table that has taken an
       // index's name is not that index, and matching on the name alone would resolve init
@@ -936,6 +1008,7 @@ describe("initializeDatabase against real SQLite", () => {
       // something, but nothing that licenses skipping a statement.
       await initializeDatabase(makeTestEnv(undefined, {
         DB: dbWhoseProbe(() => ({
+          success: true,
           results: [
             ...ALL_OBJECTS.map(name => ({ name })), // no kind
             ...ALL_COLUMNS.map(name => ({ kind: "column", name: { toString: () => name } })), // not a string
@@ -1062,7 +1135,8 @@ describe("initializeDatabase against real SQLite", () => {
       const batchesBefore = d1.batches.length;
       await initializeDatabase(envFor(d1));
       expect(d1.issued.filter(s => /^(CREATE|DROP|ALTER)\b/.test(s))).toEqual([]);
-      expect(d1.batches).toHaveLength(batchesBefore);
+      // Every cold isolate runs the read-only schema probe as one D1 batch.
+      expect(d1.batches).toHaveLength(batchesBefore + 1);
     });
   });
 
@@ -1228,11 +1302,17 @@ describe("initializeDatabase against real SQLite", () => {
       const raw = d1.db;
       const DB = {
         prepare(sql: string) {
-          if (!sql.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master")) return raw.prepare(sql);
-          return { all: async () => { throw new Error("transient schema probe failure"); } };
+          if (!isSchemaProbe(sql)) return raw.prepare(sql);
+          return {
+            __schemaProbe: true,
+            all: async () => { throw new Error("transient schema probe failure"); },
+          };
         },
         exec: raw.exec.bind(raw),
-        batch: raw.batch.bind(raw),
+        batch(statements: ({ __schemaProbe?: boolean; all?: () => Promise<unknown> })[]) {
+          if (statements.every(statement => statement.__schemaProbe)) return Promise.all(statements.map(statement => statement.all!()));
+          return raw.batch(statements as Parameters<typeof raw.batch>[0]);
+        },
       } as unknown as D1Database;
 
       await initializeDatabase(makeTestEnv(undefined, { DB: DB as unknown as D1Database, OAUTH_KV: kv }));

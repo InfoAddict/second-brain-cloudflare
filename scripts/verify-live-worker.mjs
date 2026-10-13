@@ -106,6 +106,36 @@ export function warmLiveWorkerConfig({ baseUrl, token, runCurl = spawnSync, log 
   }
 }
 
+export function verifyLiveEmptyList({ baseUrl, token, runCurl = spawnSync, log = console.log }) {
+  const startedAt = Date.now();
+  try {
+    const metrics = requestWithCurl({
+      baseUrl,
+      token,
+      path: "/list?n=0",
+      timeoutSeconds: LIVE_VERIFY_TIMEOUT_SECONDS,
+      runCurl,
+    });
+    if (metrics.status !== 200) throw new LiveHealthError(metrics.diagnostics, { status: metrics.status });
+
+    let entries;
+    try {
+      entries = JSON.parse(metrics.body.trim());
+    } catch {
+      throw new LiveHealthError("list response is not valid JSON", { status: metrics.status });
+    }
+    if (!Array.isArray(entries)) throw new LiveHealthError("list response is not an array", { status: metrics.status });
+    if (entries.length !== 0) throw new LiveHealthError("list response for n=0 is not empty", { status: metrics.status });
+
+    log(`Live list check succeeded in ${Date.now() - startedAt}ms: HTTP ${metrics.status}`);
+    return entries;
+  } catch (error) {
+    const status = error instanceof LiveHealthError ? error.status : undefined;
+    log(`Live list check failed after ${Date.now() - startedAt}ms: ${status === undefined ? "transport failure" : `HTTP ${status}`}`);
+    throw error;
+  }
+}
+
 export async function verifyLiveWorker({
   baseUrl,
   token,
@@ -113,6 +143,7 @@ export async function verifyLiveWorker({
   attempts = LIVE_VERIFY_ATTEMPTS,
   warmConfig = warmLiveWorkerConfig,
   requestHealth = requestHealthWithCurl,
+  checkList = verifyLiveEmptyList,
   wait = sleep,
   log = console.log,
 }) {
@@ -121,6 +152,7 @@ export async function verifyLiveWorker({
   await warmConfig({ baseUrl, token, log });
 
   let lastError;
+  let verifiedHealth;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const startedAt = Date.now();
     try {
@@ -130,7 +162,8 @@ export async function verifyLiveWorker({
         throw new LiveHealthError(`expected Worker v${expectedVersion}; received v${String(health.version)}`);
       }
       log(`Live health attempt ${attempt}/${attempts} succeeded in ${Date.now() - startedAt}ms: v${health.version}`);
-      return health;
+      verifiedHealth = health;
+      break;
     } catch (error) {
       lastError = error instanceof LiveHealthError ? error : new LiveHealthError("transport failure");
       log(`Live health attempt ${attempt}/${attempts} failed after ${Date.now() - startedAt}ms: ${lastError.message}`);
@@ -138,7 +171,9 @@ export async function verifyLiveWorker({
     }
   }
 
-  throw lastError;
+  if (!verifiedHealth) throw lastError;
+  await checkList({ baseUrl, token, log });
+  return verifiedHealth;
 }
 
 function expectedVersionFromSource() {

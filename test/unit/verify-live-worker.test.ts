@@ -8,6 +8,7 @@ import {
   parseCurlMetrics,
   requestHealthWithCurl,
   verifyLiveWorker,
+  verifyLiveEmptyList,
   warmLiveWorkerConfig,
 } from "../../scripts/verify-live-worker.mjs";
 
@@ -17,6 +18,7 @@ const options = {
   expectedVersion: "4.0.0",
   log: vi.fn(),
   warmConfig: () => {},
+  checkList: () => [],
 };
 
 describe("verifyLiveWorker", () => {
@@ -86,6 +88,51 @@ describe("verifyLiveWorker", () => {
 
     await expect(verifyLiveWorker({ ...options, warmConfig, requestHealth })).rejects.toThrow("config warmup returned a non-200 status");
     expect(requestHealth).not.toHaveBeenCalled();
+  });
+
+  it("checks the empty authenticated dashboard list after exact-version health", async () => {
+    const requestHealth = vi.fn().mockReturnValue({ ok: true, version: "4.0.0" });
+    const checkList = vi.fn().mockReturnValue([]);
+
+    await expect(verifyLiveWorker({ ...options, requestHealth, checkList })).resolves.toEqual({ ok: true, version: "4.0.0" });
+    expect(checkList).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: options.baseUrl, token: options.token }));
+  });
+
+  it("halts release verification when the authenticated list check fails", async () => {
+    const requestHealth = vi.fn().mockReturnValue({ ok: true, version: "4.0.0" });
+    const checkList = vi.fn(() => { throw new LiveHealthError("list response for n=0 is not empty", { status: 200 }); });
+
+    await expect(verifyLiveWorker({ ...options, requestHealth, checkList })).rejects.toThrow("list response for n=0 is not empty");
+    expect(requestHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["wrong status", "private response body", 503, /HTTP 503/],
+    ["non-array JSON", "{}", 200, /list response is not an array/],
+    ["non-empty array", '[{"private":"entry"}]', 200, /list response for n=0 is not empty/],
+  ])("rejects a %s list response without logging its body", (_name, body, status, error) => {
+    const runCurl = vi.fn().mockReturnValue({
+      status: 0,
+      stdout: `${body}\n__SECOND_BRAIN_CURL_METRICS__${status},0.001,0.002,0.003,0.004,0.005,2`,
+    });
+    const log = vi.fn();
+
+    expect(() => verifyLiveEmptyList({ ...options, runCurl, log })).toThrow(error);
+    expect(log.mock.calls.flat().join(" ")).not.toContain("private");
+  });
+
+  it("accepts an empty authenticated list and logs only its timing and status", () => {
+    const runCurl = vi.fn().mockReturnValue({
+      status: 0,
+      stdout: '[]\n__SECOND_BRAIN_CURL_METRICS__200,0.001,0.002,0.003,0.004,0.005,2',
+    });
+    const log = vi.fn();
+
+    expect(verifyLiveEmptyList({ ...options, runCurl, log })).toEqual([]);
+    expect(runCurl).toHaveBeenCalledWith("curl", expect.arrayContaining(["--max-time", "30"]), expect.objectContaining({
+      input: expect.stringContaining("/list?n=0\""),
+    }));
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^Live list check succeeded in \d+ms: HTTP 200$/));
   });
 
   it("passes credentials to curl via stdin configuration and never logs the body", () => {
