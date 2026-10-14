@@ -273,7 +273,7 @@ describe("nightly cron D1 subrequest cost", () => {
     await runCron(env);
 
     // The signature statement of initializeDatabase, once for the whole cron.
-    expect(statements.filter(s => s.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master"))).toHaveLength(1);
+    expect(statements.filter(s => s.startsWith("WITH probe(kind, tbl) AS (VALUES"))).toHaveLength(1);
     // #282: the schema is already there, and the whole point is that finding that out no
     // longer costs a CREATE and an ALTER per object.
     expect(statements.filter(s => /^(CREATE|ALTER)\b/.test(s))).toEqual([]);
@@ -351,7 +351,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // MOVED 26 -> 27 (FX3 finding 2): runNightlyCleanup now reads PENDING_DELETES_KV_KEY once,
     // unconditionally, at the top of every run, to drain whatever a capped deleteEntryVectors
     // call queued; nothing queued on this fixture, so it costs exactly the one read.
-    expect(statements.length).toBe(27);
+    // MOVED 27 -> 26 (PR #386 probe): d1-mock's migrated brain now reports index DDL, so the
+    // capsule index's definition check matches and its phantom rebuild BATCH is gone.
+    expect(statements.length).toBe(26);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -379,7 +381,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // rescan.ts itself.
     // MOVED 26 -> 27 (T-0089.2.3): the staleness pass now resolves config every night.
     // MOVED 27 -> 28 (FX3 finding 2): runNightlyCleanup's unconditional PENDING_DELETES_KV_KEY read.
-    expect(statements.length).toBe(28);
+    // MOVED 28 -> 27 (PR #386 probe): d1-mock's migrated brain now reports index DDL, so the
+    // capsule index's definition check matches and its phantom rebuild BATCH is gone.
+    expect(statements.length).toBe(27);
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -426,7 +430,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // rescan.ts itself.
     // MOVED 27 -> 28 (T-0089.2.3): the staleness pass now resolves config every night.
     // MOVED 28 -> 29 (FX3 finding 2): runNightlyCleanup's unconditional PENDING_DELETES_KV_KEY read.
-    expect(statements.length).toBe(29);
+    // MOVED 29 -> 28 (PR #386 probe): d1-mock's migrated brain now reports index DDL, so the
+    // capsule index's definition check matches and its phantom rebuild BATCH is gone.
+    expect(statements.length).toBe(28);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

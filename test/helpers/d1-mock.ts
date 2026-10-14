@@ -35,8 +35,14 @@ const tagFromLikePattern = (pattern: string) =>
 const tagMatchesLike = (tags: string[], tag: string) =>
   tags.some(t => t.toLowerCase() === tag.toLowerCase());
 
+/** True for src/db/init.ts's schema probe; keyed on its CTE so the stale 4.0.0 compound is rejected. */
+export const isSchemaProbe = (sql: string): boolean =>
+  /^\s*WITH probe\(kind, tbl\)/.test(sql) && sql.includes("sqlite_master") && sql.includes("pragma_table_info");
+
 /** What src/db/init.ts's probe sees on a migrated brain — see the handler in all(). */
 const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../../db/schema.sql"), "utf8").matchAll(/CREATE TRIGGER IF NOT EXISTS (\w+)[\s\S]*?END;/g)].map(m => [m[1], m[0].slice(0, -1)]));
+// Index DDL as stored, so the capsule index's definition check sees a match and does not rebuild.
+const INDEX_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../../db/schema.sql"), "utf8").matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)[\s\S]*?;/g)].map(m => [m[1], m[0].slice(0, -1).replace(/\bIF NOT EXISTS\s+/i, "")]));
 const SCHEMA_PROBE_RESULTS = [
   ...["entries", "edges", "insight_candidates", "workspaces", "users", "memberships",
     "entry_events", "admin_events", "maintenance_cursor", "prompt_capsule_revisions", "projects",
@@ -51,7 +57,7 @@ const SCHEMA_PROBE_RESULTS = [
     "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
     "idx_entries_ledger", "idx_entries_standing",
     "idx_entry_versions_entry", "idx_entries_trash_deleted", "idx_entries_trash_workspace_deleted"]
-    .map(name => ({ kind: "index", name })),
+    .map(name => ({ kind: "index", name, definition: INDEX_DDL.get(name) })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
     "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete",
     "entries_fts_insert", "entries_fts_update", "entries_fts_delete",
@@ -942,7 +948,7 @@ export class D1Mock {
           }
           return { results: [...byWorkspace.entries()].map(([workspace_id, n]) => ({ workspace_id, n })) };
         }
-        if (s.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master")) {
+        if (isSchemaProbe(s)) {
           // src/db/init.ts's schema probe. This mock stands in for a deployed brain, and
           // a deployed brain is migrated — its rows carry every ALTER column below — so
           // the honest answer is "all present", which is also what makes the mock report

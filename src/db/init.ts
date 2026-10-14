@@ -453,43 +453,36 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
   // the nightly rebuildFtsIndex, not silently patched back in here.
 };
 
+// Tables the probe reads column sets for, each with the `kind` label its rows carry.
+// Bound as parameters so the SQL text stays fixed.
+const COLUMN_PROBE_TABLES = [
+  ["column", "entries"],
+  ["edge_column", "edges"],
+  ["user_column", "users"],
+  ["admin_event_column", "admin_events"],
+  ["entry_version_column", "entry_versions"],
+  ["entries_trash_column", "entries_trash"],
+] as const;
+
 /**
- * One statement that reports every schema object this file knows how to create: table,
- * index, and trigger names out of sqlite_master, and entries' columns out of the
- * table-valued form of PRAGMA table_info (SQLite rewrites neither list lazily — an
- * ALTER shows up immediately).
- * `kind` is what stops a name that appears on both sides from being read as the wrong one.
+ * One statement that reports every schema object this file creates: table, index and
+ * trigger names (with DDL) from sqlite_master, plus the columns of COLUMN_PROBE_TABLES via
+ * pragma_table_info. `kind` stops a name on both sides being read as the wrong one. It reads
+ * only the catalogue, never table data, so a migrated brain learns it needs nothing in one
+ * D1 call instead of fifteen (#282). A table that does not exist yet yields no column rows
+ * (absent = CREATE).
  *
- * This exists because the fifteen statements it replaces cost fifteen D1 calls to
- * discover that a migrated brain — which is every brain after its first request — needs
- * nothing done (#282). The free plan's actual ceiling is 1,000 D1/KV/Vectorize calls per
- * invocation, but this codebase holds itself to a much tighter self-imposed D1 budget
- * (~50 calls) per request for cost and 10 ms-CPU reasons, and ensureDbReady spends its
- * share inside the request that triggered it: GET /graph was already close enough to
- * that self-imposed budget that a cold isolate pushed it over — 59 against a target of
- * 50, now 47.
- *
- * Cost is one subrequest and one row read per catalogue entry, flat in the number of
- * entries because neither side of the UNION touches table data — measured on real D1
- * (workerd via Miniflare), not the mock, which is not something that can be re-verified
- * from a laptop. rows_read = 23 was that measurement, taken when SCHEMA_OBJECTS held
- * seven objects. It holds 26 now (team edition, projects, push subscriptions, and their
- * indexes all landed since), plus entries_fts, entry_counts, and their six triggers
- * (created outside SCHEMA_OBJECTS — see the ownership note above — but still read by
- * this same probe), so 23 is long stale and should be re-measured against a live
- * database rather than trusted as today's figure. What the measurement did establish,
- * and what still holds regardless of the exact count: it grows by one row per object
- * added to SCHEMA_OBJECTS, which is the cheap direction — adding a statement above now
- * costs one row here rather than one subrequest on every cold start.
+ * workerd caps a compound SELECT at 5 terms and a statement at 100 bound parameters. This is
+ * one CTE plus one UNION ALL (2 terms) with 12 binds. The 4.0.0 seven-arm form was rejected
+ * with "too many terms in compound SELECT", so the probe threw and every cold start
+ * re-applied the full schema. Guarded by test/unit/schema-probe-limits.test.ts.
  */
 const PROBE_SQL =
+  `WITH probe(kind, tbl) AS (VALUES ${COLUMN_PROBE_TABLES.map(() => "(?, ?)").join(",")}), ` +
+  `columns AS (SELECT p.kind AS kind, ti.name AS name FROM probe p CROSS JOIN pragma_table_info(p.tbl) ti) ` +
   `SELECT type AS kind, name, sql AS definition FROM sqlite_master WHERE type IN ('table','index','trigger') ` +
-  `UNION ALL SELECT 'column' AS kind, name, NULL AS definition FROM pragma_table_info('entries')` +
-  `UNION ALL SELECT 'edge_column' AS kind, name, NULL AS definition FROM pragma_table_info('edges')` +
-  `UNION ALL SELECT 'user_column' AS kind, name, NULL AS definition FROM pragma_table_info('users')` +
-  `UNION ALL SELECT 'admin_event_column' AS kind, name, NULL AS definition FROM pragma_table_info('admin_events')` +
-  `UNION ALL SELECT 'entry_version_column' AS kind, name, NULL AS definition FROM pragma_table_info('entry_versions')` +
-  `UNION ALL SELECT 'entries_trash_column' AS kind, name, NULL AS definition FROM pragma_table_info('entries_trash')`;
+  `UNION ALL ` +
+  `SELECT kind, name, NULL AS definition FROM columns`;
 
 type ObjectKind = "table" | "index" | "trigger";
 /**
@@ -529,9 +522,13 @@ const kindOf = (ddl: string): ObjectKind => {
 async function probeSchema(env: Env): Promise<ExistingSchema | null> {
   let rows: unknown;
   try {
-    rows = (await env.DB.prepare(PROBE_SQL).all<{ kind: string; name: string }>())?.results;
-  } catch {
-    console.warn("Schema probe failed; applying the full schema instead");
+    rows = (await env.DB.prepare(PROBE_SQL).bind(
+      // Two binds per probed table, in COLUMN_PROBE_TABLES order: the kind label, then
+      // the table name the CROSS JOIN resolves columns for.
+      ...COLUMN_PROBE_TABLES.flatMap(([kind, table]) => [kind, table]),
+    ).all<{ kind: string; name: string }>())?.results;
+  } catch (e) {
+    console.warn("Schema probe failed; applying the full schema instead:", e);
     return null;
   }
   if (!Array.isArray(rows)) return null;

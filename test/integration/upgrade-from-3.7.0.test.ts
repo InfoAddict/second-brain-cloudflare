@@ -493,7 +493,7 @@ describe("the 3.7.0 d1-mock probe shape", () => {
   const EDGES_ALTER_COLUMNS = ["workspace_id"];
   const USERS_ALTER_COLUMNS = ["default_share", "removed_at", "last_used_at"];
   const ADMIN_EVENTS_ALTER_COLUMNS = ["target_user_id", "workspace_id"];
-  const PROBE = /^SELECT type AS kind, name, sql AS definition FROM sqlite_master\b/;
+  const PROBE = /^WITH probe\(kind, tbl\) AS \(VALUES \(\?, \?\)/;
 
   function makePreTask11Mock() {
     const objects = new Map(PRE_TASK11_OBJECTS.map((o) => [o.name, o.kind] as const));
