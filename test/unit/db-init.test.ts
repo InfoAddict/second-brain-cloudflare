@@ -884,16 +884,22 @@ describe("initializeDatabase against real SQLite", () => {
   // seeing it has to end in the statement being issued. Each of these would otherwise
   // leave a brand-new brain resolving initializeDatabase against tables that do not exist.
   describe("a probe that cannot be trusted still migrates", () => {
+    /** Times the stub's probe returned a result, so no test passes via a TypeError. */
+    let probeReached = 0;
+
     /** Real SQLite for the DDL, `probe` for what the probe appears to return. */
     function dbWhoseProbe(probe: () => unknown) {
       return {
-        prepare: (sql: string) => (PROBE.test(sql) ? { all: async () => probe() } : d1.db.prepare(sql)),
+        prepare: (sql: string) => (PROBE.test(sql)
+          ? { bind: () => ({ all: async () => { const result = probe(); probeReached++; return result; } }) }
+          : d1.db.prepare(sql)),
         exec: (sql: string) => d1.db.exec(sql),
         batch: (statements: Parameters<typeof d1.db.batch>[0]) => d1.db.batch(statements),
       } as unknown as D1Database;
     }
 
-    async function expectFullyMigrated() {
+    async function expectFullyMigrated(returned = 1) {
+      expect(probeReached).toBe(returned);
       for (const name of ALL_OBJECTS) expect(await objectNames(d1)).toContain(name);
       expect([...d1.columns()].sort()).toEqual([...BASE_COLUMNS, ...ALL_COLUMNS].sort());
     }
@@ -901,26 +907,26 @@ describe("initializeDatabase against real SQLite", () => {
     beforeEach(() => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       d1 = makeSqliteD1({ schema: false });
+      probeReached = 0;
     });
 
     it("applies the whole schema when the probe throws", async () => {
       // The guard against the probe's one statement being unsupported on some future D1
       // and taking first-request migration down with it.
+      const injected = new Error("D1_ERROR: unsupported statement");
       await initializeDatabase(makeTestEnv(undefined, {
-        DB: dbWhoseProbe(() => { throw new Error("D1_ERROR: unsupported statement"); }),
+        DB: dbWhoseProbe(() => { throw injected; }),
       }));
 
-      await expectFullyMigrated();
-      expect(console.warn).toHaveBeenCalledWith(
-        "Schema probe failed; applying the full schema instead:",
-        expect.any(Error),
-      );
+      await expectFullyMigrated(0);
+      expect(console.warn).toHaveBeenCalledWith("Schema probe failed; applying the full schema instead:", injected);
     });
 
     it("applies the whole schema when the probe returns a shape it cannot read", async () => {
       await initializeDatabase(makeTestEnv(undefined, { DB: dbWhoseProbe(() => ({ success: true })) }));
 
       await expectFullyMigrated();
+      expect(console.warn).not.toHaveBeenCalledWith("Schema probe failed; applying the full schema instead:", expect.anything());
     });
 
     it("does not accept a name held by the wrong kind of object", async () => {
@@ -948,6 +954,7 @@ describe("initializeDatabase against real SQLite", () => {
       }));
 
       await expectFullyMigrated();
+      expect(console.warn).not.toHaveBeenCalledWith("Schema probe failed; applying the full schema instead:", expect.anything());
     });
   });
 
@@ -1229,10 +1236,12 @@ describe("initializeDatabase against real SQLite", () => {
       await kv.put(FTS_READY_KV_KEY, "1");
       await kv.put(FTS_BACKFILL_CURSOR_KV_KEY, "500");
       const raw = d1.db;
+      const injected = new Error("transient schema probe failure");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const DB = {
         prepare(sql: string) {
-          if (!sql.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master")) return raw.prepare(sql);
-          return { all: async () => { throw new Error("transient schema probe failure"); } };
+          if (!PROBE.test(sql)) return raw.prepare(sql);
+          return { bind: () => ({ all: async () => { throw injected; } }) };
         },
         exec: raw.exec.bind(raw),
         batch: raw.batch.bind(raw),
@@ -1243,6 +1252,7 @@ describe("initializeDatabase against real SQLite", () => {
       expect(await ftsObjectNames(d1)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
       expect(await kv.get(FTS_READY_KV_KEY)).toBeNull();
       expect(await kv.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
+      expect(warn).toHaveBeenCalledWith("Schema probe failed; applying the full schema instead:", injected);
     });
   });
 

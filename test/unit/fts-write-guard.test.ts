@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { withFtsWriteGuard } from "../../src/db/fts-write-guard";
 import { makeSqliteD1 } from "../helpers/sqlite-d1";
+import { isSchemaProbe } from "../helpers/d1-mock";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
@@ -371,8 +372,13 @@ describe("withFtsWriteGuard", () => {
       const coldDb = {
         prepare(sql: string) {
           const raw = s.db.prepare(sql);
-          if (!sql.startsWith("WITH probe(kind, tbl) AS (VALUES")) return raw;
-          return { all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; } };
+          if (!isSchemaProbe(sql)) return raw;
+          return {
+            bind: (...b: unknown[]) => {
+              const bound = raw.bind(...b);
+              return { all: async () => { const result = await bound.all(); snapshotTaken(); await gate; return result; } };
+            },
+          };
         },
         exec: s.db.exec.bind(s.db),
         batch: s.db.batch.bind(s.db),
@@ -434,8 +440,13 @@ describe("withFtsWriteGuard", () => {
       const coldDb = {
         prepare(sql: string) {
           const raw = s.db.prepare(sql);
-          if (!sql.startsWith("WITH probe(kind, tbl) AS (VALUES")) return raw;
-          return { all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; } };
+          if (!isSchemaProbe(sql)) return raw;
+          return {
+            bind: (...b: unknown[]) => {
+              const bound = raw.bind(...b);
+              return { all: async () => { const result = await bound.all(); snapshotTaken(); await gate; return result; } };
+            },
+          };
         },
         exec: s.db.exec.bind(s.db),
         batch: s.db.batch.bind(s.db),
