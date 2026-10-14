@@ -493,9 +493,7 @@ describe("the 3.7.0 d1-mock probe shape", () => {
   const EDGES_ALTER_COLUMNS = ["workspace_id"];
   const USERS_ALTER_COLUMNS = ["default_share", "removed_at", "last_used_at"];
   const ADMIN_EVENTS_ALTER_COLUMNS = ["target_user_id", "workspace_id"];
-  const PROBE = /^SELECT type AS kind, name, sql AS definition FROM sqlite_master\b/;
-  const PROBE_COLUMNS = /FROM pragma_table_info\('(entries|edges|users|admin_events|entry_versions|entries_trash)'\)$/;
-  const isSchemaProbe = (sql: string) => PROBE.test(sql) || PROBE_COLUMNS.test(sql);
+  const PROBE = /^WITH probe\(kind, tbl\) AS \(VALUES \(\?, \?\)/;
 
   function makePreTask11Mock() {
     const objects = new Map(PRE_TASK11_OBJECTS.map((o) => [o.name, o.kind] as const));
@@ -505,36 +503,30 @@ describe("the 3.7.0 d1-mock probe shape", () => {
       async exec(sql: string) { execd.push(sql); },
       prepare(sql: string) {
         prepared.push(sql);
-        const probeTable = sql.match(PROBE_COLUMNS)?.[1];
-        const probeRows = PROBE.test(sql)
-          ? [...[...objects].map(([name, kind]) => ({
-            kind, name,
-            definition: name === "idx_entries_capsule" ? CAPSULE_INDEX_DDL : TRIGGER_BODIES.get(name),
-          }))]
-          : probeTable === "entries" ? [
-            ...BASE_ENTRIES_COLUMNS.map(name => ({ kind: "column", name })),
-            ...ENTRIES_ALTER_COLUMNS.map(name => ({ kind: "column", name })),
-          ]
-            : probeTable === "edges" ? EDGES_ALTER_COLUMNS.map(name => ({ kind: "edge_column", name }))
-              : probeTable === "users" ? USERS_ALTER_COLUMNS.map(name => ({ kind: "user_column", name }))
-                : probeTable === "admin_events" ? ADMIN_EVENTS_ALTER_COLUMNS.map(name => ({ kind: "admin_event_column", name }))
-                  : [];
         const make = (): any => ({
-          __schemaProbe: isSchemaProbe(sql),
           bind: () => make(),
           first: async () => null,
           all: async () => ({
-            success: true,
-            results: probeRows,
+            results: PROBE.test(sql)
+              ? [
+                ...[...objects].map(([name, kind]) => ({
+                  kind, name,
+                  definition: name === "idx_entries_capsule" ? CAPSULE_INDEX_DDL : TRIGGER_BODIES.get(name),
+                })),
+                ...BASE_ENTRIES_COLUMNS.map((name) => ({ kind: "column", name })),
+                ...ENTRIES_ALTER_COLUMNS.map((name) => ({ kind: "column", name })),
+                ...EDGES_ALTER_COLUMNS.map((name) => ({ kind: "edge_column", name })),
+                ...USERS_ALTER_COLUMNS.map((name) => ({ kind: "user_column", name })),
+                ...ADMIN_EVENTS_ALTER_COLUMNS.map((name) => ({ kind: "admin_event_column", name })),
+                // entry_versions does not exist yet: no entry_version_column rows at all.
+              ]
+              : [],
           }),
           run: async () => ({ meta: { changes: 0 } }),
         });
         return make();
       },
-      async batch(stmts: { __schemaProbe?: boolean; all(): Promise<unknown>; run(): Promise<unknown> }[]) {
-        if (stmts.every(statement => statement.__schemaProbe)) return Promise.all(stmts.map(statement => statement.all()));
-        return Promise.all(stmts.map(statement => statement.run()));
-      },
+      async batch(stmts: { run(): Promise<unknown> }[]) { return Promise.all(stmts.map((s) => s.run())); },
     } as unknown as D1Database;
     return { env: makeTestEnv(undefined, { DB, OAUTH_KV: makeMemoryKV(), AI: makeAIMock(), VECTORIZE: makeVectorizeMock() }), execd, prepared };
   }
@@ -578,7 +570,6 @@ describe("the 3.7.0 d1-mock probe shape", () => {
       "entries_trash.nonce",
     ]);
     expect(execd[0]).toContain("prior_length_utf16"); // created already the wide way, not by a later ALTER
-    expect(prepared).toHaveLength(7);
-    expect(prepared.every(isSchemaProbe)).toBe(true);
+    expect(prepared).toEqual([expect.stringMatching(PROBE)]);
   });
 });

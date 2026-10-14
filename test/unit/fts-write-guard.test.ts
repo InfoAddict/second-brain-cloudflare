@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { withFtsWriteGuard } from "../../src/db/fts-write-guard";
 import { makeSqliteD1 } from "../helpers/sqlite-d1";
+import { isSchemaProbe } from "../helpers/d1-mock";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
@@ -371,17 +372,16 @@ describe("withFtsWriteGuard", () => {
       const coldDb = {
         prepare(sql: string) {
           const raw = s.db.prepare(sql);
-          if (!/^SELECT (?:type AS kind, name, sql AS definition FROM sqlite_master|'(?:column|edge_column|user_column|admin_event_column|entry_version_column|entries_trash_column)' AS kind, name, NULL AS definition FROM pragma_table_info)/.test(sql)) return raw;
+          if (!isSchemaProbe(sql)) return raw;
           return {
-            __schemaProbe: true,
-            all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; },
+            bind: (...b: unknown[]) => {
+              const bound = raw.bind(...b);
+              return { all: async () => { const result = await bound.all(); snapshotTaken(); await gate; return result; } };
+            },
           };
         },
         exec: s.db.exec.bind(s.db),
-        batch(statements: ({ __schemaProbe?: boolean; all?: () => Promise<unknown> })[]) {
-          if (statements.every(statement => statement.__schemaProbe)) return Promise.all(statements.map(statement => statement.all!()));
-          return s.db.batch(statements as Parameters<typeof s.db.batch>[0]);
-        },
+        batch: s.db.batch.bind(s.db),
       } as unknown as D1Database;
       resetDatabaseInit();
       const cold = initializeDatabase(makeTestEnv(undefined, { DB: coldDb, OAUTH_KV: kv }));
@@ -440,17 +440,16 @@ describe("withFtsWriteGuard", () => {
       const coldDb = {
         prepare(sql: string) {
           const raw = s.db.prepare(sql);
-          if (!/^SELECT (?:type AS kind, name, sql AS definition FROM sqlite_master|'(?:column|edge_column|user_column|admin_event_column|entry_version_column|entries_trash_column)' AS kind, name, NULL AS definition FROM pragma_table_info)/.test(sql)) return raw;
+          if (!isSchemaProbe(sql)) return raw;
           return {
-            __schemaProbe: true,
-            all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; },
+            bind: (...b: unknown[]) => {
+              const bound = raw.bind(...b);
+              return { all: async () => { const result = await bound.all(); snapshotTaken(); await gate; return result; } };
+            },
           };
         },
         exec: s.db.exec.bind(s.db),
-        batch(statements: ({ __schemaProbe?: boolean; all?: () => Promise<unknown> })[]) {
-          if (statements.every(statement => statement.__schemaProbe)) return Promise.all(statements.map(statement => statement.all!()));
-          return s.db.batch(statements as Parameters<typeof s.db.batch>[0]);
-        },
+        batch: s.db.batch.bind(s.db),
       } as unknown as D1Database;
       resetDatabaseInit();
       const cold = initializeDatabase(makeTestEnv(undefined, { DB: coldDb, OAUTH_KV: kv }));
