@@ -1344,7 +1344,7 @@ describe("prompt capsule routes", () => {
     resetDatabaseInit();
     await initializeDatabase(env);
     expect(sqlite.issued).toHaveLength(1);
-    expect(sqlite.batches).toHaveLength(1); // the read-only schema probe
+    expect(sqlite.batches).toHaveLength(0);
   });
 
   it("欠落triggerの再作成でも旧revisionのcacheを失効させる", async () => {
@@ -1484,7 +1484,7 @@ describe("prompt capsule routes", () => {
     const batch = vi.spyOn(env.DB, "batch");
     resetDatabaseInit();
     await initializeDatabase(env);
-    expect(batch).toHaveBeenCalledTimes(1); // the read-only schema probe
+    expect(batch).not.toHaveBeenCalled();
     vi.restoreAllMocks();
   });
 

@@ -133,18 +133,12 @@ function countingEnv(db: D1Mock, overrides: Partial<Env> = {}) {
     first: (...a: any[]) => { bill(sql); return stmt.first(...a); },
     all: () => { bill(sql); return stmt.all(); },
     __inner: stmt,
-    __sql: sql,
   });
   const prepared: string[] = [];
-  const batches: string[][] = [];
   const DB = {
     prepare(sql: string) { prepared.push(sql.replace(/\s+/g, " ").trim()); return wrap(db.prepare(sql), sql); },
     exec(sql: string) { bill(sql); return db.exec(sql); },
-    batch: (stmts: any[]) => {
-      batches.push(stmts.map((s: any) => s.__sql ?? "[wrapped D1 statement]"));
-      bill("BATCH");
-      return db.batch(stmts.map((s: any) => s.__inner ?? s));
-    },
+    batch: (stmts: any[]) => { bill("BATCH"); return db.batch(stmts.map((s: any) => s.__inner ?? s)); },
   } as unknown as D1Database;
 
   const baseKV = overrides.OAUTH_KV ?? makeTestEnv(db).OAUTH_KV;
@@ -154,7 +148,7 @@ function countingEnv(db: D1Mock, overrides: Partial<Env> = {}) {
     put: (...a: Parameters<KVNamespace["put"]>) => { bill(`KV PUT ${a[0]}`); return (baseKV.put as any)(...a); },
   } as unknown as KVNamespace;
 
-  return { env: makeTestEnv(db, { DB, VECTORIZE: makeVectorizeMock(), ...overrides, OAUTH_KV }), statements, prepared, batches };
+  return { env: makeTestEnv(db, { DB, VECTORIZE: makeVectorizeMock(), ...overrides, OAUTH_KV }), statements, prepared };
 }
 
 // Each tag gets more than the ten eligible entries a digest needs, so nightly compression
@@ -274,16 +268,12 @@ describe("nightly cron D1 subrequest cost", () => {
         source: "api", created_at: old + i, updated_at: old + i, vector_ids: "[]",
       });
     }
-    const { env, statements, prepared } = countingEnv(db);
+    const { env, statements } = countingEnv(db);
 
     await runCron(env);
 
-    // The seven metadata reads are prepared once for the whole cron. The FTS
-    // guard wraps statements before passing them to batch(), so this ledger is
-    // the stable boundary for proving the one cold-start probe here.
-    const probeStatements = prepared.filter(sql => sql.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master"));
-    expect(probeStatements).toHaveLength(1);
-    expect(prepared.filter(sql => sql.includes("pragma_table_info"))).toHaveLength(6);
+    // The signature statement of initializeDatabase, once for the whole cron.
+    expect(statements.filter(s => s.startsWith("WITH probe(kind, tbl) AS (VALUES"))).toHaveLength(1);
     // #282: the schema is already there, and the whole point is that finding that out no
     // longer costs a CREATE and an ALTER per object.
     expect(statements.filter(s => /^(CREATE|ALTER)\b/.test(s))).toEqual([]);
@@ -361,7 +351,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // MOVED 26 -> 27 (FX3 finding 2): runNightlyCleanup now reads PENDING_DELETES_KV_KEY once,
     // unconditionally, at the top of every run, to drain whatever a capped deleteEntryVectors
     // call queued; nothing queued on this fixture, so it costs exactly the one read.
-    expect(statements.length).toBe(27);
+    // MOVED 27 -> 26 (PR #386 probe): d1-mock's migrated brain now reports index DDL, so the
+    // capsule index's definition check matches and its phantom rebuild BATCH is gone.
+    expect(statements.length).toBe(26);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -389,7 +381,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // rescan.ts itself.
     // MOVED 26 -> 27 (T-0089.2.3): the staleness pass now resolves config every night.
     // MOVED 27 -> 28 (FX3 finding 2): runNightlyCleanup's unconditional PENDING_DELETES_KV_KEY read.
-    expect(statements.length).toBe(28);
+    // MOVED 28 -> 27 (PR #386 probe): d1-mock's migrated brain now reports index DDL, so the
+    // capsule index's definition check matches and its phantom rebuild BATCH is gone.
+    expect(statements.length).toBe(27);
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -436,7 +430,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // rescan.ts itself.
     // MOVED 27 -> 28 (T-0089.2.3): the staleness pass now resolves config every night.
     // MOVED 28 -> 29 (FX3 finding 2): runNightlyCleanup's unconditional PENDING_DELETES_KV_KEY read.
-    expect(statements.length).toBe(29);
+    // MOVED 29 -> 28 (PR #386 probe): d1-mock's migrated brain now reports index DDL, so the
+    // capsule index's definition check matches and its phantom rebuild BATCH is gone.
+    expect(statements.length).toBe(28);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

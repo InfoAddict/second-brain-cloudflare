@@ -453,35 +453,36 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
   // the nightly rebuildFtsIndex, not silently patched back in here.
 };
 
-/**
- * Seven independent read-only statements that report every schema object this file knows
- * how to create: table, index, and trigger names out of sqlite_master, and columns out
- * of the table-valued form of PRAGMA table_info (SQLite rewrites neither list lazily —
- * an ALTER shows up immediately). They run in one D1 batch, preserving the one-subrequest
- * cold-start budget without relying on D1's small compound-SELECT term limit.
- * `kind` is what stops a name that appears on both sides from being read as the wrong one.
- *
- * This exists because the fifteen statements it replaces cost fifteen D1 calls to
- * discover that a migrated brain — which is every brain after its first request — needs
- * nothing done (#282). The free plan's actual ceiling is 1,000 D1/KV/Vectorize calls per
- * invocation, but this codebase holds itself to a much tighter self-imposed D1 budget
- * (~50 calls) per request for cost and 10 ms-CPU reasons, and ensureDbReady spends its
- * share inside the request that triggered it: GET /graph was already close enough to
- * that self-imposed budget that a cold isolate pushed it over — 59 against a target of
- * 50, now 47.
- *
- * Cost is one subrequest and one row read per catalogue entry. It grows with the schema,
- * never with entry data, because none of the statements reads an application table.
- */
-const PROBE_SQLS = [
-  `SELECT type AS kind, name, sql AS definition FROM sqlite_master WHERE type IN ('table','index','trigger')`,
-  `SELECT 'column' AS kind, name, NULL AS definition FROM pragma_table_info('entries')`,
-  `SELECT 'edge_column' AS kind, name, NULL AS definition FROM pragma_table_info('edges')`,
-  `SELECT 'user_column' AS kind, name, NULL AS definition FROM pragma_table_info('users')`,
-  `SELECT 'admin_event_column' AS kind, name, NULL AS definition FROM pragma_table_info('admin_events')`,
-  `SELECT 'entry_version_column' AS kind, name, NULL AS definition FROM pragma_table_info('entry_versions')`,
-  `SELECT 'entries_trash_column' AS kind, name, NULL AS definition FROM pragma_table_info('entries_trash')`,
+// Tables the probe reads column sets for, each with the `kind` label its rows carry.
+// Bound as parameters so the SQL text stays fixed.
+const COLUMN_PROBE_TABLES = [
+  ["column", "entries"],
+  ["edge_column", "edges"],
+  ["user_column", "users"],
+  ["admin_event_column", "admin_events"],
+  ["entry_version_column", "entry_versions"],
+  ["entries_trash_column", "entries_trash"],
 ] as const;
+
+/**
+ * One statement that reports every schema object this file creates: table, index and
+ * trigger names (with DDL) from sqlite_master, plus the columns of COLUMN_PROBE_TABLES via
+ * pragma_table_info. `kind` stops a name on both sides being read as the wrong one. It reads
+ * only the catalogue, never table data, so a migrated brain learns it needs nothing in one
+ * D1 call instead of fifteen (#282). A table that does not exist yet yields no column rows
+ * (absent = CREATE).
+ *
+ * workerd caps a compound SELECT at 5 terms and a statement at 100 bound parameters. This is
+ * one CTE plus one UNION ALL (2 terms) with 12 binds. The 4.0.0 seven-arm form was rejected
+ * with "too many terms in compound SELECT", so the probe threw and every cold start
+ * re-applied the full schema. Guarded by test/unit/schema-probe-limits.test.ts.
+ */
+const PROBE_SQL =
+  `WITH probe(kind, tbl) AS (VALUES ${COLUMN_PROBE_TABLES.map(() => "(?, ?)").join(",")}), ` +
+  `columns AS (SELECT p.kind AS kind, ti.name AS name FROM probe p CROSS JOIN pragma_table_info(p.tbl) ti) ` +
+  `SELECT type AS kind, name, sql AS definition FROM sqlite_master WHERE type IN ('table','index','trigger') ` +
+  `UNION ALL ` +
+  `SELECT kind, name, NULL AS definition FROM columns`;
 
 type ObjectKind = "table" | "index" | "trigger";
 /**
@@ -519,24 +520,18 @@ const kindOf = (ddl: string): ObjectKind => {
  * future D1 from bricking first-request migration for every new install.
  */
 async function probeSchema(env: Env): Promise<ExistingSchema | null> {
-  let rows: unknown[];
+  let rows: unknown;
   try {
-    const resultSets = await env.DB.batch<{ kind: string; name: string; definition?: string | null }>(
-      PROBE_SQLS.map(sql => env.DB.prepare(sql)),
-    );
-    if (!Array.isArray(resultSets) || resultSets.length !== PROBE_SQLS.length) return null;
-
-    rows = [];
-    for (const result of resultSets) {
-      // A partial probe must never be treated as proof that schema objects exist. D1's
-      // batch response is ordered, so require every expected result set before merging.
-      if (!result || result.success !== true || !Array.isArray(result.results)) return null;
-      rows.push(...result.results);
-    }
-  } catch {
-    console.warn("Schema probe failed; applying the full schema instead");
+    rows = (await env.DB.prepare(PROBE_SQL).bind(
+      // Two binds per probed table, in COLUMN_PROBE_TABLES order: the kind label, then
+      // the table name the CROSS JOIN resolves columns for.
+      ...COLUMN_PROBE_TABLES.flatMap(([kind, table]) => [kind, table]),
+    ).all<{ kind: string; name: string }>())?.results;
+  } catch (e) {
+    console.warn("Schema probe failed; applying the full schema instead:", e);
     return null;
   }
+  if (!Array.isArray(rows)) return null;
 
   const objects = new Map<string, ObjectKind>();
   const definitions = new Map<string, string>();

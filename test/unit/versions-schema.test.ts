@@ -66,7 +66,7 @@ describe("entry_versions and entries_trash schema", () => {
     d1.issued.length = 0;
     await initializeDatabase(envFor(d1));
     expect(d1.issued).toHaveLength(1);
-    expect(d1.issued[0]).toBe("BATCH");
+    expect(d1.issued[0]).toMatch(/^WITH probe\(kind, tbl\) AS \(VALUES \(\?, \?\)/);
   });
 
   it("entry_versions rejects a duplicate (entry_id, seq)", async () => {
