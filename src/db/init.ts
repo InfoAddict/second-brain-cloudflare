@@ -453,60 +453,8 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
   // the nightly rebuildFtsIndex, not silently patched back in here.
 };
 
-/**
- * One statement that reports every schema object this file knows how to create: table,
- * index, and trigger names out of sqlite_master, and entries' columns out of the
- * table-valued form of PRAGMA table_info (SQLite rewrites neither list lazily — an
- * ALTER shows up immediately).
- * `kind` is what stops a name that appears on both sides from being read as the wrong one.
- *
- * This exists because the fifteen statements it replaces cost fifteen D1 calls to
- * discover that a migrated brain — which is every brain after its first request — needs
- * nothing done (#282). The free plan's actual ceiling is 1,000 D1/KV/Vectorize calls per
- * invocation, but this codebase holds itself to a much tighter self-imposed D1 budget
- * (~50 calls) per request for cost and 10 ms-CPU reasons, and ensureDbReady spends its
- * share inside the request that triggered it: GET /graph was already close enough to
- * that self-imposed budget that a cold isolate pushed it over — 59 against a target of
- * 50, now 47.
- *
- * Cost is one subrequest and one row read per catalogue entry, flat in the number of
- * entries because neither side of the UNION touches table data — measured on real D1
- * (workerd via Miniflare), not the mock, which is not something that can be re-verified
- * from a laptop. rows_read = 23 was that measurement, taken when SCHEMA_OBJECTS held
- * seven objects. It holds 26 now (team edition, projects, push subscriptions, and their
- * indexes all landed since), plus entries_fts, entry_counts, and their six triggers
- * (created outside SCHEMA_OBJECTS — see the ownership note above — but still read by
- * this same probe), so 23 is long stale and should be re-measured against a live
- * database rather than trusted as today's figure. What the measurement did establish,
- * and what still holds regardless of the exact count: it grows by one row per object
- * added to SCHEMA_OBJECTS, which is the cheap direction — adding a statement above now
- * costs one row here rather than one subrequest on every cold start.
- */
-// Object probe: table/index/trigger names + DDL from sqlite_master, plus the per-table
-// column sets, in ONE statement.
-//
-// History: this used to be a single statement that appended six
-// `UNION ALL SELECT ... FROM pragma_table_info(...)` arms. Cloudflare D1 rejects that
-// shape outright with `SQLITE_ERROR [code: 7500] too many terms in compound SELECT`, so
-// probeSchema() caught the throw, returned null, and applySchema() fell through to issuing
-// all 38 SCHEMA_OBJECTS DDL statements sequentially — on every cold start, awaited on the
-// authenticated request path by ensureIdentityReady(). That is the hang: ~38 sequential
-// exec() subrequests blow the Worker's subrequest/CPU budget and the response headers never
-// come back.
-//
-// The fix keeps the SQL to ONE statement (the probe is on the hot path and its cost is a
-// documented invariant — see test/unit/db-init.test.ts) by folding every table's column
-// list into a single `json_group_object` aggregate over `pragma_table_info`, keyed by the
-// table name, with no UNION at all:
-//
-//   {"entries":["id","content",...],"edges":[...], ...}
-//
-// `pragma_table_info` is a table-valued function, so it can be joined/groupped like any
-// table — that is the whole trick. It also degrades safely: a table that does not exist yet
-// simply contributes no row, which is exactly what applySchema wants (absent = CREATE).
-// Table names the probe asks for column sets on, each paired with the `kind` label its
-// rows must carry. Kept in TS (not interpolated SQL) so the statement stays parameterised
-// and the mapping is greppable in one place: row shape is unchanged, the SQL is not.
+// Tables the probe reads column sets for, each with the `kind` label its rows carry.
+// Bound as parameters so the SQL text stays fixed.
 const COLUMN_PROBE_TABLES = [
   ["column", "entries"],
   ["edge_column", "edges"],
@@ -516,30 +464,25 @@ const COLUMN_PROBE_TABLES = [
   ["entries_trash_column", "entries_trash"],
 ] as const;
 
-// ONE statement, and deliberately NO compound `SELECT` anywhere — not even a CTE-level
-// `UNION ALL`: D1 rejects a compound above a small term count with
-// `SQLITE_ERROR [code: 7500] too many terms in compound SELECT`, and the old probe was a
-// 7-arm compound. A rejected probe threw inside probeSchema() -> returned null ->
-// applySchema() fell through to issuing all 38 SCHEMA_OBJECTS DDL statements sequentially,
-// awaited on the authenticated request path by ensureIdentityReady(). That is the hang:
-// ~38 sequential exec() subrequests blow the Worker's subrequest/CPU budget and the
-// response headers never come back.
-//
-// `pragma_table_info` is a table-valued function, so it can be CROSS JOINed against a
-// parameter list like any table — one plain SELECT produces every object row and every
-// column row at once. A table that does not exist yet simply contributes no column rows,
-// which is exactly what applySchema wants (absent = CREATE).
-//
-// `catalogue` is UNIONed in at exactly ONE term — the single object select — which keeps the
-// whole statement at one compound term, far below the D1 ceiling that rejected the old
-// 7-arm form.
+/**
+ * One statement that reports every schema object this file creates: table, index and
+ * trigger names (with DDL) from sqlite_master, plus the columns of COLUMN_PROBE_TABLES via
+ * pragma_table_info. `kind` stops a name on both sides being read as the wrong one. It reads
+ * only the catalogue, never table data, so a migrated brain learns it needs nothing in one
+ * D1 call instead of fifteen (#282). A table that does not exist yet yields no column rows
+ * (absent = CREATE).
+ *
+ * workerd caps a compound SELECT at 5 terms and a statement at 100 bound parameters. This is
+ * one CTE plus one UNION ALL (2 terms) with 12 binds. The 4.0.0 seven-arm form was rejected
+ * with "too many terms in compound SELECT", so the probe threw and every cold start
+ * re-applied the full schema. Guarded by test/unit/schema-probe-limits.test.ts.
+ */
 const PROBE_SQL =
   `WITH probe(kind, tbl) AS (VALUES ${COLUMN_PROBE_TABLES.map(() => "(?, ?)").join(",")}), ` +
   `columns AS (SELECT p.kind AS kind, ti.name AS name FROM probe p CROSS JOIN pragma_table_info(p.tbl) ti) ` +
   `SELECT type AS kind, name, sql AS definition FROM sqlite_master WHERE type IN ('table','index','trigger') ` +
   `UNION ALL ` +
   `SELECT kind, name, NULL AS definition FROM columns`;
-
 
 type ObjectKind = "table" | "index" | "trigger";
 /**
@@ -598,7 +541,6 @@ async function probeSchema(env: Env): Promise<ExistingSchema | null> {
   const adminEventColumns = new Set<string>();
   const entryVersionColumns = new Set<string>();
   const entriesTrashColumns = new Set<string>();
-
   for (const row of rows as { kind?: unknown; name?: unknown; definition?: unknown }[]) {
     if (typeof row?.name !== "string") continue;
     if (row.kind === "column") columns.add(row.name);
