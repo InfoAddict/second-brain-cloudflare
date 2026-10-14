@@ -2,6 +2,12 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
+## [4.0.1] - 2026-10-13
+
+**Fixes**
+
+- Cold starts on Cloudflare are fast again. In 4.0.0, the check a brain runs at startup to see whether its database needs updating used a query Cloudflare's database rejects. The check failed every time, so each cold start re-ran the full database setup before answering, and the first request after a quiet spell could be slow or time out. The check now stays within Cloudflare's query limits, and a test fails if it ever goes over them again. Thanks to @therealfreddied (#386).
+
 ## [4.0.0] — 2026-09-30
 
 **Session hooks**
