@@ -1,7 +1,7 @@
 {
-  "sourceTag": "installer-v4.0.1",
-  "workerVersion": "4.0.1",
-  "releaseTag": "v4.0.1",
-  "releaseName": "Second Brain Worker v4.0.1 (bundled with Desktop 4.0.1)",
-  "releaseUrl": "https://github.com/rahilp/second-brain-cloudflare/releases/tag/installer-v4.0.1"
+  "sourceTag": "installer-v4.0.2",
+  "workerVersion": "4.0.2",
+  "releaseTag": "v4.0.2",
+  "releaseName": "Second Brain Worker v4.0.2 (bundled with Desktop 4.0.2)",
+  "releaseUrl": "https://github.com/rahilp/second-brain-cloudflare/releases/tag/installer-v4.0.2"
 }
